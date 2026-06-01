@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx vite *)",
+      "Bash(Remove-Item \"c:\\\\Users\\\\rekqu\\\\DZM Real\\\\Development\\\\GitKraken\\\\PulpLog\\\\PulpLog\\\\src\\\\i18n.js\")"
+    ]
+  }
+}
