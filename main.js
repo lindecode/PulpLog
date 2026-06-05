@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require("electron");
 const path = require("path");
 const fs   = require("fs");
+const http           = require("http");
+const { spawn }      = require("child_process");
 
 const IS_DEV = process.env.NODE_ENV === "development" || !app.isPackaged;
 
@@ -154,6 +156,88 @@ function waitForFile(filePath, cb) {
 /* ─── IPC: stop watching ─── */
 ipcMain.handle("file:unwatch", async (_e, filePath) => stopWatch(filePath));
 
+/* ─── Docker ─── */
+const DOCKER_SOCKET = process.platform === "win32"
+  ? "//./pipe/docker_engine"
+  : "/var/run/docker.sock";
+
+function dockerGet(apiPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(
+      { socketPath: DOCKER_SOCKET, path: apiPath, headers: { Accept: "application/json" } },
+      (res) => {
+        const chunks = [];
+        res.on("data", c => chunks.push(c));
+        res.on("end",  () => {
+          try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
+          catch (e) { reject(e); }
+        });
+      }
+    );
+    req.on("error", reject);
+  });
+}
+
+ipcMain.handle("docker:list", async () => {
+  try   { return await dockerGet("/containers/json?all=false"); }
+  catch (e) { return { error: e.message }; }
+});
+
+const dockerStreams = new Map(); // containerId → ChildProcess
+
+ipcMain.handle("docker:logs:start", (event, containerId) => {
+  stopDockerStream(containerId);
+
+  const proc = spawn("docker", ["logs", "--follow", "--tail=500", containerId], {
+    windowsHide: true,
+    shell: process.platform === "win32",
+  });
+
+  let lineBuf  = "";
+  let hadLines = false;
+
+  function send(ch, ...args) {
+    if (!event.sender.isDestroyed()) event.sender.send(ch, ...args);
+  }
+
+  function flushLines(data) {
+    lineBuf += data.toString("utf8");
+    const parts = lineBuf.split("\n");
+    lineBuf = parts.pop();
+    const complete = parts.filter(Boolean);
+    if (complete.length) { hadLines = true; send("docker:lines", containerId, complete.join("\n")); }
+  }
+
+  proc.stdout.on("data", flushLines);
+  proc.stderr.on("data", flushLines);
+
+  proc.on("spawn", () => send("docker:spawned", containerId));
+
+  proc.on("close", (code) => {
+    dockerStreams.delete(containerId);
+    if (code !== 0 && !hadLines)
+      send("docker:error", containerId, `docker logs terminó con código ${code}`);
+    else
+      send("docker:end", containerId);
+  });
+
+  proc.on("error", (e) => {
+    dockerStreams.delete(containerId);
+    send("docker:error", containerId, e.message);
+  });
+
+  dockerStreams.set(containerId, proc);
+});
+
+ipcMain.handle("docker:logs:stop", (_e, containerId) => stopDockerStream(containerId));
+
+function stopDockerStream(containerId) {
+  const proc = dockerStreams.get(containerId);
+  if (!proc) return;
+  try { proc.kill(); } catch {}
+  dockerStreams.delete(containerId);
+}
+
 /* ─── lifecycle ─── */
 app.whenReady().then(() => {
   createWindow();
@@ -161,5 +245,6 @@ app.whenReady().then(() => {
 });
 app.on("window-all-closed", () => {
   watchers.forEach((e) => { try { e.watcher && e.watcher.close(); } catch {} });
+  dockerStreams.forEach((_e, id) => stopDockerStream(id));
   if (process.platform !== "darwin") app.quit();
 });

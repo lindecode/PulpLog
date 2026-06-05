@@ -572,14 +572,304 @@ function Sep() {
 }
 
 /* ═══════════════════════════════════════════
+   Docker – container picker modal
+═══════════════════════════════════════════ */
+function DockerPicker({ onSelect, onClose }) {
+  const [containers, setContainers] = useState(null);
+  const [error,      setError]      = useState(null);
+
+  useEffect(() => {
+    window.electronAPI.listContainers()
+      .then(res => res?.error ? setError(res.error) : setContainers(res))
+      .catch(e  => setError(e.message));
+  }, []);
+
+  return (
+    <div onClick={onClose}
+      style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
+               display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background:"#111", border:"0.5px solid #2a2a2a", borderRadius:10,
+                 padding:"24px", minWidth:440, maxWidth:580, fontFamily:"inherit",
+                 boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
+        <div style={{ fontSize:14, color:"#ccc", fontWeight:700, marginBottom:16 }}>
+          🐳 Contenedores Docker activos
+        </div>
+
+        {containers === null && !error && (
+          <div style={{ color:"#444", fontSize:12, padding:"8px 0" }}>Conectando con Docker…</div>
+        )}
+        {error && (
+          <div style={{ color:"#ff6060", fontSize:12, padding:"8px 0", lineHeight:1.6 }}>
+            <span style={{ fontWeight:700 }}>Error:</span> {error}
+            <br /><span style={{ color:"#555" }}>¿Está Docker corriendo y accesible?</span>
+          </div>
+        )}
+        {containers?.length === 0 && (
+          <div style={{ color:"#555", fontSize:12, padding:"8px 0" }}>No hay contenedores en ejecución.</div>
+        )}
+
+        <div style={{ display:"flex", flexDirection:"column", gap:6, maxHeight:320, overflowY:"auto" }}>
+          {containers?.map(c => {
+            const name   = c.Names?.[0]?.replace(/^\//, "") ?? c.Id.slice(0, 12);
+            const image  = c.Image ?? "";
+            const status = c.Status ?? "";
+            return (
+              <div key={c.Id} onClick={() => onSelect(c.Id, name, image)}
+                style={{ padding:"10px 14px", borderRadius:6, cursor:"pointer",
+                         background:"#161616", border:"0.5px solid #222",
+                         display:"flex", flexDirection:"column", gap:3,
+                         transition:"background .1s" }}
+                onMouseEnter={e => e.currentTarget.style.background="#1e2a1e"}
+                onMouseLeave={e => e.currentTarget.style.background="#161616"}>
+                <span style={{ color:"#ccc", fontSize:13, fontWeight:600 }}>{name}</span>
+                <span style={{ color:"#555", fontSize:10 }}>{image} · {status}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <button onClick={onClose}
+          style={{ marginTop:20, background:"#181818", border:"0.5px solid #2e2e2e",
+                   borderRadius:6, color:"#666", fontFamily:"inherit",
+                   fontSize:11, padding:"6px 20px", cursor:"pointer" }}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   Docker – log streaming tab
+═══════════════════════════════════════════ */
+function DockerTab({ containerId, containerName }) {
+  const [rawLines,   setRawLines]  = useState([]);
+  const [spawned,    setSpawned]   = useState(false);
+  const [connected,  setConnected] = useState(false);
+  const [error,      setError]     = useState(null);
+  const [filter,     setFilter]    = useState("");
+  const [useRegex,   setUseRegex]  = useState(false);
+  const [regexError, setRegexError]= useState(false);
+  const [bookmarks,  setBookmarks] = useState(new Set());
+  const [bmCursor,   setBmCursor]  = useState(-1);
+  const [showNums,   setShowNums]  = useState(true);
+  const [autoScroll, setAutoScroll]= useState(true);
+  const [lvl, setLvl] = useState({
+    error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true,
+  });
+
+  const listRef       = useRef(null);
+  const autoScrollRef = useRef(true);
+  useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
+
+  useEffect(() => {
+    const unwatch = window.electronAPI.streamDockerLogs(containerId, {
+      onSpawned() { setSpawned(true); },
+      onLines(text) {
+        const incoming = text.split("\n").filter(Boolean);
+        setRawLines(prev => [...prev, ...incoming]);
+        setConnected(true);
+        if (autoScrollRef.current) listRef.current?.scrollToBottom();
+      },
+      onEnd()      { setConnected(false); },
+      onError(msg) { setError(msg); setConnected(false); },
+    });
+    return unwatch;
+  }, [containerId]);
+
+  const classified = useMemo(() =>
+    rawLines.map((raw, i) => ({ raw, origLine: i + 1, type: classify(raw) })),
+    [rawLines]
+  );
+
+  const stats = useMemo(() => ({
+    error: classified.filter(x => x.type==="error"||x.type==="exception").length,
+    warn:  classified.filter(x => x.type==="warn").length,
+    info:  classified.filter(x => x.type==="info").length,
+    debug: classified.filter(x => x.type==="debug").length,
+  }), [classified]);
+
+  const { filtered, regexValid } = useMemo(() => {
+    const hide = new Set();
+    if (!lvl.error) { hide.add("error"); hide.add("exception"); }
+    if (!lvl.stack) { hide.add("stack"); hide.add("causedby"); }
+    ["warn","info","debug","trace","plain"].forEach(k => { if (!lvl[k]) hide.add(k); });
+
+    if (!filter) return { filtered: classified.filter(x => !hide.has(x.type)), regexValid: true };
+    if (useRegex) {
+      let re;
+      try { re = new RegExp(filter, "i"); }
+      catch { return { filtered: [], regexValid: false }; }
+      return { filtered: classified.filter(x => !hide.has(x.type) && re.test(x.raw)), regexValid: true };
+    }
+    const lf = filter.toLowerCase();
+    return { filtered: classified.filter(x => !hide.has(x.type) && x.raw.toLowerCase().includes(lf)), regexValid: true };
+  }, [classified, filter, useRegex, lvl]);
+
+  useEffect(() => setRegexError(!regexValid), [regexValid]);
+
+  const toggleBookmark = useCallback((origLine) => {
+    setBookmarks(prev => {
+      const next = new Set(prev);
+      next.has(origLine) ? next.delete(origLine) : next.add(origLine);
+      return next;
+    });
+  }, []);
+
+  const sortedBookmarks = useMemo(() => [...bookmarks].sort((a, b) => a - b), [bookmarks]);
+
+  const jumpBookmark = useCallback((direction) => {
+    if (!sortedBookmarks.length) return;
+    const next = direction === "next"
+      ? (bmCursor >= sortedBookmarks.length - 1 ? 0 : bmCursor + 1)
+      : (bmCursor <= 0 ? sortedBookmarks.length - 1 : bmCursor - 1);
+    setBmCursor(next);
+    const idx = filtered.findIndex(x => x.origLine >= sortedBookmarks[next]);
+    if (idx >= 0) listRef.current?.scrollToIndex(idx);
+  }, [sortedBookmarks, bmCursor, filtered]);
+
+  const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
+
+  const BADGES = [
+    { key:"error", label:"ERROR", bg:"#a02020", fg:"#ffcccc", cnt:stats.error },
+    { key:"warn",  label:"WARN",  bg:"#906010", fg:"#ffe090", cnt:stats.warn  },
+    { key:"info",  label:"INFO",  bg:"#1a5f88", fg:"#90d0f0", cnt:stats.info  },
+    { key:"debug", label:"DEBUG", bg:"#244024", fg:"#90c890", cnt:stats.debug },
+    { key:"stack", label:"STACK", bg:"#3a256a", fg:"#c0a8f0", cnt:null        },
+    { key:"plain", label:"PLAIN", bg:"#2a2a2a", fg:"#aaa",    cnt:null        },
+  ];
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
+
+      {/* toolbar */}
+      <div style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px",
+                    background:"#111", borderBottom:"0.5px solid #222",
+                    flexWrap:"wrap", flexShrink:0 }}>
+
+        <span style={{ fontSize:11, color:"#2a9a4a", background:"#0a1a0a",
+                       border:"0.5px solid #1a3a1a", borderRadius:6, padding:"3px 8px",
+                       fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
+          🐳 {containerName}
+        </span>
+
+        <Sep />
+
+        <div style={{ display:"flex", flex:1, minWidth:140 }}>
+          <input
+            style={{ flex:1, background:"#181818",
+                     border:`0.5px solid ${regexError ? "#883030" : "#2e2e2e"}`,
+                     borderRadius:"6px 0 0 6px", color: regexError ? "#ff6060" : "#bbb",
+                     fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
+            placeholder={useRegex ? "regex…" : "🔍  filtrar…"}
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+          />
+          <button onClick={() => setUseRegex(p => !p)}
+            style={{ background: useRegex ? "#1a2a3a" : "#181818",
+                     border:`0.5px solid ${useRegex ? "#2a6a9a" : "#2e2e2e"}`,
+                     borderLeft:"none", borderRadius:"0 6px 6px 0",
+                     color: useRegex ? "#60b8e8" : "#555",
+                     fontFamily:"monospace", fontSize:11, padding:"4px 10px",
+                     cursor:"pointer", fontWeight: useRegex ? 700 : 400 }}>
+            .*
+          </button>
+        </div>
+
+        <Sep />
+
+        {BADGES.map(({ key, label, bg, fg, cnt }) => (
+          <span key={key} onClick={() => toggle(key)}
+            style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11,
+                     padding:"3px 7px", borderRadius:6, fontWeight:600,
+                     cursor:"pointer", userSelect:"none",
+                     background: lvl[key] ? bg : "#181818",
+                     color:      lvl[key] ? fg : "#444",
+                     border:     `1.5px solid ${lvl[key] ? bg : "#222"}`,
+                     opacity:    lvl[key] ? 1 : 0.45 }}>
+            {label}
+            {cnt > 0 && <span style={{ background:"rgba(255,255,255,.18)", borderRadius:4, padding:"0 4px", fontSize:10 }}>{fmtNum(cnt)}</span>}
+          </span>
+        ))}
+
+        <Sep />
+
+        <Btn onClick={() => jumpBookmark("prev")} disabled={!sortedBookmarks.length} title="Marcador anterior (Shift+F2)">◆ ↑</Btn>
+        <Btn onClick={() => jumpBookmark("next")} disabled={!sortedBookmarks.length} title="Marcador siguiente (F2)">◆ ↓</Btn>
+        {bookmarks.size > 0 && <span style={{ fontSize:10, color:"#c0a030", padding:"0 2px" }}>{bookmarks.size} {bookmarks.size===1?"marca":"marcas"}</span>}
+        {bookmarks.size > 0 && <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }} title="Limpiar marcadores">✕ marcas</Btn>}
+
+        <Sep />
+
+        <Btn active={autoScroll} onClick={() => setAutoScroll(p => !p)} title="Auto-scroll al final">↓ auto</Btn>
+        <Btn active={showNums}   onClick={() => setShowNums(p => !p)}   title="Números de línea">#</Btn>
+        <Btn onClick={() => listRef.current?.scrollToTop()}>↑ inicio</Btn>
+        <Btn onClick={() => listRef.current?.scrollToBottom()}>↓ fin</Btn>
+      </div>
+
+      {/* error banner */}
+      {error && (
+        <div style={{ padding:"6px 14px", background:"#2a1010", borderBottom:"1px solid #883030",
+                      color:"#ff8888", fontSize:12, flexShrink:0, fontFamily:"inherit" }}>
+          ⚠ {error}
+        </div>
+      )}
+
+      {/* content */}
+      {rawLines.length === 0 && !error ? (
+        <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
+                      flexDirection:"column", gap:10, color:"#333", fontSize:13 }}>
+          <span style={{ fontSize:28, color:"#2a9a4a", animation:"spin 1s linear infinite" }}>↻</span>
+          {spawned ? "Esperando logs del contenedor…" : "Iniciando proceso…"}
+          {spawned && <span style={{ fontSize:10, color:"#252525" }}>El contenedor no ha emitido logs aún</span>}
+          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
+                      color:"#333", fontSize:13 }}>
+          {regexError
+            ? <><span style={{ color:"#ff6060" }}>⚠</span> Regex inválida</>
+            : filter ? `Sin resultados para "${filter}"` : "Sin líneas"}
+        </div>
+      ) : (
+        <VirtualList
+          items={filtered}
+          showNums={showNums}
+          bookmarks={bookmarks}
+          onToggleBookmark={toggleBookmark}
+          listRef={listRef}
+        />
+      )}
+
+      {/* status bar */}
+      <div style={{ display:"flex", gap:14, padding:"4px 10px", background:"#0d0d0d",
+                    borderTop:"0.5px solid #1a1a1a", fontSize:10, flexShrink:0, alignItems:"center" }}>
+        {[["#883030",stats.error,"err"],["#806010",stats.warn,"warn"],
+          ["#1a5070",stats.info,"info"],["#284028",stats.debug,"dbg"]].map(([c,n,l])=>(
+          <span key={l} style={{ color:c }}>{fmtNum(n)} <span style={{color:"#252525"}}>{l}</span></span>
+        ))}
+        {connected && <span style={{ color:"#2a9a4a" }}>● live</span>}
+        {!connected && rawLines.length > 0 && <span style={{ color:"#555" }}>● detenido</span>}
+        {bookmarks.size > 0 && <span style={{ color:"#c0a030" }}>◆ {bookmarks.size}</span>}
+        <span style={{ marginLeft:"auto", color:"#444" }}>
+          {fmtNum(filtered.length)} / {fmtNum(rawLines.length)} líneas
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
    App shell (tabs)
 ═══════════════════════════════════════════ */
 let nextId = 1;
 
 export default function App() {
-  const [tabs,    setTabs]    = useState([{ id: nextId++, label:"Bienvenida", filePath:null, fileSize:null }]);
-  const [active,  setActive]  = useState(1);
-  const [about,   setAbout]   = useState(false);
+  const [tabs,         setTabs]        = useState([{ id: nextId++, label:"Bienvenida", filePath:null, fileSize:null }]);
+  const [active,       setActive]      = useState(1);
+  const [about,        setAbout]       = useState(false);
+  const [dockerPicker, setDockerPicker]= useState(false);
   const fileRef = useRef(null);
 
   const openFile = useCallback(async () => {
@@ -598,6 +888,13 @@ export default function App() {
     const id = nextId++;
     setTabs(p => [...p, { id, label, filePath, fileSize }]);
     setActive(id);
+  };
+
+  const openDockerTab = (containerId, name) => {
+    const id = nextId++;
+    setTabs(p => [...p, { id, label: `🐳 ${name}`, filePath: null, fileSize: null, docker: { containerId, name } }]);
+    setActive(id);
+    setDockerPicker(false);
   };
 
   const closeTab = (id) => {
@@ -661,6 +958,16 @@ export default function App() {
                    borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
           title="Abrir archivo (Ctrl+O)">+</button>
 
+        {IS_ELECTRON && (
+          <button onClick={() => setDockerPicker(true)}
+            style={{ background:"transparent", border:"none", color:"#2a6a2a",
+                     padding:"0 14px", cursor:"pointer", fontSize:14,
+                     borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+            title="Conectar a contenedor Docker">
+            🐳
+          </button>
+        )}
+
         <button onClick={() => setAbout(true)}
           style={{ background:"transparent", border:"none", color:"#333",
                    padding:"0 14px", cursor:"pointer", fontSize:11,
@@ -680,15 +987,20 @@ export default function App() {
         )}
       </div>
 
-      {activeTab.filePath
-        ? <LogTab key={`${activeTab.id}-${activeTab.filePath}`}
-                  filePath={activeTab.filePath}
-                  fileName={activeTab.label}
-                  fileSize={activeTab.fileSize} />
-        : <Welcome onOpen={openFile} isElectron={IS_ELECTRON} />
+      {activeTab.docker
+        ? <DockerTab key={`docker-${activeTab.id}`}
+                     containerId={activeTab.docker.containerId}
+                     containerName={activeTab.docker.name} />
+        : activeTab.filePath
+          ? <LogTab key={`${activeTab.id}-${activeTab.filePath}`}
+                    filePath={activeTab.filePath}
+                    fileName={activeTab.label}
+                    fileSize={activeTab.fileSize} />
+          : <Welcome onOpen={openFile} isElectron={IS_ELECTRON} />
       }
 
-      {about && <AboutModal onClose={() => setAbout(false)} />}
+      {about        && <AboutModal onClose={() => setAbout(false)} />}
+      {dockerPicker && <DockerPicker onSelect={openDockerTab} onClose={() => setDockerPicker(false)} />}
     </div>
   );
 }

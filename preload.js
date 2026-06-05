@@ -41,4 +41,25 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   onMenuOpenFile: (cb) => { ipcRenderer.on("menu:open-file", cb); return () => ipcRenderer.removeListener("menu:open-file", cb); },
   onMenuNewTab:   (cb) => { ipcRenderer.on("menu:new-tab",   cb); return () => ipcRenderer.removeListener("menu:new-tab",   cb); },
+
+  listContainers: () => ipcRenderer.invoke("docker:list"),
+
+  streamDockerLogs(containerId, { onLines, onEnd, onError, onSpawned }) {
+    const spawnH = (_e, id)       => { if (id === containerId) onSpawned?.(); };
+    const linesH = (_e, id, text) => { if (id === containerId) onLines?.(text); };
+    const endH   = (_e, id)       => { if (id === containerId) { cleanup(); onEnd?.(); } };
+    const errH   = (_e, id, msg)  => { if (id === containerId) { cleanup(); onError?.(msg); } };
+    ipcRenderer.on("docker:spawned", spawnH);
+    ipcRenderer.on("docker:lines",   linesH);
+    ipcRenderer.on("docker:end",     endH);
+    ipcRenderer.on("docker:error",   errH);
+    ipcRenderer.invoke("docker:logs:start", containerId);
+    function cleanup() {
+      ipcRenderer.removeListener("docker:spawned", spawnH);
+      ipcRenderer.removeListener("docker:lines",   linesH);
+      ipcRenderer.removeListener("docker:end",     endH);
+      ipcRenderer.removeListener("docker:error",   errH);
+    }
+    return () => { cleanup(); ipcRenderer.invoke("docker:logs:stop", containerId); };
+  },
 });
