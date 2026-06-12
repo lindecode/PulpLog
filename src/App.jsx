@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, memo, createContext, useContext } from "react";
 
 /* ═══════════════════════════════════════════
    Constants
@@ -6,6 +6,145 @@ import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 const ROW_H    = 22;
 const OVERSCAN = 40;
 const IS_ELECTRON = typeof window !== "undefined" && !!window.electronAPI;
+
+/* ═══════════════════════════════════════════
+   i18n
+═══════════════════════════════════════════ */
+const T = {
+  es: {
+    bm_add:          "Marcar línea",
+    bm_remove:       "Quitar marcador",
+    filter_ph:       "🔍  filtrar…",
+    regex_ph:        "regex…",
+    regex_btn_title: "Activar filtro por expresión regular",
+    bm_prev_title:   "Marcador anterior (Shift+F2)",
+    bm_next_title:   "Marcador siguiente (F2)",
+    bm_clear_title:  "Limpiar todos los marcadores",
+    bm_clear_btn:    "✕ marcas",
+    bm_count:        n => `${n} ${n === 1 ? "marca" : "marcas"}`,
+    tail_title:      "Tail -f — seguir archivo en vivo",
+    tail_follow:     "▶ seguir",
+    tail_stop:       "⏹ detener",
+    autoscroll_title:"Auto-scroll al final",
+    linenums_title:  "Números de línea",
+    scroll_top:      "↑ inicio",
+    scroll_bottom:   "↓ fin",
+    reading:         pct => `Leyendo… ${pct}%`,
+    regex_invalid:   "Regex inválida",
+    no_results:      f => `Sin resultados para "${f}"`,
+    no_lines:        "Sin líneas",
+    live:            "● en vivo",
+    stopped:         "● detenido",
+    lines:           (f, tot) => `${fmtNum(f)} / ${fmtNum(tot)} líneas`,
+    lines_size:      (f, tot, s) => `${fmtNum(f)} / ${fmtNum(tot)} líneas · ${s}`,
+    rotated:         c => `Archivo rotado — recargando en ${c}s…`,
+    truncated:       c => `Archivo truncado — recargando en ${c}s…`,
+    recreated:       "Nuevo archivo detectado — cargando…",
+    diag_title:      "📋 BITÁCORA",
+    diag_entries:    n => `${n} entradas`,
+    diag_clear:      "Limpiar",
+    diag_empty:      "Sin entradas aún",
+    docker_title:    "🐳 Contenedores Docker activos",
+    docker_connecting:"Conectando con Docker…",
+    docker_err_hint: "¿Está Docker corriendo y accesible?",
+    docker_empty:    "No hay contenedores en ejecución.",
+    cancel:          "Cancelar",
+    docker_waiting:  "Esperando logs del contenedor…",
+    docker_starting: "Iniciando proceso…",
+    docker_no_logs:  "El contenedor no ha emitido logs aún",
+    bm_clear_docker: "Limpiar marcadores",
+    developed_by:    "Desarrollado por",
+    license:         "Licencia MIT © 2026",
+    close:           "Cerrar",
+    settings_header: "⚙ Configuración",
+    recent_files_h:  "ARCHIVOS RECIENTES",
+    no_recent:       "Sin archivos recientes",
+    clear_recents:   "Limpiar recientes",
+    prefs_h:         "PREFERENCIAS",
+    pref_autoscroll: "Auto-scroll activado al abrir archivo",
+    pref_linenums:   "Mostrar números de línea por defecto",
+    lang_h:          "IDIOMA",
+    open_file_btn:   "Abrir archivo…",
+    recent_h:        "RECIENTES",
+    hint_electron:   "Ctrl+O  ·  Ctrl+T nueva pestaña  ·  clic en ◇ para marcar líneas",
+    hint_web:        ".log  .txt  .out",
+    open_file_title: "Abrir archivo (Ctrl+O)",
+    docker_btn_title:"Conectar a contenedor Docker",
+    diag_btn_title:  "Bitácora de diagnóstico",
+    settings_title:  "Configuración",
+    about_btn:       "Acerca de",
+    about_title:     "Acerca de PulpLog",
+    welcome_tab:     "Bienvenida",
+  },
+  en: {
+    bm_add:          "Bookmark line",
+    bm_remove:       "Remove bookmark",
+    filter_ph:       "🔍  filter…",
+    regex_ph:        "regex…",
+    regex_btn_title: "Enable regular expression filter",
+    bm_prev_title:   "Previous bookmark (Shift+F2)",
+    bm_next_title:   "Next bookmark (F2)",
+    bm_clear_title:  "Clear all bookmarks",
+    bm_clear_btn:    "✕ marks",
+    bm_count:        n => `${n} ${n === 1 ? "bookmark" : "bookmarks"}`,
+    tail_title:      "Tail -f — follow file live",
+    tail_follow:     "▶ follow",
+    tail_stop:       "⏹ stop",
+    autoscroll_title:"Auto-scroll to bottom",
+    linenums_title:  "Line numbers",
+    scroll_top:      "↑ top",
+    scroll_bottom:   "↓ bottom",
+    reading:         pct => `Reading… ${pct}%`,
+    regex_invalid:   "Invalid regex",
+    no_results:      f => `No results for "${f}"`,
+    no_lines:        "No lines",
+    live:            "● live",
+    stopped:         "● stopped",
+    lines:           (f, tot) => `${fmtNum(f)} / ${fmtNum(tot)} lines`,
+    lines_size:      (f, tot, s) => `${fmtNum(f)} / ${fmtNum(tot)} lines · ${s}`,
+    rotated:         c => `File rotated — reloading in ${c}s…`,
+    truncated:       c => `File truncated — reloading in ${c}s…`,
+    recreated:       "New file detected — loading…",
+    diag_title:      "📋 DIAGNOSTICS",
+    diag_entries:    n => `${n} entries`,
+    diag_clear:      "Clear",
+    diag_empty:      "No entries yet",
+    docker_title:    "🐳 Active Docker containers",
+    docker_connecting:"Connecting to Docker…",
+    docker_err_hint: "Is Docker running and accessible?",
+    docker_empty:    "No running containers.",
+    cancel:          "Cancel",
+    docker_waiting:  "Waiting for container logs…",
+    docker_starting: "Starting process…",
+    docker_no_logs:  "Container hasn't emitted any logs yet",
+    bm_clear_docker: "Clear bookmarks",
+    developed_by:    "Developed by",
+    license:         "MIT License © 2026",
+    close:           "Close",
+    settings_header: "⚙ Settings",
+    recent_files_h:  "RECENT FILES",
+    no_recent:       "No recent files",
+    clear_recents:   "Clear recents",
+    prefs_h:         "PREFERENCES",
+    pref_autoscroll: "Auto-scroll enabled when opening file",
+    pref_linenums:   "Show line numbers by default",
+    lang_h:          "LANGUAGE",
+    open_file_btn:   "Open file…",
+    recent_h:        "RECENT",
+    hint_electron:   "Ctrl+O  ·  Ctrl+T new tab  ·  click ◇ to bookmark lines",
+    hint_web:        ".log  .txt  .out",
+    open_file_title: "Open file (Ctrl+O)",
+    docker_btn_title:"Connect to Docker container",
+    diag_btn_title:  "Diagnostic log",
+    settings_title:  "Settings",
+    about_btn:       "About",
+    about_title:     "About PulpLog",
+    welcome_tab:     "Welcome",
+  },
+};
+
+const LangCtx = createContext(() => "");
+const useLang = () => useContext(LangCtx);
 
 /* ═══════════════════════════════════════════
    Log classification & styling
@@ -46,7 +185,7 @@ function hl(raw, type) {
     .replace(/([a-z][a-z0-9_]*\.){2,}[A-Z][a-zA-Z0-9_]*/g,
       '<span style="color:#5a7a5a">$&</span>');
 }
-const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const esc     = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 const fmtSize = b => b>=1e9?`${(b/1e9).toFixed(2)} GB`:b>=1e6?`${(b/1e6).toFixed(1)} MB`:b>=1e3?`${(b/1e3).toFixed(0)} KB`:`${b} B`;
 const fmtNum  = n => n>=1e6?`${(n/1e6).toFixed(1)}M`:n>=1e3?`${(n/1e3).toFixed(1)}k`:String(n);
 
@@ -54,6 +193,7 @@ const fmtNum  = n => n>=1e6?`${(n/1e6).toFixed(1)}M`:n>=1e3?`${(n/1e3).toFixed(1
    LogRow
 ═══════════════════════════════════════════ */
 const LogRow = memo(({ item, showNums, isBookmarked, onToggleBookmark }) => {
+  const t = useLang();
   const s = STYLE[item.type] || STYLE.plain;
   return (
     <div style={{
@@ -62,11 +202,10 @@ const LogRow = memo(({ item, showNums, isBookmarked, onToggleBookmark }) => {
       borderBottom:"0.5px solid rgba(255,255,255,.02)",
       outline: isBookmarked ? "0.5px solid rgba(255,200,50,.25)" : "none",
     }}>
-      {/* gutter: line number + bookmark dot */}
       {showNums && (
         <span
           onClick={() => onToggleBookmark(item.origLine)}
-          title={isBookmarked ? "Quitar marcador" : "Marcar línea"}
+          title={isBookmarked ? t("bm_remove") : t("bm_add")}
           style={{ minWidth:58, display:"flex", alignItems:"center", justifyContent:"flex-end",
                    gap:4, padding:"0 6px 0 4px", fontSize:10, color:"#2e2e2e",
                    lineHeight:`${ROW_H}px`, flexShrink:0, userSelect:"none",
@@ -105,7 +244,6 @@ function VirtualList({ items, showNums, bookmarks, onToggleBookmark, listRef }) 
     return () => ro.disconnect();
   }, []);
 
-  // Expose scroll helpers via listRef
   useEffect(() => {
     if (!listRef) return;
     listRef.current = {
@@ -147,28 +285,30 @@ function VirtualList({ items, showNums, bookmarks, onToggleBookmark, listRef }) 
 /* ═══════════════════════════════════════════
    LogTab
 ═══════════════════════════════════════════ */
-function LogTab({ filePath, fileName, fileSize }) {
+function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showNumsDefault = true }) {
+  const t = useLang();
   const [rawLines,    setRawLines]    = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [progress,    setProgress]    = useState(0);
-  const [tailing,     setTailing]     = useState(false);
-  const [autoScroll,  setAutoScroll]  = useState(false);
-  const [showNums,    setShowNums]    = useState(true);
+  const [tailing,     setTailing]     = useState(true);
+  const [autoScroll,  setAutoScroll]  = useState(autoScrollDefault);
+  const [showNums,    setShowNums]    = useState(showNumsDefault);
   const [filter,      setFilter]      = useState("");
   const [useRegex,    setUseRegex]    = useState(false);
   const [regexError,  setRegexError]  = useState(false);
   const [bookmarks,   setBookmarks]   = useState(new Set());
-  const [bmCursor,    setBmCursor]    = useState(-1); // index into sorted bookmarks
-  const [rotation,    setRotation]    = useState(null); // { event, countdown }
+  const [bmCursor,    setBmCursor]    = useState(-1);
+  const [rotation,    setRotation]    = useState(null);
   const [reloadKey,   setReloadKey]   = useState(0);
   const [lvl, setLvl] = useState({
     error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true
   });
 
-  const listRef    = useRef(null);
-  const bufRef     = useRef("");
-  const unwatchRef = useRef(null);
-  const timerRef   = useRef(null);
+  const listRef       = useRef(null);
+  const bufRef        = useRef("");
+  const timerRef      = useRef(null);
+  const autoScrollRef = useRef(autoScroll);
+  useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
 
   /* ── Stream read ── */
   useEffect(() => {
@@ -222,6 +362,7 @@ function LogTab({ filePath, fileName, fileSize }) {
     if (rotation.countdown <= 0) {
       setRotation(null);
       setReloadKey(k => k + 1);
+      setTailing(true);
       return;
     }
     timerRef.current = setTimeout(() =>
@@ -229,46 +370,24 @@ function LogTab({ filePath, fileName, fileSize }) {
     return () => clearTimeout(timerRef.current);
   }, [rotation]);
 
-  /* ── Tail toggle ── */
-  const toggleTail = useCallback(() => {
-    if (tailing) {
-      unwatchRef.current?.();
-      unwatchRef.current = null;
-      setTailing(false);
-    } else {
-      if (!IS_ELECTRON) return;
-      const unwatch = window.electronAPI.watchFile(filePath, {
-        onNewLines(text) {
-          const newLines = text.split("\n").filter(Boolean);
-          setRawLines(prev => [...prev, ...newLines]);
-          if (autoScroll) listRef.current?.scrollToBottom();
-        },
-        onRotated() {
-          setRotation({ event:"rotated", countdown: 3 });
-          // stop current watch; reload will restart it
-          unwatchRef.current?.();
-          unwatchRef.current = null;
-          setTailing(false);
-        },
-        onTruncated() {
-          setRotation({ event:"truncated", countdown: 2 });
-          unwatchRef.current?.();
-          unwatchRef.current = null;
-          setTailing(false);
-        },
-        onRecreated() {
-          setRotation({ event:"recreated", countdown: 0 });
-          setReloadKey(k => k + 1);
-        },
-      });
-      unwatchRef.current = unwatch;
-      setTailing(true);
-    }
-  }, [tailing, filePath, autoScroll]);
+  /* ── Tail toggle (simple flip; the effect below manages the actual watcher) ── */
+  const toggleTail = useCallback(() => setTailing(p => !p), []);
 
-  useEffect(() => () => { unwatchRef.current?.(); }, []);
+  /* ── Reactive watcher: auto-starts when tailing=true and file is fully loaded ── */
+  useEffect(() => {
+    if (!tailing || loading || !IS_ELECTRON || !filePath) return;
+    const unwatch = window.electronAPI.watchFile(filePath, {
+      onNewLines(text) {
+        setRawLines(prev => [...prev, ...text.split("\n").filter(Boolean)]);
+        if (autoScrollRef.current) listRef.current?.scrollToBottom();
+      },
+      onRotated()   { setRotation({ event:"rotated",   countdown: 3 }); setTailing(false); },
+      onTruncated() { setRotation({ event:"truncated", countdown: 2 }); setTailing(false); },
+      onRecreated() { setRotation({ event:"recreated", countdown: 0 }); setReloadKey(k => k + 1); },
+    });
+    return () => unwatch?.();
+  }, [tailing, loading, filePath]); // eslint-disable-line
 
-  /* ── Classify ── */
   const classified = useMemo(() =>
     rawLines.map((raw, i) => ({ raw, origLine: i + 1, type: classify(raw) })),
     [rawLines]
@@ -281,7 +400,6 @@ function LogTab({ filePath, fileName, fileSize }) {
     debug: classified.filter(x => x.type==="debug").length,
   }), [classified]);
 
-  /* ── Filter (text or regex) ── */
   const { filtered, regexValid } = useMemo(() => {
     const hide = new Set();
     if (!lvl.error) { hide.add("error"); hide.add("exception"); }
@@ -308,7 +426,6 @@ function LogTab({ filePath, fileName, fileSize }) {
 
   useEffect(() => setRegexError(!regexValid), [regexValid]);
 
-  /* ── Bookmarks ── */
   const toggleBookmark = useCallback((origLine) => {
     setBookmarks(prev => {
       const next = new Set(prev);
@@ -322,19 +439,15 @@ function LogTab({ filePath, fileName, fileSize }) {
 
   const jumpBookmark = useCallback((direction) => {
     if (sortedBookmarks.length === 0) return;
-    let next;
-    if (direction === "next") {
-      next = bmCursor >= sortedBookmarks.length - 1 ? 0 : bmCursor + 1;
-    } else {
-      next = bmCursor <= 0 ? sortedBookmarks.length - 1 : bmCursor - 1;
-    }
+    const next = direction === "next"
+      ? (bmCursor >= sortedBookmarks.length - 1 ? 0 : bmCursor + 1)
+      : (bmCursor <= 0 ? sortedBookmarks.length - 1 : bmCursor - 1);
     setBmCursor(next);
     const origLine = sortedBookmarks[next];
     const idx = filtered.findIndex(x => x.origLine >= origLine);
     if (idx >= 0) listRef.current?.scrollToIndex(idx);
   }, [sortedBookmarks, bmCursor, filtered]);
 
-  /* ── UI ── */
   const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
 
   const BADGES = [
@@ -349,26 +462,24 @@ function LogTab({ filePath, fileName, fileSize }) {
   return (
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
 
-      {/* ── toolbar ── */}
+      {/* toolbar */}
       <div style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px",
                     background:"#111", borderBottom:"0.5px solid #222",
                     flexWrap:"wrap", flexShrink:0 }}>
 
-        {/* filter input + regex toggle */}
         <div style={{ display:"flex", flex:1, minWidth:140, position:"relative" }}>
           <input
             style={{ flex:1, background:"#181818",
                      border:`0.5px solid ${regexError ? "#883030" : "#2e2e2e"}`,
                      borderRadius:"6px 0 0 6px", color: regexError ? "#ff6060" : "#bbb",
-                     fontFamily:"inherit", fontSize:12, padding:"4px 10px",
-                     outline:"none" }}
-            placeholder={useRegex ? "regex…" : "🔍  filtrar…"}
+                     fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
+            placeholder={useRegex ? t("regex_ph") : t("filter_ph")}
             value={filter}
             onChange={e => setFilter(e.target.value)}
           />
           <button
             onClick={() => setUseRegex(p => !p)}
-            title="Activar filtro por expresión regular"
+            title={t("regex_btn_title")}
             style={{ background: useRegex ? "#1a2a3a" : "#181818",
                      border:`0.5px solid ${useRegex ? "#2a6a9a" : "#2e2e2e"}`,
                      borderLeft:"none", borderRadius:"0 6px 6px 0",
@@ -381,7 +492,6 @@ function LogTab({ filePath, fileName, fileSize }) {
 
         <Sep />
 
-        {/* level badges */}
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
           <span key={key} onClick={() => toggle(key)}
             style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11,
@@ -401,45 +511,43 @@ function LogTab({ filePath, fileName, fileSize }) {
 
         <Sep />
 
-        {/* bookmarks */}
         <Btn onClick={() => jumpBookmark("prev")}
-          disabled={sortedBookmarks.length === 0} title="Marcador anterior (Shift+F2)">
+          disabled={sortedBookmarks.length === 0} title={t("bm_prev_title")}>
           ◆ ↑
         </Btn>
         <Btn onClick={() => jumpBookmark("next")}
-          disabled={sortedBookmarks.length === 0} title="Marcador siguiente (F2)">
+          disabled={sortedBookmarks.length === 0} title={t("bm_next_title")}>
           ◆ ↓
         </Btn>
         {bookmarks.size > 0 && (
           <span style={{ fontSize:10, color:"#c0a030", padding:"0 2px" }}>
-            {bookmarks.size} {bookmarks.size === 1 ? "marca" : "marcas"}
+            {t("bm_count", bookmarks.size)}
           </span>
         )}
         {bookmarks.size > 0 && (
           <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }}
-            title="Limpiar todos los marcadores">
-            ✕ marcas
+            title={t("bm_clear_title")}>
+            {t("bm_clear_btn")}
           </Btn>
         )}
 
         <Sep />
 
-        {/* tail / scroll controls */}
         <Btn active={tailing} onClick={toggleTail} disabled={!IS_ELECTRON}
-          title="Tail -f — seguir archivo en vivo">
-          {tailing ? "⏹ stop" : "▶ tail"}
+          title={t("tail_title")}>
+          {tailing ? t("tail_stop") : t("tail_follow")}
         </Btn>
-        <Btn active={autoScroll} onClick={() => setAutoScroll(p => !p)} title="Auto-scroll al final">
+        <Btn active={autoScroll} onClick={() => setAutoScroll(p => !p)} title={t("autoscroll_title")}>
           ↓ auto
         </Btn>
-        <Btn active={showNums} onClick={() => setShowNums(p => !p)} title="Números de línea">
+        <Btn active={showNums} onClick={() => setShowNums(p => !p)} title={t("linenums_title")}>
           #
         </Btn>
-        <Btn onClick={() => listRef.current?.scrollToTop()}>↑ inicio</Btn>
-        <Btn onClick={() => listRef.current?.scrollToBottom()}>↓ fin</Btn>
+        <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
+        <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
       </div>
 
-      {/* ── progress ── */}
+      {/* progress */}
       {loading && (
         <div style={{ height:3, background:"#181818", flexShrink:0 }}>
           <div style={{ height:"100%", background:"#2a7faa", transition:"width .08s",
@@ -447,26 +555,26 @@ function LogTab({ filePath, fileName, fileSize }) {
         </div>
       )}
 
-      {/* ── rotation banner ── */}
+      {/* rotation banner */}
       {rotation && (
         <RotationBanner event={rotation.event} countdown={rotation.countdown} />
       )}
 
-      {/* ── virtual list ── */}
+      {/* virtual list */}
       {loading ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
                       flexDirection:"column", gap:12, color:"#444", fontSize:13 }}>
           <span style={{ fontSize:28, display:"block", color:"#2a7faa",
             animation:"spin 1s linear infinite" }}>↻</span>
-          Leyendo… {Math.round(progress*100)}%
+          {t("reading", Math.round(progress*100))}
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         </div>
       ) : filtered.length === 0 ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
                       flexDirection:"column", gap:8, color:"#333", fontSize:13 }}>
           {regexError
-            ? <><span style={{ color:"#ff6060", fontSize:14 }}>⚠</span> Regex inválida</>
-            : filter ? `Sin resultados para "${filter}"` : "Sin líneas"}
+            ? <><span style={{ color:"#ff6060", fontSize:14 }}>⚠</span> {t("regex_invalid")}</>
+            : filter ? t("no_results", filter) : t("no_lines")}
         </div>
       ) : (
         <VirtualList
@@ -478,20 +586,21 @@ function LogTab({ filePath, fileName, fileSize }) {
         />
       )}
 
-      {/* ── status bar ── */}
+      {/* status bar */}
       <div style={{ display:"flex", gap:14, padding:"4px 10px", background:"#0d0d0d",
                     borderTop:"0.5px solid #1a1a1a", fontSize:10, flexShrink:0, alignItems:"center" }}>
         {[["#883030",stats.error,"err"],["#806010",stats.warn,"warn"],
           ["#1a5070",stats.info,"info"],["#284028",stats.debug,"dbg"]].map(([c,n,l])=>(
           <span key={l} style={{ color:c }}>{fmtNum(n)} <span style={{color:"#252525"}}>{l}</span></span>
         ))}
-        {tailing && <span style={{ color:"#2a9a4a" }}>● live</span>}
+        {tailing && <span style={{ color:"#2a9a4a" }}>{t("live")}</span>}
         {bookmarks.size > 0 && (
           <span style={{ color:"#c0a030" }}>◆ {bookmarks.size}</span>
         )}
         <span style={{ marginLeft:"auto", color:"#444" }}>
-          {fmtNum(filtered.length)} / {fmtNum(rawLines.length)} líneas
-          {fileSize ? ` · ${fmtSize(fileSize)}` : ""}
+          {fileSize
+            ? t("lines_size", filtered.length, rawLines.length, fmtSize(fileSize))
+            : t("lines", filtered.length, rawLines.length)}
         </span>
       </div>
     </div>
@@ -499,13 +608,14 @@ function LogTab({ filePath, fileName, fileSize }) {
 }
 
 /* ═══════════════════════════════════════════
-   Rotation banner component
+   Rotation banner
 ═══════════════════════════════════════════ */
 function RotationBanner({ event, countdown }) {
+  const t = useLang();
   const CFG = {
-    rotated:   { bg:"#2a1a00", border:"#c08020", color:"#f0c060", icon:"↻", label:`Archivo rotado — recargando en ${countdown}s…` },
-    truncated: { bg:"#0a1e2a", border:"#2a7faa", color:"#60b8e8", icon:"⬇", label:`Archivo truncado — recargando en ${countdown}s…` },
-    recreated: { bg:"#0a2a0a", border:"#2a8a2a", color:"#60d060", icon:"✓", label:"Nuevo archivo detectado — cargando…" },
+    rotated:   { bg:"#2a1a00", border:"#c08020", color:"#f0c060", icon:"↻", label: t("rotated", countdown) },
+    truncated: { bg:"#0a1e2a", border:"#2a7faa", color:"#60b8e8", icon:"⬇", label: t("truncated", countdown) },
+    recreated: { bg:"#0a2a0a", border:"#2a8a2a", color:"#60d060", icon:"✓", label: t("recreated") },
   };
   const c = CFG[event] || CFG.rotated;
   return (
@@ -518,9 +628,216 @@ function RotationBanner({ event, countdown }) {
 }
 
 /* ═══════════════════════════════════════════
+   DiagPanel – bitácora de diagnóstico
+═══════════════════════════════════════════ */
+function DiagPanel({ onClose }) {
+  const t = useLang();
+  const [entries, setEntries] = useState([]);
+  const scrollRef   = useRef(null);
+  const atBottomRef = useRef(true);
+
+  useEffect(() => {
+    window.electronAPI.getAppLog().then(setEntries);
+    const unsub = window.electronAPI.onAppLogNew(entry => {
+      setEntries(prev => [...prev, entry]);
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (atBottomRef.current && scrollRef.current)
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [entries]);
+
+  const LEVEL = {
+    ERROR: { color:"#ff8888", bg:"#2a0808", label:"ERROR" },
+    WARN:  { color:"#f0c060", bg:"#1c1408", label:"WARN " },
+    INFO:  { color:"#60b8e8", bg:"transparent", label:"INFO " },
+  };
+  const CAT_COLOR = { docker:"#2a9a4a", file:"#2a7faa" };
+  const fmt = ts => new Date(ts).toLocaleTimeString(undefined, { hour12:false });
+
+  return (
+    <div style={{ height:210, flexShrink:0, borderTop:"1px solid #1a1a1a",
+                  background:"#070707", display:"flex", flexDirection:"column",
+                  fontFamily:"inherit" }}>
+
+      <div style={{ display:"flex", alignItems:"center", gap:8, padding:"4px 10px",
+                    background:"#0d0d0d", borderBottom:"0.5px solid #1a1a1a", flexShrink:0 }}>
+        <span style={{ fontSize:10, color:"#555", fontWeight:700, letterSpacing:1 }}>
+          {t("diag_title")}
+        </span>
+        <span style={{ fontSize:10, color:"#252525" }}>{t("diag_entries", entries.length)}</span>
+        <Btn onClick={() => { window.electronAPI.clearAppLog(); setEntries([]); }}>
+          {t("diag_clear")}
+        </Btn>
+        <button onClick={onClose}
+          style={{ marginLeft:"auto", background:"none", border:"none",
+                   color:"#333", cursor:"pointer", fontSize:13, padding:"0 4px",
+                   fontFamily:"inherit" }}>
+          ✕
+        </button>
+      </div>
+
+      <div ref={scrollRef}
+           onScroll={e => {
+             const el = e.currentTarget;
+             atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 20;
+           }}
+           style={{ flex:1, overflowY:"auto" }}>
+        {entries.length === 0 && (
+          <div style={{ padding:"20px 10px", color:"#222", fontSize:11, textAlign:"center" }}>
+            {t("diag_empty")}
+          </div>
+        )}
+        {entries.map((e, i) => {
+          const s = LEVEL[e.level] || LEVEL.INFO;
+          return (
+            <div key={i} style={{ display:"flex", gap:10, padding:"2px 10px", fontSize:11,
+                                  background:s.bg, borderBottom:"0.5px solid rgba(255,255,255,.02)",
+                                  fontFamily:"inherit" }}>
+              <span style={{ color:"#282828", flexShrink:0, minWidth:72 }}>{fmt(e.ts)}</span>
+              <span style={{ color:s.color, fontWeight:700, flexShrink:0, minWidth:42,
+                             fontFamily:"monospace" }}>{s.label}</span>
+              <span style={{ color: CAT_COLOR[e.category] || "#444", flexShrink:0,
+                             minWidth:52 }}>[{e.category}]</span>
+              <span style={{ color:"#666" }}>{e.msg}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   Settings modal
+═══════════════════════════════════════════ */
+function PrefToggle({ label, value, onChange }) {
+  return (
+    <label style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer", userSelect:"none" }}>
+      <div onClick={() => onChange(!value)}
+           style={{ width:28, height:16, borderRadius:8, flexShrink:0,
+                    background: value ? "#1a5f1a" : "#1e1e1e",
+                    border:`1px solid ${value ? "#2a9a2a" : "#2e2e2e"}`,
+                    position:"relative", cursor:"pointer" }}>
+        <div style={{ position:"absolute", top:2, left: value ? 14 : 2,
+                       width:10, height:10, borderRadius:"50%",
+                       background: value ? "#4aaa4a" : "#333",
+                       transition:"left .12s" }} />
+      </div>
+      <span style={{ fontSize:11, color:"#666" }}>{label}</span>
+    </label>
+  );
+}
+
+function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearRecent, onTogglePref }) {
+  const t = useLang();
+  const lang = settings.language || "es";
+
+  return (
+    <div onClick={onClose}
+         style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
+                  display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
+      <div onClick={e => e.stopPropagation()}
+           style={{ background:"#111", border:"0.5px solid #2a2a2a", borderRadius:10,
+                    padding:"28px 32px", minWidth:500, maxWidth:620,
+                    boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
+
+        <div style={{ display:"flex", alignItems:"center", marginBottom:22 }}>
+          <span style={{ fontSize:14, color:"#ccc", fontWeight:700 }}>{t("settings_header")}</span>
+          <button onClick={onClose}
+            style={{ marginLeft:"auto", background:"none", border:"none",
+                     color:"#444", cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>✕</button>
+        </div>
+
+        {/* language */}
+        <div style={{ fontSize:10, color:"#444", fontWeight:700, letterSpacing:1, marginBottom:10 }}>
+          {t("lang_h")}
+        </div>
+        <div style={{ display:"flex", gap:8, marginBottom:24 }}>
+          {["es","en"].map(l => (
+            <button key={l} onClick={() => onTogglePref("language", l)}
+              style={{ background: lang === l ? "#1a2a3a" : "#181818",
+                       border:`0.5px solid ${lang === l ? "#2a6a9a" : "#2e2e2e"}`,
+                       borderRadius:6, color: lang === l ? "#60b8e8" : "#555",
+                       fontFamily:"inherit", fontSize:12, padding:"5px 18px",
+                       cursor:"pointer", fontWeight: lang === l ? 700 : 400 }}>
+              {l === "es" ? "Español" : "English"}
+            </button>
+          ))}
+        </div>
+
+        {/* recent files */}
+        <div style={{ fontSize:10, color:"#444", fontWeight:700, letterSpacing:1, marginBottom:8 }}>
+          {t("recent_files_h")}
+        </div>
+        {settings.recentFiles.length === 0 ? (
+          <div style={{ fontSize:11, color:"#252525", padding:"10px 0 16px" }}>{t("no_recent")}</div>
+        ) : (
+          <>
+            <div style={{ maxHeight:200, overflowY:"auto", marginBottom:8,
+                           border:"0.5px solid #1e1e1e", borderRadius:6 }}>
+              {settings.recentFiles.map((fp, i) => {
+                const name = fp.split(/[\\/]/).pop();
+                return (
+                  <div key={fp}
+                       style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px",
+                                borderBottom: i < settings.recentFiles.length - 1
+                                  ? "0.5px solid #1a1a1a" : "none",
+                                background:"#0e0e0e" }}>
+                    <span onClick={() => { onOpenFile(fp); onClose(); }}
+                          title={fp}
+                          style={{ flex:1, fontSize:12, color:"#777", cursor:"pointer",
+                                   overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      📄 <b style={{ color:"#999" }}>{name}</b>
+                      <span style={{ fontSize:10, color:"#2a2a2a", marginLeft:8 }}>{fp}</span>
+                    </span>
+                    <button onClick={() => onRemoveRecent(fp)}
+                      style={{ background:"none", border:"none", color:"#333",
+                               cursor:"pointer", fontSize:11, padding:"0 4px", flexShrink:0 }}>✕</button>
+                  </div>
+                );
+              })}
+            </div>
+            <Btn onClick={onClearRecent}>{t("clear_recents")}</Btn>
+          </>
+        )}
+
+        {/* preferences */}
+        <div style={{ fontSize:10, color:"#444", fontWeight:700, letterSpacing:1,
+                       marginTop:24, marginBottom:12 }}>
+          {t("prefs_h")}
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          <PrefToggle
+            label={t("pref_autoscroll")}
+            value={settings.autoScrollDefault}
+            onChange={v => onTogglePref("autoScrollDefault", v)}
+          />
+          <PrefToggle
+            label={t("pref_linenums")}
+            value={settings.showNumsDefault}
+            onChange={v => onTogglePref("showNumsDefault", v)}
+          />
+        </div>
+
+        <button onClick={onClose}
+          style={{ marginTop:28, background:"#181818", border:"0.5px solid #2e2e2e",
+                   borderRadius:6, color:"#666", fontFamily:"inherit",
+                   fontSize:11, padding:"6px 20px", cursor:"pointer" }}>
+          {t("close")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
    About modal
 ═══════════════════════════════════════════ */
 function AboutModal({ onClose }) {
+  const t = useLang();
   return (
     <div
       onClick={onClose}
@@ -531,19 +848,20 @@ function AboutModal({ onClose }) {
         style={{ background:"#111", border:"0.5px solid #2a2a2a", borderRadius:10,
                  padding:"32px 40px", minWidth:300, textAlign:"center",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
-        <div style={{ fontSize:36, marginBottom:12 }}>📋</div>
-        <div style={{ fontSize:18, color:"#ccc", fontWeight:700, marginBottom:4 }}>LogViewer</div>
+        <img src="/lindecode-max.jpeg" alt="LindeCode"
+          style={{ width:96, height:96, borderRadius:12, objectFit:"cover", marginBottom:12 }} />
+        <div style={{ fontSize:18, color:"#ccc", fontWeight:700, marginBottom:4 }}>PulpLog</div>
         <div style={{ fontSize:11, color:"#444", marginBottom:20 }}>v1.0.0</div>
         <div style={{ width:40, height:"0.5px", background:"#2a2a2a", margin:"0 auto 20px" }} />
-        <div style={{ fontSize:13, color:"#888", marginBottom:6 }}>Desarrollado por</div>
+        <div style={{ fontSize:13, color:"#888", marginBottom:6 }}>{t("developed_by")}</div>
         <div style={{ fontSize:16, color:"#2a7faa", fontWeight:700, letterSpacing:1 }}>LindeCode</div>
-        <div style={{ marginTop:20, fontSize:11, color:"#333" }}>Licencia MIT © 2026</div>
+        <div style={{ marginTop:20, fontSize:11, color:"#333" }}>{t("license")}</div>
         <button
           onClick={onClose}
           style={{ marginTop:24, background:"#181818", border:"0.5px solid #2e2e2e",
                    borderRadius:6, color:"#666", fontFamily:"inherit",
                    fontSize:11, padding:"6px 20px", cursor:"pointer" }}>
-          Cerrar
+          {t("close")}
         </button>
       </div>
     </div>
@@ -575,6 +893,7 @@ function Sep() {
    Docker – container picker modal
 ═══════════════════════════════════════════ */
 function DockerPicker({ onSelect, onClose }) {
+  const t = useLang();
   const [containers, setContainers] = useState(null);
   const [error,      setError]      = useState(null);
 
@@ -593,20 +912,20 @@ function DockerPicker({ onSelect, onClose }) {
                  padding:"24px", minWidth:440, maxWidth:580, fontFamily:"inherit",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
         <div style={{ fontSize:14, color:"#ccc", fontWeight:700, marginBottom:16 }}>
-          🐳 Contenedores Docker activos
+          {t("docker_title")}
         </div>
 
         {containers === null && !error && (
-          <div style={{ color:"#444", fontSize:12, padding:"8px 0" }}>Conectando con Docker…</div>
+          <div style={{ color:"#444", fontSize:12, padding:"8px 0" }}>{t("docker_connecting")}</div>
         )}
         {error && (
           <div style={{ color:"#ff6060", fontSize:12, padding:"8px 0", lineHeight:1.6 }}>
             <span style={{ fontWeight:700 }}>Error:</span> {error}
-            <br /><span style={{ color:"#555" }}>¿Está Docker corriendo y accesible?</span>
+            <br /><span style={{ color:"#555" }}>{t("docker_err_hint")}</span>
           </div>
         )}
         {containers?.length === 0 && (
-          <div style={{ color:"#555", fontSize:12, padding:"8px 0" }}>No hay contenedores en ejecución.</div>
+          <div style={{ color:"#555", fontSize:12, padding:"8px 0" }}>{t("docker_empty")}</div>
         )}
 
         <div style={{ display:"flex", flexDirection:"column", gap:6, maxHeight:320, overflowY:"auto" }}>
@@ -633,7 +952,7 @@ function DockerPicker({ onSelect, onClose }) {
           style={{ marginTop:20, background:"#181818", border:"0.5px solid #2e2e2e",
                    borderRadius:6, color:"#666", fontFamily:"inherit",
                    fontSize:11, padding:"6px 20px", cursor:"pointer" }}>
-          Cancelar
+          {t("cancel")}
         </button>
       </div>
     </div>
@@ -644,6 +963,7 @@ function DockerPicker({ onSelect, onClose }) {
    Docker – log streaming tab
 ═══════════════════════════════════════════ */
 function DockerTab({ containerId, containerName }) {
+  const t = useLang();
   const [rawLines,   setRawLines]  = useState([]);
   const [spawned,    setSpawned]   = useState(false);
   const [connected,  setConnected] = useState(false);
@@ -762,11 +1082,12 @@ function DockerTab({ containerId, containerName }) {
                      border:`0.5px solid ${regexError ? "#883030" : "#2e2e2e"}`,
                      borderRadius:"6px 0 0 6px", color: regexError ? "#ff6060" : "#bbb",
                      fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
-            placeholder={useRegex ? "regex…" : "🔍  filtrar…"}
+            placeholder={useRegex ? t("regex_ph") : t("filter_ph")}
             value={filter}
             onChange={e => setFilter(e.target.value)}
           />
           <button onClick={() => setUseRegex(p => !p)}
+            title={t("regex_btn_title")}
             style={{ background: useRegex ? "#1a2a3a" : "#181818",
                      border:`0.5px solid ${useRegex ? "#2a6a9a" : "#2e2e2e"}`,
                      borderLeft:"none", borderRadius:"0 6px 6px 0",
@@ -795,17 +1116,17 @@ function DockerTab({ containerId, containerName }) {
 
         <Sep />
 
-        <Btn onClick={() => jumpBookmark("prev")} disabled={!sortedBookmarks.length} title="Marcador anterior (Shift+F2)">◆ ↑</Btn>
-        <Btn onClick={() => jumpBookmark("next")} disabled={!sortedBookmarks.length} title="Marcador siguiente (F2)">◆ ↓</Btn>
-        {bookmarks.size > 0 && <span style={{ fontSize:10, color:"#c0a030", padding:"0 2px" }}>{bookmarks.size} {bookmarks.size===1?"marca":"marcas"}</span>}
-        {bookmarks.size > 0 && <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }} title="Limpiar marcadores">✕ marcas</Btn>}
+        <Btn onClick={() => jumpBookmark("prev")} disabled={!sortedBookmarks.length} title={t("bm_prev_title")}>◆ ↑</Btn>
+        <Btn onClick={() => jumpBookmark("next")} disabled={!sortedBookmarks.length} title={t("bm_next_title")}>◆ ↓</Btn>
+        {bookmarks.size > 0 && <span style={{ fontSize:10, color:"#c0a030", padding:"0 2px" }}>{t("bm_count", bookmarks.size)}</span>}
+        {bookmarks.size > 0 && <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }} title={t("bm_clear_title")}>{t("bm_clear_btn")}</Btn>}
 
         <Sep />
 
-        <Btn active={autoScroll} onClick={() => setAutoScroll(p => !p)} title="Auto-scroll al final">↓ auto</Btn>
-        <Btn active={showNums}   onClick={() => setShowNums(p => !p)}   title="Números de línea">#</Btn>
-        <Btn onClick={() => listRef.current?.scrollToTop()}>↑ inicio</Btn>
-        <Btn onClick={() => listRef.current?.scrollToBottom()}>↓ fin</Btn>
+        <Btn active={autoScroll} onClick={() => setAutoScroll(p => !p)} title={t("autoscroll_title")}>↓ auto</Btn>
+        <Btn active={showNums}   onClick={() => setShowNums(p => !p)}   title={t("linenums_title")}>#</Btn>
+        <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
+        <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
       </div>
 
       {/* error banner */}
@@ -821,16 +1142,16 @@ function DockerTab({ containerId, containerName }) {
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
                       flexDirection:"column", gap:10, color:"#333", fontSize:13 }}>
           <span style={{ fontSize:28, color:"#2a9a4a", animation:"spin 1s linear infinite" }}>↻</span>
-          {spawned ? "Esperando logs del contenedor…" : "Iniciando proceso…"}
-          {spawned && <span style={{ fontSize:10, color:"#252525" }}>El contenedor no ha emitido logs aún</span>}
+          {spawned ? t("docker_waiting") : t("docker_starting")}
+          {spawned && <span style={{ fontSize:10, color:"#252525" }}>{t("docker_no_logs")}</span>}
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         </div>
       ) : filtered.length === 0 ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
                       color:"#333", fontSize:13 }}>
           {regexError
-            ? <><span style={{ color:"#ff6060" }}>⚠</span> Regex inválida</>
-            : filter ? `Sin resultados para "${filter}"` : "Sin líneas"}
+            ? <><span style={{ color:"#ff6060" }}>⚠</span> {t("regex_invalid")}</>
+            : filter ? t("no_results", filter) : t("no_lines")}
         </div>
       ) : (
         <VirtualList
@@ -849,11 +1170,11 @@ function DockerTab({ containerId, containerName }) {
           ["#1a5070",stats.info,"info"],["#284028",stats.debug,"dbg"]].map(([c,n,l])=>(
           <span key={l} style={{ color:c }}>{fmtNum(n)} <span style={{color:"#252525"}}>{l}</span></span>
         ))}
-        {connected && <span style={{ color:"#2a9a4a" }}>● live</span>}
-        {!connected && rawLines.length > 0 && <span style={{ color:"#555" }}>● detenido</span>}
+        {connected  && <span style={{ color:"#2a9a4a" }}>{t("live")}</span>}
+        {!connected && rawLines.length > 0 && <span style={{ color:"#555" }}>{t("stopped")}</span>}
         {bookmarks.size > 0 && <span style={{ color:"#c0a030" }}>◆ {bookmarks.size}</span>}
         <span style={{ marginLeft:"auto", color:"#444" }}>
-          {fmtNum(filtered.length)} / {fmtNum(rawLines.length)} líneas
+          {t("lines", filtered.length, rawLines.length)}
         </span>
       </div>
     </div>
@@ -866,23 +1187,59 @@ function DockerTab({ containerId, containerName }) {
 let nextId = 1;
 
 export default function App() {
-  const [tabs,         setTabs]        = useState([{ id: nextId++, label:"Bienvenida", filePath:null, fileSize:null }]);
+  const [tabs,         setTabs]        = useState([{ id: nextId++, label:"$welcome", filePath:null, fileSize:null }]);
   const [active,       setActive]      = useState(1);
   const [about,        setAbout]       = useState(false);
   const [dockerPicker, setDockerPicker]= useState(false);
-  const fileRef = useRef(null);
+  const [diagOpen,     setDiagOpen]    = useState(false);
+  const [settingsOpen, setSettingsOpen]= useState(false);
+  const [settings,     setSettings]    = useState({
+    recentFiles:[], autoScrollDefault:false, showNumsDefault:true, language:"es", sessionTabs:[]
+  });
+  const fileRef       = useRef(null);
+  const closedTabsRef = useRef([]);   // stack for reopen-last-tab
+  const activeRef     = useRef(active);
+  useEffect(() => { activeRef.current = active; }, [active]);
+
+  /* ── Translation function ── */
+  const t = useCallback((key, ...args) => {
+    const lang = settings.language || "es";
+    const entry = (T[lang] ?? T.es)[key] ?? T.es[key] ?? key;
+    return typeof entry === "function" ? entry(...args) : entry;
+  }, [settings.language]);
+
+  const savePref = useCallback((key, val) => {
+    setSettings(prev => ({ ...prev, [key]: val }));
+    if (IS_ELECTRON) window.electronAPI.setSettings({ [key]: val });
+  }, []);
+
+  const removeRecent = useCallback(async (fp) => {
+    const recent = await window.electronAPI.removeRecentFile(fp);
+    setSettings(prev => ({ ...prev, recentFiles: recent }));
+  }, []);
+
+  const clearAllRecent = useCallback(async () => {
+    await window.electronAPI.setSettings({ recentFiles: [] });
+    setSettings(prev => ({ ...prev, recentFiles: [] }));
+  }, []);
+
+  const openFileByPath = useCallback(async (fp) => {
+    const stat  = await window.electronAPI.statFile(fp);
+    const label = fp.split(/[\\/]/).pop();
+    addTab(label, fp, stat?.size ?? null);
+    const recent = await window.electronAPI.addRecentFile(fp);
+    setSettings(prev => ({ ...prev, recentFiles: recent }));
+  }, []);
 
   const openFile = useCallback(async () => {
     if (IS_ELECTRON) {
       const fp = await window.electronAPI.openFileDialog();
       if (!fp) return;
-      const stat  = await window.electronAPI.statFile(fp);
-      const label = fp.split(/[\\/]/).pop();
-      addTab(label, fp, stat?.size ?? null);
+      await openFileByPath(fp);
     } else {
       fileRef.current?.click();
     }
-  }, []);
+  }, [openFileByPath]);
 
   const addTab = (label, filePath, fileSize) => {
     const id = nextId++;
@@ -899,126 +1256,284 @@ export default function App() {
 
   const closeTab = (id) => {
     setTabs(prev => {
-      const idx  = prev.findIndex(t => t.id === id);
-      const next = prev.filter(t => t.id !== id);
+      const idx = prev.findIndex(tab => tab.id === id);
+      const tab = prev[idx];
+      if (tab?.filePath && tab.filePath !== "__web__")
+        closedTabsRef.current.push({ label: tab.label, filePath: tab.filePath, fileSize: tab.fileSize });
+      const next = prev.filter(tab => tab.id !== id);
       if (next.length === 0) {
         const newId = nextId++;
         setActive(newId);
-        return [{ id: newId, label:"Bienvenida", filePath:null }];
+        return [{ id: newId, label:"$welcome", filePath:null }];
       }
       setActive(a => a === id ? next[Math.min(idx, next.length - 1)].id : a);
       return next;
     });
   };
 
+  /* ── Mount: load settings, restore session or open initial file arg ── */
+  useEffect(() => {
+    if (!IS_ELECTRON) return;
+    let alive = true;
+    (async () => {
+      const s = await window.electronAPI.getSettings();
+      if (!alive) return;
+      setSettings(prev => ({ ...prev, ...s, recentFiles: s.recentFiles || [] }));
+
+      const initialArg = await window.electronAPI.getInitialFileArg();
+      if (!alive) return;
+
+      if (initialArg) {
+        const stat  = await window.electronAPI.statFile(initialArg);
+        const label = initialArg.split(/[\\/]/).pop();
+        const id    = nextId++;
+        setTabs(prev => [...prev, { id, label, filePath: initialArg, fileSize: stat?.size ?? null }]);
+        setActive(id);
+        const recent = await window.electronAPI.addRecentFile(initialArg);
+        if (alive) setSettings(prev => ({ ...prev, recentFiles: recent }));
+      } else if (s.sessionTabs?.length) {
+        const valid = [];
+        for (const st of s.sessionTabs) {
+          const stat = await window.electronAPI.statFile(st.filePath);
+          if (stat) valid.push({ ...st, fileSize: st.fileSize ?? stat.size });
+        }
+        if (valid.length && alive) {
+          const entries = valid.map(st => ({
+            id: nextId++, label: st.label, filePath: st.filePath, fileSize: st.fileSize,
+          }));
+          setTabs(prev => [...prev, ...entries]);
+          setActive(entries[entries.length - 1].id);
+        }
+      }
+    })();
+    const unsub = window.electronAPI.onOpenFileArg(fp => openFileByPath(fp));
+    return () => { alive = false; unsub?.(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── Persist open file tabs as session on every tab change ── */
+  useEffect(() => {
+    if (!IS_ELECTRON) return;
+    const timer = setTimeout(() => {
+      const session = tabs
+        .filter(tb => tb.filePath && tb.filePath !== "__web__")
+        .map(tb => ({ filePath: tb.filePath, label: tb.label, fileSize: tb.fileSize }));
+      window.electronAPI.setSettings({ sessionTabs: session });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [tabs]);
+
   useEffect(() => {
     if (!IS_ELECTRON) return;
     const cleanOpenFile = window.electronAPI.onMenuOpenFile(() => openFile());
-    const cleanNewTab   = window.electronAPI.onMenuNewTab(() => {
-      const id = nextId++;
-      setTabs(p => [...p, { id, label:"Bienvenida", filePath:null }]);
-      setActive(id);
-    });
-    return () => { cleanOpenFile?.(); cleanNewTab?.(); };
+    const cleanNewTab = window.electronAPI.onMenuNewTab(() => openFile());
+    const cleanAbout = window.electronAPI.onMenuAbout(() => setAbout(true));
+    return () => { cleanOpenFile?.(); cleanNewTab?.(); cleanAbout?.(); };
   }, [openFile]);
 
-  const activeTab = tabs.find(t => t.id === active) || tabs[0];
+  /* ── Global OS shortcuts (Super+Shift+…) ── */
+  useEffect(() => {
+    if (!IS_ELECTRON) return;
+
+    const cleanClose = window.electronAPI.onGlobalCloseTab(() => {
+      const id = activeRef.current;
+      setTabs(prev => {
+        const idx = prev.findIndex(t => t.id === id);
+        const tab = prev[idx];
+        if (tab?.filePath && tab.filePath !== "__web__")
+          closedTabsRef.current.push({ label: tab.label, filePath: tab.filePath, fileSize: tab.fileSize });
+        const next = prev.filter(t => t.id !== id);
+        if (next.length === 0) {
+          const newId = nextId++;
+          setActive(newId);
+          return [{ id: newId, label:"$welcome", filePath:null }];
+        }
+        setActive(a => a === id ? next[Math.min(idx, next.length - 1)].id : a);
+        return next;
+      });
+    });
+
+    const cleanReopen = window.electronAPI.onGlobalReopenTab(() => {
+      const last = closedTabsRef.current.pop();
+      if (!last) return;
+      const id = nextId++;
+      setTabs(p => [...p, { id, label: last.label, filePath: last.filePath, fileSize: last.fileSize }]);
+      setActive(id);
+    });
+
+    return () => { cleanClose?.(); cleanReopen?.(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const activeTab = tabs.find(tab => tab.id === active) || tabs[0];
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100vh",
-                  background:"#0a0a0a", color:"#ccc", overflow:"hidden",
-                  fontFamily:"'JetBrains Mono','Fira Code','Cascadia Code',monospace" }}>
+    <LangCtx.Provider value={t}>
+      <div style={{ display:"flex", flexDirection:"column", height:"100vh",
+                    background:"#0a0a0a", color:"#ccc", overflow:"hidden",
+                    fontFamily:"'JetBrains Mono','Fira Code','Cascadia Code',monospace" }}>
 
-      {/* tab bar */}
-      <div style={{ display:"flex", alignItems:"stretch", background:"#0f0f0f",
-                    borderBottom:"0.5px solid #1e1e1e", flexShrink:0, overflowX:"auto" }}>
-        {tabs.map(tab => (
-          <div key={tab.id}
-            onClick={() => setActive(tab.id)}
-            style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 14px",
-                     borderRight:"0.5px solid #1e1e1e", cursor:"pointer", flexShrink:0,
-                     fontSize:12, maxWidth:200, overflow:"hidden",
-                     background: tab.id===active ? "#111":"transparent",
-                     color:      tab.id===active ? "#ccc":"#555",
-                     borderBottom: tab.id===active ? "1.5px solid #2a7faa":"1.5px solid transparent" }}>
-            <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-              {tab.label}
-            </span>
-            {tabs.length > 1 && (
-              <span style={{ fontSize:10, color:"#444", padding:"0 2px", cursor:"pointer",
-                             flexShrink:0, borderRadius:3 }}
-                onClick={e => { e.stopPropagation(); closeTab(tab.id); }}>✕</span>
-            )}
-          </div>
-        ))}
+        {/* tab bar */}
+        <div style={{ display:"flex", alignItems:"stretch", background:"#0f0f0f",
+                      borderBottom:"0.5px solid #1e1e1e", flexShrink:0, overflowX:"auto" }}>
+          {tabs.map(tab => (
+            <div key={tab.id}
+              onClick={() => setActive(tab.id)}
+              title={
+                tab.docker   ? `🐳 ${tab.docker.name}\nID: ${tab.docker.containerId.slice(0, 12)}` :
+                tab.filePath ? tab.filePath :
+                               t("hint_electron")
+              }
+              style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 14px",
+                       borderRight:"0.5px solid #1e1e1e", cursor:"pointer", flexShrink:0,
+                       fontSize:12, maxWidth:200, overflow:"hidden",
+                       background: tab.id===active ? "#111":"transparent",
+                       color:      tab.id===active ? "#ccc":"#555",
+                       borderBottom: tab.id===active ? "1.5px solid #2a7faa":"1.5px solid transparent" }}>
+              <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                {tab.label === "$welcome" ? t("welcome_tab") : tab.label}
+              </span>
+              {tabs.length > 1 && (
+                <span style={{ fontSize:10, color:"#444", padding:"0 2px", cursor:"pointer",
+                               flexShrink:0, borderRadius:3 }}
+                  onClick={e => { e.stopPropagation(); closeTab(tab.id); }}>✕</span>
+              )}
+            </div>
+          ))}
 
-        <button onClick={openFile}
-          style={{ background:"transparent", border:"none", color:"#444",
-                   padding:"0 14px", cursor:"pointer", fontSize:18,
-                   borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
-          title="Abrir archivo (Ctrl+O)">+</button>
-
-        {IS_ELECTRON && (
-          <button onClick={() => setDockerPicker(true)}
-            style={{ background:"transparent", border:"none", color:"#2a6a2a",
-                     padding:"0 14px", cursor:"pointer", fontSize:14,
+          <button onClick={openFile}
+            style={{ background:"transparent", border:"none", color:"#444",
+                     padding:"0 14px", cursor:"pointer", fontSize:18,
                      borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
-            title="Conectar a contenedor Docker">
-            🐳
+            title={t("open_file_title")}>+</button>
+
+          {IS_ELECTRON && (
+            <button onClick={() => setDockerPicker(true)}
+              style={{ background:"transparent", border:"none", color:"#2a6a2a",
+                       padding:"0 14px", cursor:"pointer", fontSize:14,
+                       borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+              title={t("docker_btn_title")}>
+              🐳
+            </button>
+          )}
+
+          {IS_ELECTRON && (
+            <button onClick={() => setDiagOpen(p => !p)}
+              style={{ background: diagOpen ? "#141a14" : "transparent",
+                       border:"none", color: diagOpen ? "#4a8a4a" : "#444",
+                       padding:"0 14px", cursor:"pointer", fontSize:13,
+                       borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+              title={t("diag_btn_title")}>
+              📋
+            </button>
+          )}
+
+          {IS_ELECTRON && (
+            <button onClick={() => setSettingsOpen(p => !p)}
+              style={{ background: settingsOpen ? "#1a1a24" : "transparent",
+                       border:"none", color: settingsOpen ? "#7a7aaa" : "#444",
+                       padding:"0 14px", cursor:"pointer", fontSize:14,
+                       borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+              title={t("settings_title")}>
+              ⚙
+            </button>
+          )}
+
+          <button onClick={() => setAbout(true)}
+            style={{ background:"transparent", border:"none", color:"#333",
+                     padding:"0 14px", cursor:"pointer", fontSize:11,
+                     marginLeft:"auto", flexShrink:0, fontFamily:"inherit" }}
+            title={t("about_title")}>
+            {t("about_btn")}
           </button>
-        )}
 
-        <button onClick={() => setAbout(true)}
-          style={{ background:"transparent", border:"none", color:"#333",
-                   padding:"0 14px", cursor:"pointer", fontSize:11,
-                   marginLeft:"auto", flexShrink:0, fontFamily:"inherit" }}
-          title="Acerca de LogViewer">
-          Acerca de
-        </button>
+          {!IS_ELECTRON && (
+            <input ref={fileRef} type="file" accept=".log,.txt,.out" style={{ display:"none" }}
+              onChange={e => {
+                const f = e.target.files[0];
+                if (!f) return;
+                window.__pendingFile = f;
+                addTab(f.name, "__web__", f.size);
+              }} />
+          )}
+        </div>
 
-        {!IS_ELECTRON && (
-          <input ref={fileRef} type="file" accept=".log,.txt,.out" style={{ display:"none" }}
-            onChange={e => {
-              const f = e.target.files[0];
-              if (!f) return;
-              window.__pendingFile = f;
-              addTab(f.name, "__web__", f.size);
-            }} />
+        {activeTab.docker
+          ? <DockerTab key={`docker-${activeTab.id}`}
+                       containerId={activeTab.docker.containerId}
+                       containerName={activeTab.docker.name} />
+          : activeTab.filePath
+            ? <LogTab key={`${activeTab.id}-${activeTab.filePath}`}
+                      filePath={activeTab.filePath}
+                      fileName={activeTab.label}
+                      fileSize={activeTab.fileSize}
+                      autoScrollDefault={settings.autoScrollDefault}
+                      showNumsDefault={settings.showNumsDefault} />
+            : <Welcome onOpen={openFile} isElectron={IS_ELECTRON}
+                       recentFiles={settings.recentFiles}
+                       onOpenRecent={openFileByPath} />
+        }
+
+        {diagOpen     && IS_ELECTRON && <DiagPanel onClose={() => setDiagOpen(false)} />}
+
+        {settingsOpen && IS_ELECTRON && (
+          <SettingsModal
+            settings={settings}
+            onClose={() => setSettingsOpen(false)}
+            onOpenFile={openFileByPath}
+            onRemoveRecent={removeRecent}
+            onClearRecent={clearAllRecent}
+            onTogglePref={savePref}
+          />
         )}
+        {about        && <AboutModal onClose={() => setAbout(false)} />}
+        {dockerPicker && <DockerPicker onSelect={openDockerTab} onClose={() => setDockerPicker(false)} />}
       </div>
-
-      {activeTab.docker
-        ? <DockerTab key={`docker-${activeTab.id}`}
-                     containerId={activeTab.docker.containerId}
-                     containerName={activeTab.docker.name} />
-        : activeTab.filePath
-          ? <LogTab key={`${activeTab.id}-${activeTab.filePath}`}
-                    filePath={activeTab.filePath}
-                    fileName={activeTab.label}
-                    fileSize={activeTab.fileSize} />
-          : <Welcome onOpen={openFile} isElectron={IS_ELECTRON} />
-      }
-
-      {about        && <AboutModal onClose={() => setAbout(false)} />}
-      {dockerPicker && <DockerPicker onSelect={openDockerTab} onClose={() => setDockerPicker(false)} />}
-    </div>
+    </LangCtx.Provider>
   );
 }
 
-function Welcome({ onOpen, isElectron }) {
+function Welcome({ onOpen, isElectron, recentFiles, onOpenRecent }) {
+  const t = useLang();
   return (
     <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
-                  flexDirection:"column", gap:20, color:"#333" }}>
-      <div style={{ fontSize:48 }}>📋</div>
-      <p style={{ fontSize:18, color:"#555" }}>LogViewer</p>
+                  flexDirection:"column", gap:16, color:"#333" }}>
+      <div style={{ fontSize:44 }}>📋</div>
+      <p style={{ fontSize:18, color:"#555", margin:0 }}>PulpLog</p>
       <button onClick={onOpen}
         style={{ background:"#181818", border:"1px solid #333", borderRadius:8,
                  color:"#aaa", fontFamily:"inherit", fontSize:13,
                  padding:"10px 24px", cursor:"pointer" }}>
-        Abrir archivo…
+        {t("open_file_btn")}
       </button>
-      <div style={{ fontSize:11, color:"#252525" }}>
-        {isElectron ? "Ctrl+O  ·  Ctrl+T nueva pestaña  ·  clic en ◇ para marcar líneas" : ".log  .txt  .out"}
+
+      {recentFiles?.length > 0 && (
+        <div style={{ marginTop:8, width:440 }}>
+          <div style={{ fontSize:10, color:"#252525", fontWeight:700, letterSpacing:1,
+                         marginBottom:6, textAlign:"center" }}>{t("recent_h")}</div>
+          <div style={{ border:"0.5px solid #1a1a1a", borderRadius:6, overflow:"hidden" }}>
+            {recentFiles.map((fp, i) => {
+              const name = fp.split(/[\\/]/).pop();
+              return (
+                <div key={fp} onClick={() => onOpenRecent(fp)}
+                     style={{ padding:"7px 14px", fontSize:12, cursor:"pointer",
+                               borderBottom: i < recentFiles.length - 1
+                                 ? "0.5px solid #161616" : "none",
+                               background:"#0d0d0d",
+                               display:"flex", gap:8, alignItems:"center", overflow:"hidden" }}
+                     onMouseEnter={e => e.currentTarget.style.background = "#131313"}
+                     onMouseLeave={e => e.currentTarget.style.background = "#0d0d0d"}>
+                  <span style={{ color:"#2a2a2a" }}>📄</span>
+                  <span style={{ color:"#777", flexShrink:0 }}>{name}</span>
+                  <span style={{ color:"#1e1e1e", fontSize:10, overflow:"hidden",
+                                  textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{fp}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div style={{ fontSize:11, color:"#1e1e1e", marginTop:4 }}>
+        {isElectron ? t("hint_electron") : t("hint_web")}
       </div>
     </div>
   );

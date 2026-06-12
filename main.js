@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut } = require("electron");
 const path = require("path");
 const fs   = require("fs");
 const http           = require("http");
@@ -9,11 +9,52 @@ const IS_DEV = process.env.NODE_ENV === "development" || !app.isPackaged;
 /* ── watcher state per filePath ── */
 const watchers = new Map(); // filePath → { watcher, pollTimer, lastSize }
 
+/* ── Single-instance + file-arg from OS ── */
+let pendingFileArg = null;
+
+function getFileArgFromArgv(argv) {
+  // Skip exe/electron (argv[0]) and '.' used in dev mode
+  const candidates = argv.slice(1).filter(a => !a.startsWith("-") && a !== ".");
+  return candidates.find(a => {
+    try { return fs.statSync(a).isFile(); } catch { return false; }
+  }) || null;
+}
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  pendingFileArg = getFileArgFromArgv(process.argv);
+
+  app.on("second-instance", (_event, argv) => {
+    const wins = BrowserWindow.getAllWindows();
+    if (!wins.length) return;
+    const win = wins[0];
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    const fp = getFileArgFromArgv(argv);
+    if (fp) win.webContents.send("open-file-arg", fp);
+  });
+}
+
+/* ── App diagnostics logger ── */
+const MAX_APP_LOG = 500;
+const appLogEntries = [];
+
+function logEntry(level, category, msg) {
+  const entry = { ts: Date.now(), level, category, msg };
+  appLogEntries.push(entry);
+  if (appLogEntries.length > MAX_APP_LOG) appLogEntries.shift();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send("applog:new", entry);
+  }
+}
+
 /* ─── window ─── */
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280, height: 800, minWidth: 800, minHeight: 500,
     backgroundColor: "#0a0a0a",
+    icon: path.join(__dirname, "assets", "icon.png"),
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -45,7 +86,9 @@ function buildMenu(win) {
       { type:"separator" }, { role:"togglefullscreen", label:"Pantalla completa" },
     ]},
     { label:"Ayuda", submenu:[
-      { label:"GitHub", click: () => shell.openExternal("https://github.com/") },
+      { label:"GitHub", click: () => shell.openExternal("https://github.com/lindecode/PulpLog") },
+      { type:"separator" },
+      { label:"Acerca de PulpLog…", click: () => win.webContents.send("menu:about") },
     ]},
   ];
   if (process.platform === "darwin")
@@ -78,13 +121,18 @@ ipcMain.handle("file:read", async (event, filePath) => {
     const stream = fs.createReadStream(filePath, { encoding:"utf8", highWaterMark: 1024*1024 });
     stream.on("data",  chunk => event.sender.send("file:chunk", chunk));
     stream.on("end",   ()    => { event.sender.send("file:done"); resolve(); });
-    stream.on("error", err  => { event.sender.send("file:error", err.message); reject(err); });
+    stream.on("error", err  => {
+      logEntry("ERROR", "file", `Error leyendo ${path.basename(filePath)}: ${err.message}`);
+      event.sender.send("file:error", err.message);
+      reject(err);
+    });
   });
 });
 
 /* ─── IPC: tail -f with rotation detection ─── */
 ipcMain.handle("file:watch", async (event, filePath) => {
   stopWatch(filePath);
+  logEntry("INFO", "file", `Iniciando watch: ${path.basename(filePath)}`);
 
   let lastSize = 0;
   try { lastSize = fs.statSync(filePath).size; } catch {}
@@ -94,24 +142,23 @@ ipcMain.handle("file:watch", async (event, filePath) => {
     try {
       w = fs.watch(filePath, { persistent: false }, (eventType) => {
         if (eventType === "rename") {
-          // File renamed/deleted → log rotation
           w.close();
           watchers.delete(filePath);
+          logEntry("WARN", "file", `Archivo rotado: ${path.basename(filePath)}`);
           event.sender.send("file:rotated", filePath);
-          // Poll until the same path reappears (log manager creates a fresh file)
           waitForFile(filePath, () => {
             lastSize = 0;
+            logEntry("INFO", "file", `Archivo recreado: ${path.basename(filePath)}`);
             event.sender.send("file:recreated", filePath);
-            startWatcher(); // re-attach watcher on the new file
+            startWatcher();
           });
           return;
         }
-        // "change": new content appended
         try {
           const { size } = fs.statSync(filePath);
           if (size < lastSize) {
-            // Truncation (e.g. logrotate copytruncate)
             lastSize = 0;
+            logEntry("WARN", "file", `Archivo truncado: ${path.basename(filePath)}`);
             event.sender.send("file:truncated", filePath);
             return;
           }
@@ -149,12 +196,14 @@ function waitForFile(filePath, cb) {
       cb();
     } catch { /* not yet */ }
   }, 500);
-  // store timer so we can clear it if unwatch is called
   watchers.set(filePath, { watcher: null, pollTimer: timer, lastSize: 0 });
 }
 
 /* ─── IPC: stop watching ─── */
-ipcMain.handle("file:unwatch", async (_e, filePath) => stopWatch(filePath));
+ipcMain.handle("file:unwatch", async (_e, filePath) => {
+  logEntry("INFO", "file", `Watch detenido: ${path.basename(filePath)}`);
+  stopWatch(filePath);
+});
 
 /* ─── Docker ─── */
 const DOCKER_SOCKET = process.platform === "win32"
@@ -179,13 +228,23 @@ function dockerGet(apiPath) {
 }
 
 ipcMain.handle("docker:list", async () => {
-  try   { return await dockerGet("/containers/json?all=false"); }
-  catch (e) { return { error: e.message }; }
+  logEntry("INFO", "docker", "Listando contenedores…");
+  try {
+    const result = await dockerGet("/containers/json?all=false");
+    const count = Array.isArray(result) ? result.length : "?";
+    logEntry("INFO", "docker", `Contenedores activos: ${count}`);
+    return result;
+  } catch (e) {
+    logEntry("ERROR", "docker", `Error al listar contenedores: ${e.message}`);
+    return { error: e.message };
+  }
 });
 
-const dockerStreams = new Map(); // containerId → ChildProcess
+const dockerStreams = new Map(); // containerId → { proc, stopped }
 
 ipcMain.handle("docker:logs:start", (event, containerId) => {
+  const shortId = containerId.slice(0, 12);
+  logEntry("INFO", "docker", `Iniciando stream: ${shortId}`);
   stopDockerStream(containerId);
 
   const proc = spawn("docker", ["logs", "--follow", "--tail=500", containerId], {
@@ -193,6 +252,7 @@ ipcMain.handle("docker:logs:start", (event, containerId) => {
     shell: process.platform === "win32",
   });
 
+  const stream = { proc, stopped: false };
   let lineBuf  = "";
   let hadLines = false;
 
@@ -211,38 +271,164 @@ ipcMain.handle("docker:logs:start", (event, containerId) => {
   proc.stdout.on("data", flushLines);
   proc.stderr.on("data", flushLines);
 
-  proc.on("spawn", () => send("docker:spawned", containerId));
+  proc.on("spawn", () => {
+    logEntry("INFO", "docker", `Proceso iniciado: ${shortId}`);
+    send("docker:spawned", containerId);
+  });
 
   proc.on("close", (code) => {
     dockerStreams.delete(containerId);
-    if (code !== 0 && !hadLines)
+    // Killed intentionally (tab closed, stop button, React StrictMode cleanup) — not an error
+    if (stream.stopped) {
+      logEntry("INFO", "docker", `Stream ${shortId} detenido`);
+      return;
+    }
+    // code=null means killed by signal unexpectedly; actual errors have a non-zero exit code
+    const isError = code !== null && code !== 0;
+    if (isError && !hadLines) {
+      logEntry("ERROR", "docker", `Stream ${shortId} terminó con código ${code}`);
       send("docker:error", containerId, `docker logs terminó con código ${code}`);
-    else
+    } else {
+      logEntry("INFO", "docker", `Stream ${shortId} terminado (código ${code})`);
       send("docker:end", containerId);
+    }
   });
 
   proc.on("error", (e) => {
     dockerStreams.delete(containerId);
+    if (stream.stopped) return;
+    logEntry("ERROR", "docker", `Error proceso ${shortId}: ${e.message}`);
     send("docker:error", containerId, e.message);
   });
 
-  dockerStreams.set(containerId, proc);
+  dockerStreams.set(containerId, stream);
 });
 
-ipcMain.handle("docker:logs:stop", (_e, containerId) => stopDockerStream(containerId));
+ipcMain.handle("docker:logs:stop", (_e, containerId) => {
+  logEntry("INFO", "docker", `Stream detenido manualmente: ${containerId.slice(0, 12)}`);
+  stopDockerStream(containerId);
+});
 
 function stopDockerStream(containerId) {
-  const proc = dockerStreams.get(containerId);
-  if (!proc) return;
-  try { proc.kill(); } catch {}
+  const stream = dockerStreams.get(containerId);
+  if (!stream) return;
+  stream.stopped = true;
+  try { stream.proc.kill(); } catch {}
   dockerStreams.delete(containerId);
+}
+
+/* ─── Settings & recent files (userData JSON) ─── */
+function getSettingsPath() {
+  return path.join(app.getPath("userData"), "settings.json");
+}
+function loadSettings() {
+  try { return JSON.parse(fs.readFileSync(getSettingsPath(), "utf8")); }
+  catch { return {}; }
+}
+function saveSettings(data) {
+  try { fs.writeFileSync(getSettingsPath(), JSON.stringify(data, null, 2), "utf8"); }
+  catch {}
+}
+
+ipcMain.handle("settings:get", () => loadSettings());
+ipcMain.handle("settings:set", (_e, data) => {
+  saveSettings({ ...loadSettings(), ...data });
+});
+ipcMain.handle("recentfiles:add", (_e, fp) => {
+  const s = loadSettings();
+  const recent = (s.recentFiles || []).filter(f => f !== fp);
+  recent.unshift(fp);
+  s.recentFiles = recent.slice(0, 10);
+  saveSettings(s);
+  return s.recentFiles;
+});
+ipcMain.handle("recentfiles:remove", (_e, fp) => {
+  const s = loadSettings();
+  s.recentFiles = (s.recentFiles || []).filter(f => f !== fp);
+  saveSettings(s);
+  return s.recentFiles;
+});
+
+/* ─── IPC: app diagnostics log ─── */
+ipcMain.handle("applog:get",   () => [...appLogEntries]);
+ipcMain.handle("applog:clear", () => { appLogEntries.length = 0; });
+
+/* ─── IPC: initial file arg (pull model — renderer asks on mount) ─── */
+ipcMain.handle("file:getInitialArg", () => {
+  const fp = pendingFileArg;
+  pendingFileArg = null;
+  return fp;
+});
+
+/* ─── Global shortcuts ─── */
+function bringToFront(win) {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+function registerShortcuts(win) {
+  // macOS: Super = Cmd, conflicts with everything — skip.
+  // Windows: Super = Win key. Win+A/T/W are reserved by Win11 (Action Center, Taskbar, Widgets),
+  //          but Electron will try regardless; bitácora reports success or failure per shortcut.
+  // Linux:   Super is generally free for these combos across major DEs (GNOME, KDE, XFCE).
+  if (process.platform === "darwin") return;
+
+  const isWin = process.platform === "win32";
+
+  const WIN_CONFLICTS = {
+    "Super+A": "Abre el Centro de acción (Win11)",
+    "Super+T": "Cicla la barra de tareas (Win11)",
+    "Super+W": "Abre Widgets (Win11)",
+  };
+
+  const shortcuts = [
+    {
+      key:   "Super+A",
+      label: "Abrir archivo",
+      action: () => { bringToFront(win); win.webContents.send("menu:open-file"); },
+    },
+    {
+      key:   "Super+T",
+      label: "Nueva pestaña",
+      action: () => { bringToFront(win); win.webContents.send("menu:new-tab"); },
+    },
+    {
+      key:   "Super+W",
+      label: "Cerrar pestaña activa",
+      action: () => { bringToFront(win); win.webContents.send("global:close-tab"); },
+    },
+    {
+      key:   "Super+Shift+T",
+      label: "Reabrir última pestaña",
+      action: () => { bringToFront(win); win.webContents.send("global:reopen-tab"); },
+    },
+    {
+      key:   "Super+P",
+      label: "Traer al frente",
+      action: () => bringToFront(win),
+    },
+  ];
+
+  for (const { key, label, action } of shortcuts) {
+    const ok = globalShortcut.register(key, action);
+    if (ok) {
+      logEntry("INFO", "shortcuts", `${label} [${key}]: registrado`);
+    } else {
+      const hint = isWin && WIN_CONFLICTS[key] ? ` — ${WIN_CONFLICTS[key]}` : "";
+      logEntry("WARN", "shortcuts", `${label} [${key}]: no disponible${hint}`);
+    }
+  }
 }
 
 /* ─── lifecycle ─── */
 app.whenReady().then(() => {
-  createWindow();
+  const win = createWindow();
+  registerShortcuts(win);
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
+app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => {
   watchers.forEach((e) => { try { e.watcher && e.watcher.close(); } catch {} });
   dockerStreams.forEach((_e, id) => stopDockerStream(id));
