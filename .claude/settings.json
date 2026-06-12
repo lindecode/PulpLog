@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(if \\(Test-Path \"$env:LOCALAPPDATA\\\\electron-builder\\\\Cache\\\\winCodeSign\"\\) { Remove-Item \"$env:LOCALAPPDATA\\\\electron-builder\\\\Cache\\\\winCodeSign\" -Recurse -Force; Write-Host \"Cache eliminada\" } else { Write-Host \"No existe\" })"
+    ]
+  }
+}

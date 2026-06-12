@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   onMenuOpenFile: (cb) => { ipcRenderer.on("menu:open-file", cb); return () => ipcRenderer.removeListener("menu:open-file", cb); },
   onMenuNewTab:   (cb) => { ipcRenderer.on("menu:new-tab",   cb); return () => ipcRenderer.removeListener("menu:new-tab",   cb); },
+  onMenuAbout:    (cb) => { ipcRenderer.on("menu:about",     cb); return () => ipcRenderer.removeListener("menu:about",     cb); },
 
   listContainers: () => ipcRenderer.invoke("docker:list"),
 
@@ -62,4 +63,31 @@ contextBridge.exposeInMainWorld("electronAPI", {
     }
     return () => { cleanup(); ipcRenderer.invoke("docker:logs:stop", containerId); };
   },
+
+  /* ── App diagnostics log ── */
+  getAppLog:   () => ipcRenderer.invoke("applog:get"),
+  clearAppLog: () => ipcRenderer.invoke("applog:clear"),
+  onAppLogNew: (cb) => {
+    const h = (_e, entry) => cb(entry);
+    ipcRenderer.on("applog:new", h);
+    return () => ipcRenderer.removeListener("applog:new", h);
+  },
+
+  /* ── Settings & recent files ── */
+  getSettings:      () => ipcRenderer.invoke("settings:get"),
+  setSettings:      (d) => ipcRenderer.invoke("settings:set", d),
+  addRecentFile:    (fp) => ipcRenderer.invoke("recentfiles:add", fp),
+  removeRecentFile: (fp) => ipcRenderer.invoke("recentfiles:remove", fp),
+
+  /* ── Open from OS (file association / drag-drop on icon) ── */
+  getInitialFileArg: () => ipcRenderer.invoke("file:getInitialArg"),
+  onOpenFileArg: (cb) => {
+    const h = (_e, fp) => cb(fp);
+    ipcRenderer.on("open-file-arg", h);
+    return () => ipcRenderer.removeListener("open-file-arg", h);
+  },
+
+  /* ── Global OS shortcuts ── */
+  onGlobalCloseTab:  (cb) => { const h = () => cb(); ipcRenderer.on("global:close-tab",  h); return () => ipcRenderer.removeListener("global:close-tab",  h); },
+  onGlobalReopenTab: (cb) => { const h = () => cb(); ipcRenderer.on("global:reopen-tab", h); return () => ipcRenderer.removeListener("global:reopen-tab", h); },
 });
