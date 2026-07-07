@@ -4,38 +4,49 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openFileDialog: () => ipcRenderer.invoke("dialog:open"),
   statFile:  (p) => ipcRenderer.invoke("file:stat", p),
 
-  readFile(filePath, { onChunk, onDone, onError }) {
-    const ch = (_e, c) => onChunk?.(c);
-    const dn = ()      => { cleanup(); onDone?.(); };
-    const er = (_e, m) => { cleanup(); onError?.(m); };
+  readFile(filePath, { onChunk, onProgress, onDone, onError }) {
+    const readId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const ch = (_e, id, c) => { if (id === readId) onChunk?.(c); };
+    const pg = (_e, id, b) => { if (id === readId) onProgress?.(b); };
+    const dn = (_e, id)    => { if (id === readId) { cleanup(); onDone?.(); } };
+    const er = (_e, id, m) => { if (id === readId) { cleanup(); onError?.(m); } };
     ipcRenderer.on("file:chunk", ch);
+    ipcRenderer.on("file:progress", pg);
     ipcRenderer.on("file:done",  dn);
     ipcRenderer.on("file:error", er);
-    ipcRenderer.invoke("file:read", filePath);
+    ipcRenderer.invoke("file:read", { readId, filePath }).catch(m => {
+      cleanup();
+      onError?.(m?.message ?? String(m));
+    });
     function cleanup() {
       ipcRenderer.removeListener("file:chunk", ch);
+      ipcRenderer.removeListener("file:progress", pg);
       ipcRenderer.removeListener("file:done",  dn);
       ipcRenderer.removeListener("file:error", er);
     }
-    return cleanup;
+    return () => {
+      cleanup();
+      ipcRenderer.invoke("file:read:cancel", readId);
+    };
   },
 
   watchFile(filePath, { onNewLines, onRotated, onTruncated, onRecreated }) {
-    const nl  = (_e, t) => onNewLines?.( t);
-    const rot = ()      => onRotated?.();
-    const trc = ()      => onTruncated?.();
-    const rec = ()      => onRecreated?.();
+    const watchId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const nl  = (_e, id, _fp, t) => { if (id === watchId) onNewLines?.(t); };
+    const rot = (_e, id)         => { if (id === watchId) onRotated?.(); };
+    const trc = (_e, id)         => { if (id === watchId) onTruncated?.(); };
+    const rec = (_e, id)         => { if (id === watchId) onRecreated?.(); };
     ipcRenderer.on("file:newlines",  nl);
     ipcRenderer.on("file:rotated",   rot);
     ipcRenderer.on("file:truncated", trc);
     ipcRenderer.on("file:recreated", rec);
-    ipcRenderer.invoke("file:watch", filePath);
+    ipcRenderer.invoke("file:watch", { watchId, filePath });
     return () => {
       ipcRenderer.removeListener("file:newlines",  nl);
       ipcRenderer.removeListener("file:rotated",   rot);
       ipcRenderer.removeListener("file:truncated", trc);
       ipcRenderer.removeListener("file:recreated", rec);
-      ipcRenderer.invoke("file:unwatch", filePath);
+      ipcRenderer.invoke("file:unwatch", { watchId, filePath });
     };
   },
 

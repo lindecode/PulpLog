@@ -318,11 +318,11 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
 
     if (IS_ELECTRON) {
       const totalBytes = fileSize || 1;
-      let received = 0;
       const cancel = window.electronAPI.readFile(filePath, {
+        onProgress(bytesRead) {
+          setProgress(Math.min(bytesRead / totalBytes, 0.99));
+        },
         onChunk(chunk) {
-          received += chunk.length;
-          setProgress(Math.min(received / totalBytes, 0.99));
           bufRef.current += chunk;
         },
         onDone() {
