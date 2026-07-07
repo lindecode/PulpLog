@@ -6,8 +6,9 @@ const { spawn }      = require("child_process");
 
 const IS_DEV = process.env.NODE_ENV === "development" || !app.isPackaged;
 
-/* ── watcher state per filePath ── */
-const watchers = new Map(); // filePath → { watcher, pollTimer, lastSize }
+/* ── file IO state ── */
+const activeReads = new Map(); // readId → stream
+const watchers = new Map(); // watchId → { watcher, pollTimer, filePath, lastSize }
 
 /* ── Single-instance + file-arg from OS ── */
 let pendingFileArg = null;
@@ -116,22 +117,59 @@ ipcMain.handle("file:stat", async (_e, filePath) => {
 });
 
 /* ─── IPC: stream read in 1 MB chunks ─── */
-ipcMain.handle("file:read", async (event, filePath) => {
+ipcMain.handle("file:read", async (event, payload) => {
+  const filePath = typeof payload === "string" ? payload : payload?.filePath;
+  const readId = typeof payload === "string" ? filePath : payload?.readId;
+  if (!filePath || !readId) throw new Error("Invalid file read request");
+
   return new Promise((resolve, reject) => {
-    const stream = fs.createReadStream(filePath, { encoding:"utf8", highWaterMark: 1024*1024 });
-    stream.on("data",  chunk => event.sender.send("file:chunk", chunk));
-    stream.on("end",   ()    => { event.sender.send("file:done"); resolve(); });
+    let bytesRead = 0;
+    let settled = false;
+    const stream = fs.createReadStream(filePath, { highWaterMark: 1024*1024 });
+    activeReads.set(readId, stream);
+    stream.on("data",  chunk => {
+      bytesRead += chunk.length;
+      event.sender.send("file:chunk", readId, chunk.toString("utf8"));
+      event.sender.send("file:progress", readId, bytesRead);
+    });
+    stream.on("end",   ()    => {
+      settled = true;
+      activeReads.delete(readId);
+      event.sender.send("file:done", readId);
+      resolve();
+    });
     stream.on("error", err  => {
+      settled = true;
+      activeReads.delete(readId);
       logEntry("ERROR", "file", `Error leyendo ${path.basename(filePath)}: ${err.message}`);
-      event.sender.send("file:error", err.message);
+      event.sender.send("file:error", readId, err.message);
       reject(err);
+    });
+    stream.on("close", () => {
+      activeReads.delete(readId);
+      if (!settled) {
+        settled = true;
+        resolve();
+      }
     });
   });
 });
 
+ipcMain.handle("file:read:cancel", async (_event, readId) => {
+  const stream = activeReads.get(readId);
+  if (!stream) return false;
+  activeReads.delete(readId);
+  stream.destroy();
+  return true;
+});
+
 /* ─── IPC: tail -f with rotation detection ─── */
-ipcMain.handle("file:watch", async (event, filePath) => {
-  stopWatch(filePath);
+ipcMain.handle("file:watch", async (event, payload) => {
+  const filePath = typeof payload === "string" ? payload : payload?.filePath;
+  const watchId = typeof payload === "string" ? filePath : payload?.watchId;
+  if (!filePath || !watchId) throw new Error("Invalid file watch request");
+
+  stopWatch(watchId);
   logEntry("INFO", "file", `Iniciando watch: ${path.basename(filePath)}`);
 
   let lastSize = 0;
@@ -143,13 +181,13 @@ ipcMain.handle("file:watch", async (event, filePath) => {
       w = fs.watch(filePath, { persistent: false }, (eventType) => {
         if (eventType === "rename") {
           w.close();
-          watchers.delete(filePath);
+          watchers.delete(watchId);
           logEntry("WARN", "file", `Archivo rotado: ${path.basename(filePath)}`);
-          event.sender.send("file:rotated", filePath);
-          waitForFile(filePath, () => {
+          event.sender.send("file:rotated", watchId, filePath);
+          waitForFile(watchId, filePath, () => {
             lastSize = 0;
             logEntry("INFO", "file", `Archivo recreado: ${path.basename(filePath)}`);
-            event.sender.send("file:recreated", filePath);
+            event.sender.send("file:recreated", watchId, filePath);
             startWatcher();
           });
           return;
@@ -159,7 +197,7 @@ ipcMain.handle("file:watch", async (event, filePath) => {
           if (size < lastSize) {
             lastSize = 0;
             logEntry("WARN", "file", `Archivo truncado: ${path.basename(filePath)}`);
-            event.sender.send("file:truncated", filePath);
+            event.sender.send("file:truncated", watchId, filePath);
             return;
           }
           if (size === lastSize) return;
@@ -168,41 +206,44 @@ ipcMain.handle("file:watch", async (event, filePath) => {
           fs.readSync(fd, buf, 0, buf.length, lastSize);
           fs.closeSync(fd);
           lastSize = size;
-          event.sender.send("file:newlines", buf.toString("utf8"));
+          event.sender.send("file:newlines", watchId, filePath, buf.toString("utf8"));
         } catch { /* file briefly unavailable */ }
       });
     } catch { return; }
-    watchers.set(filePath, { watcher: w, pollTimer: null, lastSize });
+    watchers.set(watchId, { watcher: w, pollTimer: null, filePath, lastSize });
   }
 
   startWatcher();
   return true;
 });
 
-function stopWatch(filePath) {
-  const entry = watchers.get(filePath);
+function stopWatch(watchId) {
+  const entry = watchers.get(watchId);
   if (!entry) return;
   try { entry.watcher && entry.watcher.close(); } catch {}
   if (entry.pollTimer) clearInterval(entry.pollTimer);
-  watchers.delete(filePath);
+  watchers.delete(watchId);
 }
 
 /** Poll every 500 ms until filePath exists again, then call cb */
-function waitForFile(filePath, cb) {
+function waitForFile(watchId, filePath, cb) {
   const timer = setInterval(() => {
     try {
       fs.accessSync(filePath, fs.constants.R_OK);
       clearInterval(timer);
+      watchers.delete(watchId);
       cb();
     } catch { /* not yet */ }
   }, 500);
-  watchers.set(filePath, { watcher: null, pollTimer: timer, lastSize: 0 });
+  watchers.set(watchId, { watcher: null, pollTimer: timer, filePath, lastSize: 0 });
 }
 
 /* ─── IPC: stop watching ─── */
-ipcMain.handle("file:unwatch", async (_e, filePath) => {
-  logEntry("INFO", "file", `Watch detenido: ${path.basename(filePath)}`);
-  stopWatch(filePath);
+ipcMain.handle("file:unwatch", async (_e, payload) => {
+  const filePath = typeof payload === "string" ? payload : payload?.filePath;
+  const watchId = typeof payload === "string" ? payload : payload?.watchId;
+  if (filePath) logEntry("INFO", "file", `Watch detenido: ${path.basename(filePath)}`);
+  stopWatch(watchId);
 });
 
 /* ─── Docker ─── */
@@ -321,12 +362,32 @@ function stopDockerStream(containerId) {
 function getSettingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
 }
+function normalizeSettings(value) {
+  const s = value && typeof value === "object" ? value : {};
+  const language = ["es", "en"].includes(s.language) ? s.language : "es";
+  return {
+    ...s,
+    recentFiles: Array.isArray(s.recentFiles) ? s.recentFiles.filter(f => typeof f === "string") : [],
+    sessionTabs: Array.isArray(s.sessionTabs)
+      ? s.sessionTabs
+          .filter(t => t && typeof t.filePath === "string")
+          .map(t => ({
+            filePath: t.filePath,
+            label: typeof t.label === "string" ? t.label : path.basename(t.filePath),
+            fileSize: Number.isFinite(t.fileSize) ? t.fileSize : null,
+          }))
+      : [],
+    autoScrollDefault: Boolean(s.autoScrollDefault),
+    showNumsDefault: s.showNumsDefault !== false,
+    language,
+  };
+}
 function loadSettings() {
-  try { return JSON.parse(fs.readFileSync(getSettingsPath(), "utf8")); }
-  catch { return {}; }
+  try { return normalizeSettings(JSON.parse(fs.readFileSync(getSettingsPath(), "utf8"))); }
+  catch { return normalizeSettings({}); }
 }
 function saveSettings(data) {
-  try { fs.writeFileSync(getSettingsPath(), JSON.stringify(data, null, 2), "utf8"); }
+  try { fs.writeFileSync(getSettingsPath(), JSON.stringify(normalizeSettings(data), null, 2), "utf8"); }
   catch {}
 }
 
@@ -430,7 +491,13 @@ app.whenReady().then(() => {
 });
 app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => {
-  watchers.forEach((e) => { try { e.watcher && e.watcher.close(); } catch {} });
+  activeReads.forEach((stream) => { try { stream.destroy(); } catch {} });
+  activeReads.clear();
+  watchers.forEach((e) => {
+    try { e.watcher && e.watcher.close(); } catch {}
+    if (e.pollTimer) clearInterval(e.pollTimer);
+  });
+  watchers.clear();
   dockerStreams.forEach((_e, id) => stopDockerStream(id));
   if (process.platform !== "darwin") app.quit();
 });
