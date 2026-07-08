@@ -53,6 +53,20 @@ const T = {
     docker_starting: "Iniciando proceso…",
     docker_no_logs:  "El contenedor no ha emitido logs aún",
     bm_clear_docker: "Limpiar marcadores",
+    remote_title:    "Bitacora remota",
+    remote_mode_ssh: "SSH",
+    remote_mode_wsl: "WSL2",
+    remote_host:     "Host o alias SSH",
+    remote_port:     "Puerto",
+    remote_distro:   "Distro WSL",
+    remote_path:     "Ruta del log",
+    remote_tail:     "Lineas iniciales",
+    remote_open:     "Conectar",
+    remote_hint:     "Usa ssh/wsl del sistema; PulpLog no guarda llaves ni contrasenas.",
+    remote_waiting:  "Esperando logs remotos…",
+    remote_btn_title:"Conectar a bitacora remota por SSH o WSL",
+    capability_checking:"Validando herramientas del sistema…",
+    capability_unavailable:"No disponible",
     developed_by:    "Desarrollado por",
     license:         "Licencia MIT © 2026",
     close:           "Cerrar",
@@ -118,6 +132,20 @@ const T = {
     docker_starting: "Starting process…",
     docker_no_logs:  "Container hasn't emitted any logs yet",
     bm_clear_docker: "Clear bookmarks",
+    remote_title:    "Remote log",
+    remote_mode_ssh: "SSH",
+    remote_mode_wsl: "WSL2",
+    remote_host:     "SSH host or alias",
+    remote_port:     "Port",
+    remote_distro:   "WSL distro",
+    remote_path:     "Log path",
+    remote_tail:     "Initial lines",
+    remote_open:     "Connect",
+    remote_hint:     "Uses system ssh/wsl; PulpLog does not store keys or passwords.",
+    remote_waiting:  "Waiting for remote logs…",
+    remote_btn_title:"Connect to remote log over SSH or WSL",
+    capability_checking:"Checking system tools…",
+    capability_unavailable:"Unavailable",
     developed_by:    "Developed by",
     license:         "MIT License © 2026",
     close:           "Close",
@@ -654,7 +682,7 @@ function DiagPanel({ onClose }) {
     WARN:  { color:"#f0c060", bg:"#1c1408", label:"WARN " },
     INFO:  { color:"#60b8e8", bg:"transparent", label:"INFO " },
   };
-  const CAT_COLOR = { docker:"#2a9a4a", file:"#2a7faa" };
+  const CAT_COLOR = { docker:"#2a9a4a", file:"#2a7faa", remote:"#7a7aaa" };
   const fmt = ts => new Date(ts).toLocaleTimeString(undefined, { hour12:false });
 
   return (
@@ -1181,6 +1209,348 @@ function DockerTab({ containerId, containerName }) {
   );
 }
 
+function RemotePicker({ onSelect, onClose, capabilities }) {
+  const t = useLang();
+  const [mode, setMode] = useState("ssh");
+  const [target, setTarget] = useState("");
+  const [port, setPort] = useState("");
+  const [distro, setDistro] = useState("");
+  const [filePath, setFilePath] = useState("");
+  const [tailLines, setTailLines] = useState(500);
+  const sshCap = capabilities?.ssh;
+  const wslCap = capabilities?.wsl;
+  const wslDistros = wslCap?.distros || [];
+  const wslDistrosKey = wslDistros.join("|");
+  const modeAvailable = mode === "wsl" ? wslCap?.available : sshCap?.available;
+  const canSubmit = modeAvailable && filePath.trim() && (mode === "wsl" || target.trim());
+
+  useEffect(() => {
+    if (!capabilities) return;
+    if (mode === "ssh" && !sshCap?.available && wslCap?.available) setMode("wsl");
+    if (mode === "wsl" && !wslCap?.available && sshCap?.available) setMode("ssh");
+  }, [capabilities, mode, sshCap?.available, wslCap?.available]);
+
+  useEffect(() => {
+    if (mode !== "wsl" || distro || wslDistros.length === 0) return;
+    setDistro(wslDistros[0]);
+  }, [mode, distro, wslDistrosKey]);
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    onSelect({ mode, target, port, distro, filePath, tailLines });
+  };
+
+  const inputStyle = {
+    background:"#181818", border:"0.5px solid #2e2e2e", borderRadius:6,
+    color:"#bbb", fontFamily:"inherit", fontSize:12, padding:"7px 9px",
+    outline:"none", width:"100%",
+  };
+
+  return (
+    <div onClick={onClose}
+      style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
+               display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
+      <form onSubmit={submit} onClick={e => e.stopPropagation()}
+        style={{ background:"#111", border:"0.5px solid #2a2a2a", borderRadius:10,
+                 padding:"24px", minWidth:460, maxWidth:620, fontFamily:"inherit",
+                 boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
+        <div style={{ display:"flex", alignItems:"center", marginBottom:16 }}>
+          <span style={{ fontSize:14, color:"#ccc", fontWeight:700 }}>{t("remote_title")}</span>
+          <button type="button" onClick={onClose}
+            style={{ marginLeft:"auto", background:"none", border:"none",
+                     color:"#444", cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>x</button>
+        </div>
+
+        <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+          {[["ssh", t("remote_mode_ssh"), sshCap], ["wsl", t("remote_mode_wsl"), wslCap]].map(([key, label, cap]) => (
+            <button key={key} type="button" onClick={() => cap?.available && setMode(key)}
+              disabled={!cap?.available}
+              title={cap?.available ? label : (cap?.reason || t("capability_unavailable"))}
+              style={{ background: mode === key ? "#1a2a3a" : "#181818",
+                       border:`0.5px solid ${mode === key ? "#2a6a9a" : "#2e2e2e"}`,
+                       borderRadius:6, color: mode === key ? "#60b8e8" : cap?.available ? "#555" : "#333",
+                       fontFamily:"inherit", fontSize:12, padding:"5px 18px",
+                       cursor: cap?.available ? "pointer" : "not-allowed",
+                       opacity: cap?.available ? 1 : 0.45,
+                       fontWeight: mode === key ? 700 : 400 }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 110px", gap:10, marginBottom:10 }}>
+          {mode === "ssh" ? (
+            <>
+              <input style={inputStyle} value={target} onChange={e => setTarget(e.target.value)}
+                placeholder={`${t("remote_host")} (prod-web, user@host)`} />
+              <input style={inputStyle} value={port} onChange={e => setPort(e.target.value)}
+                placeholder={t("remote_port")} />
+            </>
+          ) : (
+            <>
+              {wslDistros.length > 0 ? (
+                <select style={inputStyle} value={distro} onChange={e => setDistro(e.target.value)}>
+                  <option value="">Default</option>
+                  {wslDistros.map(name => <option key={name} value={name}>{name}</option>)}
+                </select>
+              ) : (
+                <input style={inputStyle} value={distro} onChange={e => setDistro(e.target.value)}
+                  placeholder={`${t("remote_distro")} (Ubuntu)`} />
+              )}
+              <input style={inputStyle} value={tailLines} onChange={e => setTailLines(e.target.value)}
+                placeholder={t("remote_tail")} />
+            </>
+          )}
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 110px", gap:10, marginBottom:12 }}>
+          <input style={inputStyle} value={filePath} onChange={e => setFilePath(e.target.value)}
+            placeholder={`${t("remote_path")} (/var/log/app.log)`} />
+          {mode === "ssh" ? (
+            <input style={inputStyle} value={tailLines} onChange={e => setTailLines(e.target.value)}
+              placeholder={t("remote_tail")} />
+          ) : (
+            <span />
+          )}
+        </div>
+
+        <div style={{ color:"#555", fontSize:10, lineHeight:1.5, marginBottom:18 }}>
+          {t("remote_hint")}
+          {!modeAvailable && (
+            <div style={{ color:"#885555", marginTop:6 }}>
+              {mode === "wsl" ? (wslCap?.reason || t("capability_unavailable")) : (sshCap?.reason || t("capability_unavailable"))}
+            </div>
+          )}
+        </div>
+
+        <button type="submit" disabled={!canSubmit}
+          style={{ background: canSubmit ? "#1a2a3a" : "#181818",
+                   border:`0.5px solid ${canSubmit ? "#2a6a9a" : "#2e2e2e"}`,
+                   borderRadius:6, color: canSubmit ? "#60b8e8" : "#444",
+                   fontFamily:"inherit", fontSize:12, padding:"7px 20px",
+                   cursor: canSubmit ? "pointer" : "not-allowed", marginRight:10 }}>
+          {t("remote_open")}
+        </button>
+        <button type="button" onClick={onClose}
+          style={{ background:"#181818", border:"0.5px solid #2e2e2e",
+                   borderRadius:6, color:"#666", fontFamily:"inherit",
+                   fontSize:11, padding:"7px 20px", cursor:"pointer" }}>
+          {t("cancel")}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function RemoteTab({ config }) {
+  const t = useLang();
+  const [rawLines,   setRawLines]  = useState([]);
+  const [spawned,    setSpawned]   = useState(false);
+  const [connected,  setConnected] = useState(false);
+  const [error,      setError]     = useState(null);
+  const [filter,     setFilter]    = useState("");
+  const [useRegex,   setUseRegex]  = useState(false);
+  const [regexError, setRegexError]= useState(false);
+  const [bookmarks,  setBookmarks] = useState(new Set());
+  const [bmCursor,   setBmCursor]  = useState(-1);
+  const [showNums,   setShowNums]  = useState(true);
+  const [autoScroll, setAutoScroll]= useState(true);
+  const [lvl, setLvl] = useState({
+    error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true,
+  });
+
+  const listRef       = useRef(null);
+  const autoScrollRef = useRef(true);
+  useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
+
+  useEffect(() => {
+    const unwatch = window.electronAPI.streamRemoteLogs(config, {
+      onSpawned() { setSpawned(true); setConnected(true); },
+      onLines(text) {
+        const incoming = text.split("\n").filter(Boolean);
+        setRawLines(prev => [...prev, ...incoming]);
+        setConnected(true);
+        if (autoScrollRef.current) listRef.current?.scrollToBottom();
+      },
+      onEnd()      { setConnected(false); },
+      onError(msg) { setError(msg); setConnected(false); },
+    });
+    return unwatch;
+  }, [config]);
+
+  const classified = useMemo(() =>
+    rawLines.map((raw, i) => ({ raw, origLine: i + 1, type: classify(raw) })),
+    [rawLines]
+  );
+
+  const stats = useMemo(() => ({
+    error: classified.filter(x => x.type==="error"||x.type==="exception").length,
+    warn:  classified.filter(x => x.type==="warn").length,
+    info:  classified.filter(x => x.type==="info").length,
+    debug: classified.filter(x => x.type==="debug").length,
+  }), [classified]);
+
+  const { filtered, regexValid } = useMemo(() => {
+    const hide = new Set();
+    if (!lvl.error) { hide.add("error"); hide.add("exception"); }
+    if (!lvl.stack) { hide.add("stack"); hide.add("causedby"); }
+    ["warn","info","debug","trace","plain"].forEach(k => { if (!lvl[k]) hide.add(k); });
+
+    if (!filter) return { filtered: classified.filter(x => !hide.has(x.type)), regexValid: true };
+    if (useRegex) {
+      let re;
+      try { re = new RegExp(filter, "i"); }
+      catch { return { filtered: [], regexValid: false }; }
+      return { filtered: classified.filter(x => !hide.has(x.type) && re.test(x.raw)), regexValid: true };
+    }
+    const lf = filter.toLowerCase();
+    return { filtered: classified.filter(x => !hide.has(x.type) && x.raw.toLowerCase().includes(lf)), regexValid: true };
+  }, [classified, filter, useRegex, lvl]);
+
+  useEffect(() => setRegexError(!regexValid), [regexValid]);
+
+  const toggleBookmark = useCallback((origLine) => {
+    setBookmarks(prev => {
+      const next = new Set(prev);
+      next.has(origLine) ? next.delete(origLine) : next.add(origLine);
+      return next;
+    });
+  }, []);
+
+  const sortedBookmarks = useMemo(() => [...bookmarks].sort((a, b) => a - b), [bookmarks]);
+
+  const jumpBookmark = useCallback((direction) => {
+    if (!sortedBookmarks.length) return;
+    const next = direction === "next"
+      ? (bmCursor >= sortedBookmarks.length - 1 ? 0 : bmCursor + 1)
+      : (bmCursor <= 0 ? sortedBookmarks.length - 1 : bmCursor - 1);
+    setBmCursor(next);
+    const idx = filtered.findIndex(x => x.origLine >= sortedBookmarks[next]);
+    if (idx >= 0) listRef.current?.scrollToIndex(idx);
+  }, [sortedBookmarks, bmCursor, filtered]);
+
+  const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
+  const modeLabel = config.mode === "wsl" ? t("remote_mode_wsl") : t("remote_mode_ssh");
+  const targetLabel = config.mode === "wsl"
+    ? (config.distro ? `${config.distro}:${config.filePath}` : config.filePath)
+    : `${config.target}:${config.filePath}`;
+
+  const BADGES = [
+    { key:"error", label:"ERROR", bg:"#a02020", fg:"#ffcccc", cnt:stats.error },
+    { key:"warn",  label:"WARN",  bg:"#906010", fg:"#ffe090", cnt:stats.warn  },
+    { key:"info",  label:"INFO",  bg:"#1a5f88", fg:"#90d0f0", cnt:stats.info  },
+    { key:"debug", label:"DEBUG", bg:"#244024", fg:"#90c890", cnt:stats.debug },
+    { key:"stack", label:"STACK", bg:"#3a256a", fg:"#c0a8f0", cnt:null        },
+    { key:"plain", label:"PLAIN", bg:"#2a2a2a", fg:"#aaa",    cnt:null        },
+  ];
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px",
+                    background:"#111", borderBottom:"0.5px solid #222",
+                    flexWrap:"wrap", flexShrink:0 }}>
+        <span style={{ fontSize:11, color:"#a8a8f0", background:"#101024",
+                       border:"0.5px solid #2a2a5a", borderRadius:6, padding:"3px 8px",
+                       fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
+          {modeLabel} {targetLabel}
+        </span>
+        <Sep />
+        <div style={{ display:"flex", flex:1, minWidth:140 }}>
+          <input
+            style={{ flex:1, background:"#181818",
+                     border:`0.5px solid ${regexError ? "#883030" : "#2e2e2e"}`,
+                     borderRadius:"6px 0 0 6px", color: regexError ? "#ff6060" : "#bbb",
+                     fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
+            placeholder={useRegex ? t("regex_ph") : t("filter_ph")}
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+          />
+          <button onClick={() => setUseRegex(p => !p)}
+            title={t("regex_btn_title")}
+            style={{ background: useRegex ? "#1a2a3a" : "#181818",
+                     border:`0.5px solid ${useRegex ? "#2a6a9a" : "#2e2e2e"}`,
+                     borderLeft:"none", borderRadius:"0 6px 6px 0",
+                     color: useRegex ? "#60b8e8" : "#555",
+                     fontFamily:"monospace", fontSize:11, padding:"4px 10px",
+                     cursor:"pointer", fontWeight: useRegex ? 700 : 400 }}>
+            .*
+          </button>
+        </div>
+        <Sep />
+        {BADGES.map(({ key, label, bg, fg, cnt }) => (
+          <span key={key} onClick={() => toggle(key)}
+            style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11,
+                     padding:"3px 7px", borderRadius:6, fontWeight:600,
+                     cursor:"pointer", userSelect:"none",
+                     background: lvl[key] ? bg : "#181818",
+                     color:      lvl[key] ? fg : "#444",
+                     border:     `1.5px solid ${lvl[key] ? bg : "#222"}`,
+                     opacity:    lvl[key] ? 1 : 0.45 }}>
+            {label}
+            {cnt > 0 && <span style={{ background:"rgba(255,255,255,.18)", borderRadius:4, padding:"0 4px", fontSize:10 }}>{fmtNum(cnt)}</span>}
+          </span>
+        ))}
+        <Sep />
+        <Btn onClick={() => jumpBookmark("prev")} disabled={!sortedBookmarks.length} title={t("bm_prev_title")}>◆ ↑</Btn>
+        <Btn onClick={() => jumpBookmark("next")} disabled={!sortedBookmarks.length} title={t("bm_next_title")}>◆ ↓</Btn>
+        {bookmarks.size > 0 && <span style={{ fontSize:10, color:"#c0a030", padding:"0 2px" }}>{t("bm_count", bookmarks.size)}</span>}
+        {bookmarks.size > 0 && <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }} title={t("bm_clear_title")}>{t("bm_clear_btn")}</Btn>}
+        <Sep />
+        <Btn active={autoScroll} onClick={() => setAutoScroll(p => !p)} title={t("autoscroll_title")}>↓ auto</Btn>
+        <Btn active={showNums}   onClick={() => setShowNums(p => !p)}   title={t("linenums_title")}>#</Btn>
+        <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
+        <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
+      </div>
+
+      {error && (
+        <div style={{ padding:"6px 14px", background:"#2a1010", borderBottom:"1px solid #883030",
+                      color:"#ff8888", fontSize:12, flexShrink:0, fontFamily:"inherit" }}>
+          ⚠ {error}
+        </div>
+      )}
+
+      {rawLines.length === 0 && !error ? (
+        <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
+                      flexDirection:"column", gap:10, color:"#333", fontSize:13 }}>
+          <span style={{ fontSize:28, color:"#7a7aaa", animation:"spin 1s linear infinite" }}>↻</span>
+          {spawned ? t("remote_waiting") : t("docker_starting")}
+          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
+                      color:"#333", fontSize:13 }}>
+          {regexError
+            ? <><span style={{ color:"#ff6060" }}>⚠</span> {t("regex_invalid")}</>
+            : filter ? t("no_results", filter) : t("no_lines")}
+        </div>
+      ) : (
+        <VirtualList
+          items={filtered}
+          showNums={showNums}
+          bookmarks={bookmarks}
+          onToggleBookmark={toggleBookmark}
+          listRef={listRef}
+        />
+      )}
+
+      <div style={{ display:"flex", gap:14, padding:"4px 10px", background:"#0d0d0d",
+                    borderTop:"0.5px solid #1a1a1a", fontSize:10, flexShrink:0, alignItems:"center" }}>
+        {[["#883030",stats.error,"err"],["#806010",stats.warn,"warn"],
+          ["#1a5070",stats.info,"info"],["#284028",stats.debug,"dbg"]].map(([c,n,l])=>(
+          <span key={l} style={{ color:c }}>{fmtNum(n)} <span style={{color:"#252525"}}>{l}</span></span>
+        ))}
+        {connected  && <span style={{ color:"#2a9a4a" }}>{t("live")}</span>}
+        {!connected && rawLines.length > 0 && <span style={{ color:"#555" }}>{t("stopped")}</span>}
+        {bookmarks.size > 0 && <span style={{ color:"#c0a030" }}>◆ {bookmarks.size}</span>}
+        <span style={{ marginLeft:"auto", color:"#444" }}>
+          {t("lines", filtered.length, rawLines.length)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════
    App shell (tabs)
 ═══════════════════════════════════════════ */
@@ -1191,8 +1561,10 @@ export default function App() {
   const [active,       setActive]      = useState(1);
   const [about,        setAbout]       = useState(false);
   const [dockerPicker, setDockerPicker]= useState(false);
+  const [remotePicker, setRemotePicker]= useState(false);
   const [diagOpen,     setDiagOpen]    = useState(false);
   const [settingsOpen, setSettingsOpen]= useState(false);
+  const [capabilities, setCapabilities]= useState(null);
   const [settings,     setSettings]    = useState({
     recentFiles:[], autoScrollDefault:false, showNumsDefault:true, language:"es", sessionTabs:[]
   });
@@ -1200,6 +1572,15 @@ export default function App() {
   const closedTabsRef = useRef([]);   // stack for reopen-last-tab
   const activeRef     = useRef(active);
   useEffect(() => { activeRef.current = active; }, [active]);
+
+  useEffect(() => {
+    if (!IS_ELECTRON) return;
+    let alive = true;
+    window.electronAPI.getCapabilities()
+      .then(caps => { if (alive) setCapabilities(caps); })
+      .catch(() => { if (alive) setCapabilities({}); });
+    return () => { alive = false; };
+  }, []);
 
   /* ── Translation function ── */
   const t = useCallback((key, ...args) => {
@@ -1252,6 +1633,22 @@ export default function App() {
     setTabs(p => [...p, { id, label: `🐳 ${name}`, filePath: null, fileSize: null, docker: { containerId, name } }]);
     setActive(id);
     setDockerPicker(false);
+  };
+
+  const openRemoteTab = (config) => {
+    const id = nextId++;
+    const name = config.mode === "wsl"
+      ? (config.distro ? `WSL ${config.distro}` : "WSL")
+      : config.target;
+    setTabs(p => [...p, {
+      id,
+      label: `SSH ${name}`,
+      filePath: null,
+      fileSize: null,
+      remote: config,
+    }]);
+    setActive(id);
+    setRemotePicker(false);
   };
 
   const closeTab = (id) => {
@@ -1364,6 +1761,11 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeTab = tabs.find(tab => tab.id === active) || tabs[0];
+  const dockerCap = capabilities?.docker;
+  const sshCap = capabilities?.ssh;
+  const wslCap = capabilities?.wsl;
+  const dockerEnabled = !!dockerCap?.available;
+  const remoteEnabled = !!(sshCap?.available || wslCap?.available);
 
   return (
     <LangCtx.Provider value={t}>
@@ -1379,6 +1781,7 @@ export default function App() {
               onClick={() => setActive(tab.id)}
               title={
                 tab.docker   ? `🐳 ${tab.docker.name}\nID: ${tab.docker.containerId.slice(0, 12)}` :
+                tab.remote   ? `${tab.remote.mode === "wsl" ? "WSL" : "SSH"}\n${tab.remote.filePath}` :
                 tab.filePath ? tab.filePath :
                                t("hint_electron")
               }
@@ -1406,12 +1809,25 @@ export default function App() {
             title={t("open_file_title")}>+</button>
 
           {IS_ELECTRON && (
-            <button onClick={() => setDockerPicker(true)}
-              style={{ background:"transparent", border:"none", color:"#2a6a2a",
-                       padding:"0 14px", cursor:"pointer", fontSize:14,
+            <button onClick={() => dockerEnabled && setDockerPicker(true)}
+              disabled={!dockerEnabled}
+              style={{ background:"transparent", border:"none", color: dockerEnabled ? "#2a6a2a" : "#333",
+                       padding:"0 14px", cursor: dockerEnabled ? "pointer" : "not-allowed", fontSize:14,
                        borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
-              title={t("docker_btn_title")}>
+              title={dockerEnabled ? t("docker_btn_title") : (dockerCap?.reason || t("capability_checking"))}>
               🐳
+            </button>
+          )}
+
+          {IS_ELECTRON && (
+            <button onClick={() => remoteEnabled && setRemotePicker(true)}
+              disabled={!remoteEnabled}
+              style={{ background:"transparent", border:"none", color: remoteEnabled ? "#6a6aaa" : "#333",
+                       padding:"0 14px", cursor: remoteEnabled ? "pointer" : "not-allowed", fontSize:12,
+                       borderRight:"0.5px solid #1e1e1e", flexShrink:0,
+                       fontFamily:"inherit", fontWeight:700 }}
+              title={remoteEnabled ? t("remote_btn_title") : (sshCap?.reason || wslCap?.reason || t("capability_checking"))}>
+              SSH
             </button>
           )}
 
@@ -1460,7 +1876,9 @@ export default function App() {
           ? <DockerTab key={`docker-${activeTab.id}`}
                        containerId={activeTab.docker.containerId}
                        containerName={activeTab.docker.name} />
-          : activeTab.filePath
+          : activeTab.remote
+            ? <RemoteTab key={`remote-${activeTab.id}`} config={activeTab.remote} />
+            : activeTab.filePath
             ? <LogTab key={`${activeTab.id}-${activeTab.filePath}`}
                       filePath={activeTab.filePath}
                       fileName={activeTab.label}
@@ -1486,6 +1904,7 @@ export default function App() {
         )}
         {about        && <AboutModal onClose={() => setAbout(false)} />}
         {dockerPicker && <DockerPicker onSelect={openDockerTab} onClose={() => setDockerPicker(false)} />}
+        {remotePicker && <RemotePicker onSelect={openRemoteTab} onClose={() => setRemotePicker(false)} capabilities={capabilities} />}
       </div>
     </LangCtx.Provider>
   );
