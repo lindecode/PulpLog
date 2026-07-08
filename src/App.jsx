@@ -58,9 +58,17 @@ const T = {
     docker_no_logs:  "El contenedor no ha emitido logs aún",
     bm_clear_docker: "Limpiar marcadores",
     remote_title:    "Bitacora remota",
-    remote_mode_ssh: "SSH",
+    remote_mode_ssh: "SSH sistema",
+    remote_mode_native:"SSH credenciales",
     remote_mode_wsl: "WSL2",
     remote_host:     "Host o alias SSH",
+    remote_user:     "Usuario",
+    remote_key:      "Llave privada",
+    remote_key_pick: "Elegir",
+    remote_password: "Contraseña",
+    remote_passphrase:"Passphrase",
+    remote_fingerprint:"Fingerprint esperado",
+    remote_trust_host:"Confiar en host solo esta sesión",
     remote_port:     "Puerto",
     remote_distro:   "Distro WSL",
     remote_path:     "Ruta del log",
@@ -141,9 +149,17 @@ const T = {
     docker_no_logs:  "Container hasn't emitted any logs yet",
     bm_clear_docker: "Clear bookmarks",
     remote_title:    "Remote log",
-    remote_mode_ssh: "SSH",
+    remote_mode_ssh: "System SSH",
+    remote_mode_native:"SSH credentials",
     remote_mode_wsl: "WSL2",
     remote_host:     "SSH host or alias",
+    remote_user:     "User",
+    remote_key:      "Private key",
+    remote_key_pick: "Choose",
+    remote_password: "Password",
+    remote_passphrase:"Passphrase",
+    remote_fingerprint:"Expected fingerprint",
+    remote_trust_host:"Trust host for this session only",
     remote_port:     "Port",
     remote_distro:   "WSL distro",
     remote_path:     "Log path",
@@ -1278,7 +1294,13 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
   const t = useLang();
   const [mode, setMode] = useState("ssh");
   const [target, setTarget] = useState("");
+  const [user, setUser] = useState("");
   const [port, setPort] = useState("");
+  const [identityFile, setIdentityFile] = useState("");
+  const [password, setPassword] = useState("");
+  const [passphrase, setPassphrase] = useState("");
+  const [fingerprint, setFingerprint] = useState("");
+  const [trustHostForSession, setTrustHostForSession] = useState(false);
   const [distro, setDistro] = useState("");
   const [filePath, setFilePath] = useState("");
   const [tailLines, setTailLines] = useState(500);
@@ -1286,12 +1308,13 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
   const wslCap = capabilities?.wsl;
   const wslDistros = wslCap?.distros || [];
   const wslDistrosKey = wslDistros.join("|");
-  const modeAvailable = mode === "wsl" ? wslCap?.available : sshCap?.available;
-  const canSubmit = modeAvailable && filePath.trim() && (mode === "wsl" || target.trim());
+  const modeAvailable = mode === "wsl" ? wslCap?.available : mode === "ssh-native" ? true : sshCap?.available;
+  const hasNativeAuth = mode !== "ssh-native" || (user.trim() && (password || identityFile.trim()));
+  const canSubmit = modeAvailable && filePath.trim() && (mode === "wsl" || target.trim()) && hasNativeAuth;
 
   useEffect(() => {
     if (!capabilities) return;
-    if (mode === "ssh" && !sshCap?.available && wslCap?.available) setMode("wsl");
+    if (mode === "ssh" && !sshCap?.available) setMode("ssh-native");
     if (mode === "wsl" && !wslCap?.available && sshCap?.available) setMode("ssh");
   }, [capabilities, mode, sshCap?.available, wslCap?.available]);
 
@@ -1303,7 +1326,13 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
   const submit = (e) => {
     e.preventDefault();
     if (!canSubmit) return;
-    onSelect({ mode, target, port, distro, filePath, tailLines });
+    onSelect({ mode, target, user, port, identityFile, password, passphrase, fingerprint, trustHostForSession, distro, filePath, tailLines });
+  };
+
+  const pickIdentityFile = async () => {
+    if (!IS_ELECTRON) return;
+    const fp = await window.electronAPI.openSshKeyDialog();
+    if (fp) setIdentityFile(fp);
   };
 
   const inputStyle = {
@@ -1328,7 +1357,11 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
         </div>
 
         <div style={{ display:"flex", gap:8, marginBottom:14 }}>
-          {[["ssh", t("remote_mode_ssh"), sshCap], ["wsl", t("remote_mode_wsl"), wslCap]].map(([key, label, cap]) => (
+          {[
+            ["ssh", t("remote_mode_ssh"), sshCap],
+            ["ssh-native", t("remote_mode_native"), { available:true }],
+            ["wsl", t("remote_mode_wsl"), wslCap],
+          ].map(([key, label, cap]) => (
             <button key={key} type="button" onClick={() => cap?.available && setMode(key)}
               disabled={!cap?.available}
               title={cap?.available ? label : (cap?.reason || t("capability_unavailable"))}
@@ -1345,10 +1378,10 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
         </div>
 
         <div style={{ display:"grid", gridTemplateColumns:"1fr 110px", gap:10, marginBottom:10 }}>
-          {mode === "ssh" ? (
+          {mode === "ssh" || mode === "ssh-native" ? (
             <>
               <input style={inputStyle} value={target} onChange={e => setTarget(e.target.value)}
-                placeholder={`${t("remote_host")} (prod-web, user@host)`} />
+                placeholder={`${t("remote_host")} (prod-web, host)`} />
               <input style={inputStyle} value={port} onChange={e => setPort(e.target.value)}
                 placeholder={t("remote_port")} />
             </>
@@ -1368,6 +1401,41 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
             </>
           )}
         </div>
+
+        {(mode === "ssh" || mode === "ssh-native") && (
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 78px", gap:10, marginBottom:10 }}>
+            <input style={inputStyle} value={user} onChange={e => setUser(e.target.value)}
+              placeholder={`${t("remote_user")} (opcional)`} />
+            <input style={inputStyle} value={identityFile} onChange={e => setIdentityFile(e.target.value)}
+              placeholder={`${t("remote_key")} (opcional)`} />
+            <button type="button" onClick={pickIdentityFile}
+              style={{ background:"#181818", border:"0.5px solid #2e2e2e",
+                       borderRadius:6, color:"#777", fontFamily:"inherit",
+                       fontSize:11, padding:"7px 8px", cursor:"pointer" }}>
+              {t("remote_key_pick")}
+            </button>
+          </div>
+        )}
+
+        {mode === "ssh-native" && (
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+            <input style={inputStyle} type="password" value={password} onChange={e => setPassword(e.target.value)}
+              placeholder={`${t("remote_password")} (opcional)`} />
+            <input style={inputStyle} type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)}
+              placeholder={`${t("remote_passphrase")} (opcional)`} />
+          </div>
+        )}
+
+        {mode === "ssh-native" && (
+          <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:10, alignItems:"center", marginBottom:10 }}>
+            <input style={inputStyle} value={fingerprint} onChange={e => setFingerprint(e.target.value)}
+              placeholder={`${t("remote_fingerprint")} SHA256:...`} />
+            <label style={{ display:"flex", alignItems:"center", gap:6, color:"#666", fontSize:10, whiteSpace:"nowrap" }}>
+              <input type="checkbox" checked={trustHostForSession} onChange={e => setTrustHostForSession(e.target.checked)} />
+              {t("remote_trust_host")}
+            </label>
+          </div>
+        )}
 
         <div style={{ display:"grid", gridTemplateColumns:"1fr 110px", gap:10, marginBottom:12 }}>
           <input style={inputStyle} value={filePath} onChange={e => setFilePath(e.target.value)}
@@ -1496,10 +1564,17 @@ function RemoteTab({ config }) {
   }, [sortedBookmarks, bmCursor, filtered]);
 
   const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
-  const modeLabel = config.mode === "wsl" ? t("remote_mode_wsl") : t("remote_mode_ssh");
+  const modeLabel = config.mode === "wsl"
+    ? t("remote_mode_wsl")
+    : config.mode === "ssh-native"
+      ? t("remote_mode_native")
+      : t("remote_mode_ssh");
+  const sshTarget = config.user && !String(config.target || "").includes("@")
+    ? `${config.user}@${config.target}`
+    : config.target;
   const targetLabel = config.mode === "wsl"
     ? (config.distro ? `${config.distro}:${config.filePath}` : config.filePath)
-    : `${config.target}:${config.filePath}`;
+    : `${sshTarget}:${config.filePath}`;
 
   const BADGES = [
     { key:"error", label:"ERROR", bg:"#a02020", fg:"#ffcccc", cnt:stats.error },
@@ -1717,10 +1792,11 @@ export default function App() {
     const id = nextId++;
     const name = config.mode === "wsl"
       ? (config.distro ? `WSL ${config.distro}` : "WSL")
-      : config.target;
+      : (config.user && !config.target.includes("@") ? `${config.user}@${config.target}` : config.target);
+    const prefix = config.mode === "wsl" ? "WSL" : config.mode === "ssh-native" ? "SSH*" : "SSH";
     setTabs(p => [...p, {
       id,
-      label: `SSH ${name}`,
+      label: `${prefix} ${name}`,
       filePath: null,
       fileSize: null,
       remote: config,
@@ -1843,7 +1919,7 @@ export default function App() {
   const sshCap = capabilities?.ssh;
   const wslCap = capabilities?.wsl;
   const dockerEnabled = !!dockerCap?.available;
-  const remoteEnabled = !!(sshCap?.available || wslCap?.available);
+  const remoteEnabled = true;
 
   return (
     <LangCtx.Provider value={t}>

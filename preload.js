@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
   openFileDialog: () => ipcRenderer.invoke("dialog:open"),
+  openSshKeyDialog: () => ipcRenderer.invoke("dialog:ssh-key"),
   statFile:  (p) => ipcRenderer.invoke("file:stat", p),
 
   readFile(filePath, { onChunk, onProgress, onDone, onError }) {

@@ -3,6 +3,7 @@ const path = require("path");
 const fs   = require("fs");
 const http           = require("http");
 const { execFile, spawn } = require("child_process");
+const { Client: SshClient } = require("ssh2");
 
 const IS_DEV = process.env.NODE_ENV === "development" || !app.isPackaged;
 
@@ -161,6 +162,18 @@ ipcMain.handle("dialog:open", async () => {
     title: "Abrir archivo de log",
     filters: [
       { name:"Logs", extensions:["log","txt","out"] },
+      { name:"Todos", extensions:["*"] },
+    ],
+    properties: ["openFile"],
+  });
+  return canceled ? null : filePaths[0];
+});
+
+ipcMain.handle("dialog:ssh-key", async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: "Seleccionar llave privada SSH",
+    filters: [
+      { name:"SSH keys", extensions:["pem","key","ppk","*"] },
       { name:"Todos", extensions:["*"] },
     ],
     properties: ["openFile"],
@@ -452,6 +465,35 @@ function normalizeTailLines(value) {
   return Math.min(Math.max(n, 1), 10000);
 }
 
+function normalizeFingerprint(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^SHA256:/i, "")
+    .replace(/[\s:]/g, "")
+    .toLowerCase();
+}
+
+function validateSshTarget(config) {
+  const target = String(config?.target || "").trim();
+  const user = String(config?.user || "").trim();
+  const port = String(config?.port || "").trim();
+  const identityFile = String(config?.identityFile || "").trim();
+  if (!target) throw new Error("El host SSH es obligatorio");
+  if (target.startsWith("-") || /\s/.test(target)) throw new Error("Host SSH inválido");
+  if (user && (user.startsWith("-") || /[\s@]/.test(user))) throw new Error("Usuario SSH inválido");
+  if (port && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535))
+    throw new Error("Puerto SSH inválido");
+  if (identityFile && !fs.existsSync(identityFile)) throw new Error("La llave SSH no existe");
+  const hostParts = target.includes("@") ? target.split("@") : [];
+  return {
+    target,
+    host: hostParts.length ? hostParts.pop() : target,
+    username: user || (hostParts.length ? hostParts.join("@") : undefined),
+    port: port ? Number(port) : 22,
+    identityFile,
+  };
+}
+
 function buildRemoteCommand(config) {
   const mode = config?.mode === "wsl" ? "wsl" : "ssh";
   const filePath = String(config?.filePath || "").trim();
@@ -472,23 +514,138 @@ function buildRemoteCommand(config) {
     };
   }
 
-  const target = String(config?.target || "").trim();
-  const port = String(config?.port || "").trim();
-  if (!target) throw new Error("El host SSH es obligatorio");
-  if (target.startsWith("-") || /\s/.test(target)) throw new Error("Host SSH inválido");
-  if (port && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535))
-    throw new Error("Puerto SSH inválido");
+  const { target, user, port, identityFile } = {
+    ...validateSshTarget(config),
+    user: String(config?.user || "").trim(),
+    port: String(config?.port || "").trim(),
+  };
 
   const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"];
   if (port) args.push("-p", port);
-  args.push(target, `tail -n ${tailLines} -F -- ${quotePosixArg(filePath)}`);
-  return { command: "ssh", args, label: `${target}:${filePath}` };
+  if (identityFile) args.push("-i", identityFile, "-o", "IdentitiesOnly=yes");
+  const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
+  args.push(sshTarget, `tail -n ${tailLines} -F -- ${quotePosixArg(filePath)}`);
+  return { command: "ssh", args, label: `${sshTarget}:${filePath}` };
+}
+
+function startNativeSshStream(event, payload) {
+  const streamId = payload?.streamId;
+  const filePath = String(payload?.filePath || "").trim();
+  const tailLines = normalizeTailLines(payload?.tailLines);
+  if (!filePath) throw new Error("La ruta de la bitácora es obligatoria");
+
+  const { host, username, port, identityFile, target } = validateSshTarget(payload);
+  if (!username) throw new Error("El usuario SSH es obligatorio para credenciales");
+
+  const password = String(payload?.password || "");
+  const passphrase = String(payload?.passphrase || "");
+  const expectedFingerprint = normalizeFingerprint(payload?.fingerprint);
+  const trustHostForSession = Boolean(payload?.trustHostForSession);
+  let seenFingerprint = "";
+  const config = {
+    host,
+    port,
+    username,
+    readyTimeout: 12000,
+    tryKeyboard: false,
+    hostHash: "sha256",
+    hostVerifier(hash) {
+      seenFingerprint = hash;
+      if (expectedFingerprint) return normalizeFingerprint(hash) === expectedFingerprint;
+      return trustHostForSession;
+    },
+  };
+  if (password) config.password = password;
+  if (identityFile) {
+    config.privateKey = fs.readFileSync(identityFile);
+    if (passphrase) config.passphrase = passphrase;
+  }
+  if (!password && !identityFile) throw new Error("Ingresa contraseña o llave privada");
+
+  const label = `${username}@${target}:${filePath}`;
+  const client = new SshClient();
+  const stream = { client, channel: null, stopped: false, label };
+  let lineBuf = "";
+  let hadLines = false;
+
+  function send(ch, ...args) {
+    if (!event.sender.isDestroyed()) event.sender.send(ch, ...args);
+  }
+
+  function flushLines(data) {
+    lineBuf += data.toString("utf8");
+    const parts = lineBuf.split("\n");
+    lineBuf = parts.pop();
+    const complete = parts.filter(Boolean);
+    if (complete.length) {
+      hadLines = true;
+      send("remote:lines", streamId, complete.join("\n"));
+    }
+  }
+
+  client.on("ready", () => {
+    logEntry("INFO", "remote", `SSH nativo conectado: ${label}`);
+    send("remote:spawned", streamId);
+    client.exec(`tail -n ${tailLines} -F -- ${quotePosixArg(filePath)}`, (err, channel) => {
+      if (err) {
+        remoteStreams.delete(streamId);
+        send("remote:error", streamId, err.message);
+        client.end();
+        return;
+      }
+      stream.channel = channel;
+      channel.on("data", flushLines);
+      channel.stderr.on("data", flushLines);
+      channel.on("close", (code) => {
+        remoteStreams.delete(streamId);
+        client.end();
+        if (stream.stopped) {
+          logEntry("INFO", "remote", `SSH nativo detenido: ${label}`);
+          return;
+        }
+        if (code && !hadLines) {
+          const msg = `tail terminó con código ${code}`;
+          logEntry("ERROR", "remote", `${label}: ${msg}`);
+          send("remote:error", streamId, msg);
+        } else {
+          logEntry("INFO", "remote", `SSH nativo terminado: ${label}`);
+          send("remote:end", streamId);
+        }
+      });
+    });
+  });
+
+  client.on("error", (e) => {
+    remoteStreams.delete(streamId);
+    if (stream.stopped) return;
+    const fingerprintHint = seenFingerprint ? ` Fingerprint SHA256:${seenFingerprint}` : "";
+    const msg = `${e.message}${fingerprintHint}`;
+    logEntry("ERROR", "remote", `${label}: ${msg}`);
+    send("remote:error", streamId, msg);
+  });
+
+  client.on("end", () => {
+    if (!stream.stopped) logEntry("INFO", "remote", `SSH nativo desconectado: ${label}`);
+  });
+
+  remoteStreams.set(streamId, stream);
+  logEntry("INFO", "remote", `Iniciando SSH nativo: ${label}`);
+  client.connect(config);
 }
 
 ipcMain.handle("remote:logs:start", (event, payload) => {
   const streamId = payload?.streamId;
   if (!streamId) throw new Error("Invalid remote stream request");
   stopRemoteStream(streamId);
+
+  if (payload?.mode === "ssh-native") {
+    try {
+      startNativeSshStream(event, payload);
+    } catch (e) {
+      event.sender.send("remote:error", streamId, e.message);
+    }
+    return;
+  }
 
   let spec;
   try {
@@ -562,7 +719,9 @@ function stopRemoteStream(streamId) {
   const stream = remoteStreams.get(streamId);
   if (!stream) return;
   stream.stopped = true;
-  try { stream.proc.kill(); } catch {}
+  try { stream.proc && stream.proc.kill(); } catch {}
+  try { stream.channel && stream.channel.close(); } catch {}
+  try { stream.client && stream.client.end(); } catch {}
   remoteStreams.delete(streamId);
 }
 
