@@ -750,7 +750,7 @@ function DiagPanel({ onClose }) {
     WARN:  { color:"#f0c060", bg:"#1c1408", label:"WARN " },
     INFO:  { color:"#60b8e8", bg:"transparent", label:"INFO " },
   };
-  const CAT_COLOR = { docker:"#2a9a4a", file:"#2a7faa", remote:"#7a7aaa" };
+  const CAT_COLOR = { docker:"#2a9a4a", file:"#2a7faa", remote:"#7a7aaa", system:"#8a8a4a" };
   const fmt = ts => new Date(ts).toLocaleTimeString(undefined, { hour12:false });
 
   return (

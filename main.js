@@ -51,6 +51,50 @@ function logEntry(level, category, msg) {
   }
 }
 
+const alertCooldowns = new Map();
+
+function explainError(category, msg) {
+  const text = String(msg || "");
+  const lower = text.toLowerCase();
+  if (category === "docker") {
+    if (lower.includes("enoent") || lower.includes("not recognized") || lower.includes("no se reconoce"))
+      return "Docker no esta instalado o no esta en el PATH.";
+    if (lower.includes("connect") || lower.includes("pipe") || lower.includes("socket") || lower.includes("daemon"))
+      return "Docker Desktop o el daemon de Docker no esta respondiendo.";
+    if (lower.includes("permission") || lower.includes("access") || lower.includes("denied"))
+      return "No hay permisos para acceder a Docker.";
+  }
+  if (category === "remote") {
+    if (lower.includes("host key") || lower.includes("fingerprint"))
+      return "No se pudo validar la identidad del host SSH. Revisa el fingerprint o marca confianza por sesion.";
+    if (lower.includes("authentication") || lower.includes("auth") || lower.includes("permission denied"))
+      return "Autenticacion SSH rechazada. Revisa usuario, contrasena, llave o passphrase.";
+    if (lower.includes("timed out") || lower.includes("timeout") || lower.includes("connect"))
+      return "No se pudo conectar al host remoto. Revisa host, puerto, VPN/firewall o red.";
+    if (lower.includes("no such file") || lower.includes("cannot open") || lower.includes("tail"))
+      return "No se pudo leer la ruta remota. Revisa que el archivo exista y que el usuario tenga permisos.";
+  }
+  return text || "Ocurrio un error inesperado.";
+}
+
+function showErrorAlert(sender, category, title, msg) {
+  const key = `${category}:${title}:${msg}`;
+  const now = Date.now();
+  if ((alertCooldowns.get(key) || 0) > now - 15000) return;
+  alertCooldowns.set(key, now);
+
+  const win = sender && !sender.isDestroyed() ? BrowserWindow.fromWebContents(sender) : BrowserWindow.getFocusedWindow();
+  const detail = explainError(category, msg);
+  dialog.showMessageBox(win || undefined, {
+    type: "error",
+    title,
+    message: title,
+    detail: detail === msg ? detail : `${detail}\n\nDetalle tecnico: ${msg}`,
+    buttons: ["Aceptar"],
+    noLink: true,
+  }).catch(() => {});
+}
+
 function checkCommand(command, args, options = {}) {
   return new Promise((resolve) => {
     execFile(command, args, { timeout: 3000, windowsHide: true, ...options }, (err, stdout, stderr) => {
@@ -362,7 +406,7 @@ function dockerGet(apiPath) {
   });
 }
 
-ipcMain.handle("docker:list", async () => {
+ipcMain.handle("docker:list", async (event) => {
   logEntry("INFO", "docker", "Listando contenedores…");
   try {
     const result = await dockerGet("/containers/json?all=false");
@@ -371,6 +415,7 @@ ipcMain.handle("docker:list", async () => {
     return result;
   } catch (e) {
     logEntry("ERROR", "docker", `Error al listar contenedores: ${e.message}`);
+    showErrorAlert(event.sender, "docker", "Error de Docker", e.message);
     return { error: e.message };
   }
 });
@@ -422,7 +467,9 @@ ipcMain.handle("docker:logs:start", (event, containerId) => {
     const isError = code !== null && code !== 0;
     if (isError && !hadLines) {
       logEntry("ERROR", "docker", `Stream ${shortId} terminó con código ${code}`);
-      send("docker:error", containerId, `docker logs terminó con código ${code}`);
+      const msg = `docker logs terminó con código ${code}`;
+      showErrorAlert(event.sender, "docker", "Error en logs Docker", msg);
+      send("docker:error", containerId, msg);
     } else {
       logEntry("INFO", "docker", `Stream ${shortId} terminado (código ${code})`);
       send("docker:end", containerId);
@@ -433,6 +480,7 @@ ipcMain.handle("docker:logs:start", (event, containerId) => {
     dockerStreams.delete(containerId);
     if (stream.stopped) return;
     logEntry("ERROR", "docker", `Error proceso ${shortId}: ${e.message}`);
+    showErrorAlert(event.sender, "docker", "Error en logs Docker", e.message);
     send("docker:error", containerId, e.message);
   });
 
@@ -589,6 +637,7 @@ function startNativeSshStream(event, payload) {
     client.exec(`tail -n ${tailLines} -F -- ${quotePosixArg(filePath)}`, (err, channel) => {
       if (err) {
         remoteStreams.delete(streamId);
+        showErrorAlert(event.sender, "remote", "Error remoto", err.message);
         send("remote:error", streamId, err.message);
         client.end();
         return;
@@ -606,6 +655,7 @@ function startNativeSshStream(event, payload) {
         if (code && !hadLines) {
           const msg = `tail terminó con código ${code}`;
           logEntry("ERROR", "remote", `${label}: ${msg}`);
+          showErrorAlert(event.sender, "remote", "Error remoto", msg);
           send("remote:error", streamId, msg);
         } else {
           logEntry("INFO", "remote", `SSH nativo terminado: ${label}`);
@@ -621,6 +671,7 @@ function startNativeSshStream(event, payload) {
     const fingerprintHint = seenFingerprint ? ` Fingerprint SHA256:${seenFingerprint}` : "";
     const msg = `${e.message}${fingerprintHint}`;
     logEntry("ERROR", "remote", `${label}: ${msg}`);
+    showErrorAlert(event.sender, "remote", "Error SSH", msg);
     send("remote:error", streamId, msg);
   });
 
@@ -642,6 +693,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     try {
       startNativeSshStream(event, payload);
     } catch (e) {
+      showErrorAlert(event.sender, "remote", "Error SSH", e.message);
       event.sender.send("remote:error", streamId, e.message);
     }
     return;
@@ -651,6 +703,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
   try {
     spec = buildRemoteCommand(payload);
   } catch (e) {
+    showErrorAlert(event.sender, "remote", "Error remoto", e.message);
     event.sender.send("remote:error", streamId, e.message);
     return;
   }
@@ -694,6 +747,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     if (isError && !hadLines) {
       const msg = `${spec.command} terminó con código ${code}`;
       logEntry("ERROR", "remote", `${spec.label}: ${msg}`);
+      showErrorAlert(event.sender, "remote", "Error remoto", msg);
       send("remote:error", streamId, msg);
     } else {
       logEntry("INFO", "remote", `Stream remoto terminado: ${spec.label} (código ${code})`);
@@ -705,6 +759,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     remoteStreams.delete(streamId);
     if (stream.stopped) return;
     logEntry("ERROR", "remote", `${spec.label}: ${e.message}`);
+    showErrorAlert(event.sender, "remote", "Error remoto", e.message);
     send("remote:error", streamId, e.message);
   });
 
