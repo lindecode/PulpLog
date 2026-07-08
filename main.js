@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut, clipboard } = require("electron");
 const path = require("path");
 const fs   = require("fs");
 const http           = require("http");
@@ -302,6 +302,29 @@ ipcMain.handle("file:unwatch", async (_e, payload) => {
   const watchId = typeof payload === "string" ? payload : payload?.watchId;
   if (filePath) logEntry("INFO", "file", `Watch detenido: ${path.basename(filePath)}`);
   stopWatch(watchId);
+});
+
+ipcMain.handle("clipboard:writeText", async (_e, text) => {
+  clipboard.writeText(String(text ?? ""));
+  return true;
+});
+
+ipcMain.handle("export:text", async (_e, payload) => {
+  const defaultPath = payload?.defaultPath || "pulplog-results.log";
+  const content = String(payload?.content ?? "");
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: "Exportar resultados",
+    defaultPath,
+    filters: [
+      { name:"Log", extensions:["log"] },
+      { name:"Text", extensions:["txt"] },
+      { name:"Todos", extensions:["*"] },
+    ],
+  });
+  if (canceled || !filePath) return null;
+  fs.writeFileSync(filePath, content, "utf8");
+  logEntry("INFO", "file", `Resultados exportados: ${path.basename(filePath)}`);
+  return filePath;
 });
 
 /* ─── Docker ─── */

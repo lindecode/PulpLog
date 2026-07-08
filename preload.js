@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onMenuAbout:    (cb) => { ipcRenderer.on("menu:about",     cb); return () => ipcRenderer.removeListener("menu:about",     cb); },
 
   getCapabilities: () => ipcRenderer.invoke("system:capabilities"),
+  copyText: (text) => ipcRenderer.invoke("clipboard:writeText", text),
+  exportText: (payload) => ipcRenderer.invoke("export:text", payload),
 
   listContainers: () => ipcRenderer.invoke("docker:list"),
 
