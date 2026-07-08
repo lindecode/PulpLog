@@ -21,6 +21,10 @@ const T = {
     bm_next_title:   "Marcador siguiente (F2)",
     bm_clear_title:  "Limpiar todos los marcadores",
     bm_clear_btn:    "✕ marcas",
+    copy_results:    "Copiar",
+    copy_results_title:"Copiar resultados visibles",
+    export_results:  "Exportar",
+    export_results_title:"Exportar resultados visibles",
     bm_count:        n => `${n} ${n === 1 ? "marca" : "marcas"}`,
     tail_title:      "Tail -f — seguir archivo en vivo",
     tail_follow:     "▶ seguir",
@@ -100,6 +104,10 @@ const T = {
     bm_next_title:   "Next bookmark (F2)",
     bm_clear_title:  "Clear all bookmarks",
     bm_clear_btn:    "✕ marks",
+    copy_results:    "Copy",
+    copy_results_title:"Copy visible results",
+    export_results:  "Export",
+    export_results_title:"Export visible results",
     bm_count:        n => `${n} ${n === 1 ? "bookmark" : "bookmarks"}`,
     tail_title:      "Tail -f — follow file live",
     tail_follow:     "▶ follow",
@@ -216,6 +224,36 @@ function hl(raw, type) {
 const esc     = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 const fmtSize = b => b>=1e9?`${(b/1e9).toFixed(2)} GB`:b>=1e6?`${(b/1e6).toFixed(1)} MB`:b>=1e3?`${(b/1e3).toFixed(0)} KB`:`${b} B`;
 const fmtNum  = n => n>=1e6?`${(n/1e6).toFixed(1)}M`:n>=1e3?`${(n/1e3).toFixed(1)}k`:String(n);
+const safeFileName = s => String(s || "pulplog-results").replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").slice(0, 80);
+
+function buildResultText({ source, filter, items, total }) {
+  const header = [
+    `PulpLog export`,
+    `Source: ${source || "unknown"}`,
+    `Filter: ${filter || "(none)"}`,
+    `Rows: ${items.length} / ${total}`,
+    `Exported: ${new Date().toISOString()}`,
+    "",
+  ];
+  return header.concat(items.map(item => `${item.origLine}\t${item.raw}`)).join("\n");
+}
+
+async function copyResultText(text) {
+  if (IS_ELECTRON) return window.electronAPI.copyText(text);
+  return navigator.clipboard?.writeText(text);
+}
+
+async function exportResultText(defaultPath, content) {
+  if (IS_ELECTRON) return window.electronAPI.exportText({ defaultPath, content });
+  const blob = new Blob([content], { type:"text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = defaultPath;
+  a.click();
+  URL.revokeObjectURL(url);
+  return defaultPath;
+}
 
 /* ═══════════════════════════════════════════
    LogRow
@@ -487,6 +525,17 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
     { key:"plain", label:"PLAIN", bg:"#2a2a2a", fg:"#aaa",    cnt:null        },
   ];
 
+  const copyResults = useCallback(() => {
+    const text = buildResultText({ source: filePath || fileName, filter, items: filtered, total: rawLines.length });
+    copyResultText(text);
+  }, [filePath, fileName, filter, filtered, rawLines.length]);
+
+  const exportResults = useCallback(() => {
+    const source = fileName || filePath || "pulplog-results";
+    const text = buildResultText({ source: filePath || fileName, filter, items: filtered, total: rawLines.length });
+    exportResultText(`${safeFileName(source)}-filtered.log`, text);
+  }, [filePath, fileName, filter, filtered, rawLines.length]);
+
   return (
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
 
@@ -558,6 +607,9 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
             {t("bm_clear_btn")}
           </Btn>
         )}
+
+        <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
+        <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
 
         <Sep />
 
@@ -1088,6 +1140,17 @@ function DockerTab({ containerId, containerName }) {
     { key:"plain", label:"PLAIN", bg:"#2a2a2a", fg:"#aaa",    cnt:null        },
   ];
 
+  const copyResults = useCallback(() => {
+    const text = buildResultText({ source: `Docker ${containerName}`, filter, items: filtered, total: rawLines.length });
+    copyResultText(text);
+  }, [containerName, filter, filtered, rawLines.length]);
+
+  const exportResults = useCallback(() => {
+    const source = `docker-${containerName}`;
+    const text = buildResultText({ source: `Docker ${containerName}`, filter, items: filtered, total: rawLines.length });
+    exportResultText(`${safeFileName(source)}-filtered.log`, text);
+  }, [containerName, filter, filtered, rawLines.length]);
+
   return (
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
 
@@ -1148,6 +1211,8 @@ function DockerTab({ containerId, containerName }) {
         <Btn onClick={() => jumpBookmark("next")} disabled={!sortedBookmarks.length} title={t("bm_next_title")}>◆ ↓</Btn>
         {bookmarks.size > 0 && <span style={{ fontSize:10, color:"#c0a030", padding:"0 2px" }}>{t("bm_count", bookmarks.size)}</span>}
         {bookmarks.size > 0 && <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }} title={t("bm_clear_title")}>{t("bm_clear_btn")}</Btn>}
+        <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
+        <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
 
         <Sep />
 
@@ -1445,6 +1510,17 @@ function RemoteTab({ config }) {
     { key:"plain", label:"PLAIN", bg:"#2a2a2a", fg:"#aaa",    cnt:null        },
   ];
 
+  const copyResults = useCallback(() => {
+    const text = buildResultText({ source: `${modeLabel} ${targetLabel}`, filter, items: filtered, total: rawLines.length });
+    copyResultText(text);
+  }, [modeLabel, targetLabel, filter, filtered, rawLines.length]);
+
+  const exportResults = useCallback(() => {
+    const source = `${modeLabel}-${targetLabel}`;
+    const text = buildResultText({ source: `${modeLabel} ${targetLabel}`, filter, items: filtered, total: rawLines.length });
+    exportResultText(`${safeFileName(source)}-filtered.log`, text);
+  }, [modeLabel, targetLabel, filter, filtered, rawLines.length]);
+
   return (
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
       <div style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px",
@@ -1496,6 +1572,8 @@ function RemoteTab({ config }) {
         <Btn onClick={() => jumpBookmark("next")} disabled={!sortedBookmarks.length} title={t("bm_next_title")}>◆ ↓</Btn>
         {bookmarks.size > 0 && <span style={{ fontSize:10, color:"#c0a030", padding:"0 2px" }}>{t("bm_count", bookmarks.size)}</span>}
         {bookmarks.size > 0 && <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }} title={t("bm_clear_title")}>{t("bm_clear_btn")}</Btn>}
+        <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
+        <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
         <Sep />
         <Btn active={autoScroll} onClick={() => setAutoScroll(p => !p)} title={t("autoscroll_title")}>↓ auto</Btn>
         <Btn active={showNums}   onClick={() => setShowNums(p => !p)}   title={t("linenums_title")}>#</Btn>
