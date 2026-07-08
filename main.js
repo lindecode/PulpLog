@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut } = req
 const path = require("path");
 const fs   = require("fs");
 const http           = require("http");
-const { spawn }      = require("child_process");
+const { execFile, spawn } = require("child_process");
 
 const IS_DEV = process.env.NODE_ENV === "development" || !app.isPackaged;
 
@@ -49,6 +49,64 @@ function logEntry(level, category, msg) {
     if (!win.isDestroyed()) win.webContents.send("applog:new", entry);
   }
 }
+
+function checkCommand(command, args, options = {}) {
+  return new Promise((resolve) => {
+    execFile(command, args, { timeout: 3000, windowsHide: true, ...options }, (err, stdout, stderr) => {
+      const output = `${stdout || ""}${stderr || ""}`.trim();
+      if (err) {
+        resolve({
+          available: false,
+          reason: output || err.message || `${command} no disponible`,
+        });
+        return;
+      }
+      resolve({ available: true, detail: output });
+    });
+  });
+}
+
+function parseWslDistros(output) {
+  return String(output || "")
+    .replace(/\0/g, "")
+    .split(/\r?\n/)
+    .map(line => line.replace(/\s+\(Default\)$/i, "").trim())
+    .filter(Boolean)
+    .filter(name => !/^docker-desktop(?:-data)?$/i.test(name));
+}
+
+async function getSystemCapabilities() {
+  const [docker, ssh, wsl] = await Promise.all([
+    checkCommand("docker", ["version", "--format", "{{.Server.Version}}"]),
+    checkCommand("ssh", ["-V"]),
+    process.platform === "win32"
+      ? checkCommand("wsl.exe", ["--status"])
+      : Promise.resolve({ available: false, reason: "WSL2 solo esta disponible en Windows" }),
+  ]);
+
+  if (wsl.available && process.platform === "win32") {
+    const listed = await checkCommand("wsl.exe", ["-l", "-q"]);
+    wsl.distros = listed.available ? parseWslDistros(listed.detail) : [];
+    if (!listed.available) wsl.reason = listed.reason;
+  }
+
+  return {
+    platform: process.platform,
+    docker,
+    ssh,
+    wsl,
+  };
+}
+
+ipcMain.handle("system:capabilities", async () => {
+  const caps = await getSystemCapabilities();
+  for (const [name, cap] of Object.entries(caps)) {
+    if (name === "platform") continue;
+    logEntry(cap.available ? "INFO" : "WARN", "system",
+      `${name}: ${cap.available ? "disponible" : cap.reason}`);
+  }
+  return caps;
+});
 
 /* ─── window ─── */
 function createWindow() {
@@ -358,6 +416,133 @@ function stopDockerStream(containerId) {
   dockerStreams.delete(containerId);
 }
 
+/* ─── Remote logs: SSH / WSL tail -F ─── */
+const remoteStreams = new Map(); // streamId → { proc, stopped, label }
+
+function quotePosixArg(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function normalizeTailLines(value) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return 500;
+  return Math.min(Math.max(n, 1), 10000);
+}
+
+function buildRemoteCommand(config) {
+  const mode = config?.mode === "wsl" ? "wsl" : "ssh";
+  const filePath = String(config?.filePath || "").trim();
+  const tailLines = normalizeTailLines(config?.tailLines);
+  if (!filePath) throw new Error("La ruta de la bitácora es obligatoria");
+
+  if (mode === "wsl") {
+    if (process.platform !== "win32") throw new Error("WSL2 solo esta disponible en Windows");
+    const distro = String(config?.distro || "").trim();
+    if (distro.startsWith("-")) throw new Error("Nombre de distro WSL inválido");
+    const args = [];
+    if (distro) args.push("-d", distro);
+    args.push("--", "tail", "-n", String(tailLines), "-F", "--", filePath);
+    return {
+      command: process.platform === "win32" ? "wsl.exe" : "wsl",
+      args,
+      label: distro ? `WSL:${distro}:${filePath}` : `WSL:${filePath}`,
+    };
+  }
+
+  const target = String(config?.target || "").trim();
+  const port = String(config?.port || "").trim();
+  if (!target) throw new Error("El host SSH es obligatorio");
+  if (target.startsWith("-") || /\s/.test(target)) throw new Error("Host SSH inválido");
+  if (port && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535))
+    throw new Error("Puerto SSH inválido");
+
+  const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"];
+  if (port) args.push("-p", port);
+  args.push(target, `tail -n ${tailLines} -F -- ${quotePosixArg(filePath)}`);
+  return { command: "ssh", args, label: `${target}:${filePath}` };
+}
+
+ipcMain.handle("remote:logs:start", (event, payload) => {
+  const streamId = payload?.streamId;
+  if (!streamId) throw new Error("Invalid remote stream request");
+  stopRemoteStream(streamId);
+
+  let spec;
+  try {
+    spec = buildRemoteCommand(payload);
+  } catch (e) {
+    event.sender.send("remote:error", streamId, e.message);
+    return;
+  }
+
+  logEntry("INFO", "remote", `Iniciando stream remoto: ${spec.label}`);
+  const proc = spawn(spec.command, spec.args, { windowsHide: true });
+  const stream = { proc, stopped: false, label: spec.label };
+  let lineBuf = "";
+  let hadLines = false;
+
+  function send(ch, ...args) {
+    if (!event.sender.isDestroyed()) event.sender.send(ch, ...args);
+  }
+
+  function flushLines(data) {
+    lineBuf += data.toString("utf8");
+    const parts = lineBuf.split("\n");
+    lineBuf = parts.pop();
+    const complete = parts.filter(Boolean);
+    if (complete.length) {
+      hadLines = true;
+      send("remote:lines", streamId, complete.join("\n"));
+    }
+  }
+
+  proc.stdout.on("data", flushLines);
+  proc.stderr.on("data", flushLines);
+
+  proc.on("spawn", () => {
+    logEntry("INFO", "remote", `Proceso iniciado: ${spec.label}`);
+    send("remote:spawned", streamId);
+  });
+
+  proc.on("close", (code) => {
+    remoteStreams.delete(streamId);
+    if (stream.stopped) {
+      logEntry("INFO", "remote", `Stream remoto detenido: ${spec.label}`);
+      return;
+    }
+    const isError = code !== null && code !== 0;
+    if (isError && !hadLines) {
+      const msg = `${spec.command} terminó con código ${code}`;
+      logEntry("ERROR", "remote", `${spec.label}: ${msg}`);
+      send("remote:error", streamId, msg);
+    } else {
+      logEntry("INFO", "remote", `Stream remoto terminado: ${spec.label} (código ${code})`);
+      send("remote:end", streamId);
+    }
+  });
+
+  proc.on("error", (e) => {
+    remoteStreams.delete(streamId);
+    if (stream.stopped) return;
+    logEntry("ERROR", "remote", `${spec.label}: ${e.message}`);
+    send("remote:error", streamId, e.message);
+  });
+
+  remoteStreams.set(streamId, stream);
+});
+
+ipcMain.handle("remote:logs:stop", (_e, streamId) => {
+  stopRemoteStream(streamId);
+});
+
+function stopRemoteStream(streamId) {
+  const stream = remoteStreams.get(streamId);
+  if (!stream) return;
+  stream.stopped = true;
+  try { stream.proc.kill(); } catch {}
+  remoteStreams.delete(streamId);
+}
+
 /* ─── Settings & recent files (userData JSON) ─── */
 function getSettingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
@@ -499,5 +684,6 @@ app.on("window-all-closed", () => {
   });
   watchers.clear();
   dockerStreams.forEach((_e, id) => stopDockerStream(id));
+  remoteStreams.forEach((_e, id) => stopRemoteStream(id));
   if (process.platform !== "darwin") app.quit();
 });

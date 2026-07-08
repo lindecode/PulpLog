@@ -54,6 +54,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onMenuNewTab:   (cb) => { ipcRenderer.on("menu:new-tab",   cb); return () => ipcRenderer.removeListener("menu:new-tab",   cb); },
   onMenuAbout:    (cb) => { ipcRenderer.on("menu:about",     cb); return () => ipcRenderer.removeListener("menu:about",     cb); },
 
+  getCapabilities: () => ipcRenderer.invoke("system:capabilities"),
+
   listContainers: () => ipcRenderer.invoke("docker:list"),
 
   streamDockerLogs(containerId, { onLines, onEnd, onError, onSpawned }) {
@@ -76,6 +78,29 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   /* ── App diagnostics log ── */
+  streamRemoteLogs(config, { onLines, onEnd, onError, onSpawned }) {
+    const streamId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const spawnH = (_e, id)       => { if (id === streamId) onSpawned?.(); };
+    const linesH = (_e, id, text) => { if (id === streamId) onLines?.(text); };
+    const endH   = (_e, id)       => { if (id === streamId) { cleanup(); onEnd?.(); } };
+    const errH   = (_e, id, msg)  => { if (id === streamId) { cleanup(); onError?.(msg); } };
+    ipcRenderer.on("remote:spawned", spawnH);
+    ipcRenderer.on("remote:lines",   linesH);
+    ipcRenderer.on("remote:end",     endH);
+    ipcRenderer.on("remote:error",   errH);
+    ipcRenderer.invoke("remote:logs:start", { ...config, streamId }).catch(e => {
+      cleanup();
+      onError?.(e?.message ?? String(e));
+    });
+    function cleanup() {
+      ipcRenderer.removeListener("remote:spawned", spawnH);
+      ipcRenderer.removeListener("remote:lines",   linesH);
+      ipcRenderer.removeListener("remote:end",     endH);
+      ipcRenderer.removeListener("remote:error",   errH);
+    }
+    return () => { cleanup(); ipcRenderer.invoke("remote:logs:stop", streamId); };
+  },
+
   getAppLog:   () => ipcRenderer.invoke("applog:get"),
   clearAppLog: () => ipcRenderer.invoke("applog:clear"),
   onAppLogNew: (cb) => {
