@@ -29,6 +29,8 @@ const T = {
     tail_title:      "Tail -f — seguir archivo en vivo",
     tail_follow:     "▶ seguir",
     tail_stop:       "⏹ detener",
+    refresh_title:   "Recargar archivo ahora",
+    refresh_btn:     "↻ actualizar",
     autoscroll_title:"Auto-scroll al final",
     linenums_title:  "Números de línea",
     scroll_top:      "↑ inicio",
@@ -120,6 +122,8 @@ const T = {
     tail_title:      "Tail -f — follow file live",
     tail_follow:     "▶ follow",
     tail_stop:       "⏹ stop",
+    refresh_title:   "Reload file now",
+    refresh_btn:     "↻ refresh",
     autoscroll_title:"Auto-scroll to bottom",
     linenums_title:  "Line numbers",
     scroll_top:      "↑ top",
@@ -633,6 +637,10 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
           title={t("tail_title")}>
           {tailing ? t("tail_stop") : t("tail_follow")}
         </Btn>
+        <Btn onClick={() => setReloadKey(k => k + 1)} disabled={!filePath}
+          title={t("refresh_title")}>
+          {t("refresh_btn")}
+        </Btn>
         <Btn active={autoScroll} onClick={() => setAutoScroll(p => !p)} title={t("autoscroll_title")}>
           ↓ auto
         </Btn>
@@ -934,6 +942,7 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
 ═══════════════════════════════════════════ */
 function AboutModal({ onClose }) {
   const t = useLang();
+  const logoSrc = `${import.meta.env.BASE_URL}lindecode-max.jpeg`;
   return (
     <div
       onClick={onClose}
@@ -944,7 +953,7 @@ function AboutModal({ onClose }) {
         style={{ background:"#111", border:"0.5px solid #2a2a2a", borderRadius:10,
                  padding:"32px 40px", minWidth:300, textAlign:"center",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
-        <img src="/lindecode-max.jpeg" alt="LindeCode"
+        <img src={logoSrc} alt="LindeCode"
           style={{ width:96, height:96, borderRadius:12, objectFit:"cover", marginBottom:12 }} />
         <div style={{ fontSize:18, color:"#ccc", fontWeight:700, marginBottom:4 }}>PulpLog</div>
         <div style={{ fontSize:11, color:"#444", marginBottom:20 }}>v1.0.0</div>
@@ -1327,6 +1336,8 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
     e.preventDefault();
     if (!canSubmit) return;
     onSelect({ mode, target, user, port, identityFile, password, passphrase, fingerprint, trustHostForSession, distro, filePath, tailLines });
+    setPassword("");
+    setPassphrase("");
   };
 
   const pickIdentityFile = async () => {

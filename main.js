@@ -278,7 +278,17 @@ ipcMain.handle("file:read:cancel", async (_event, readId) => {
   return true;
 });
 
-/* ─── IPC: tail -f with rotation detection ─── */
+/* ─── IPC: tail -f with rotation detection ───
+ * Pure polling (fs.statSync on an interval) instead of fs.watch.
+ * fs.watch is backed by a different native mechanism per OS
+ * (inotify / FSEvents / ReadDirectoryChangesW) and each one can miss or
+ * delay events depending on how the writer flushes, or on network/virtual
+ * filesystems. Polling behaves identically on Windows/macOS/Linux and
+ * keeps retrying the read every tick, so a transient share/lock failure
+ * (e.g. another program briefly holding the file) just resolves on the
+ * next poll instead of silently losing that chunk of data. */
+const WATCH_POLL_MS = 400;
+
 ipcMain.handle("file:watch", async (event, payload) => {
   const filePath = typeof payload === "string" ? payload : payload?.filePath;
   const watchId = typeof payload === "string" ? filePath : payload?.watchId;
@@ -287,45 +297,63 @@ ipcMain.handle("file:watch", async (event, payload) => {
   stopWatch(watchId);
   logEntry("INFO", "file", `Iniciando watch: ${path.basename(filePath)}`);
 
-  let lastSize = 0;
-  try { lastSize = fs.statSync(filePath).size; } catch {}
-
   function startWatcher() {
-    let w;
+    let lastSize = 0;
+    let lastIno = null;
     try {
-      w = fs.watch(filePath, { persistent: false }, (eventType) => {
-        if (eventType === "rename") {
-          w.close();
-          watchers.delete(watchId);
-          logEntry("WARN", "file", `Archivo rotado: ${path.basename(filePath)}`);
-          event.sender.send("file:rotated", watchId, filePath);
-          waitForFile(watchId, filePath, () => {
-            lastSize = 0;
-            logEntry("INFO", "file", `Archivo recreado: ${path.basename(filePath)}`);
-            event.sender.send("file:recreated", watchId, filePath);
-            startWatcher();
-          });
-          return;
-        }
-        try {
-          const { size } = fs.statSync(filePath);
-          if (size < lastSize) {
-            lastSize = 0;
-            logEntry("WARN", "file", `Archivo truncado: ${path.basename(filePath)}`);
-            event.sender.send("file:truncated", watchId, filePath);
-            return;
-          }
-          if (size === lastSize) return;
-          const fd  = fs.openSync(filePath, "r");
-          const buf = Buffer.allocUnsafe(size - lastSize);
-          fs.readSync(fd, buf, 0, buf.length, lastSize);
-          fs.closeSync(fd);
-          lastSize = size;
-          event.sender.send("file:newlines", watchId, filePath, buf.toString("utf8"));
-        } catch { /* file briefly unavailable */ }
-      });
-    } catch { return; }
-    watchers.set(watchId, { watcher: w, pollTimer: null, filePath, lastSize });
+      const s = fs.statSync(filePath);
+      lastSize = s.size;
+      lastIno = s.ino || null;
+    } catch {}
+
+    const timer = setInterval(() => {
+      let stat;
+      try {
+        stat = fs.statSync(filePath);
+      } catch {
+        clearInterval(timer);
+        watchers.delete(watchId);
+        logEntry("WARN", "file", `Archivo rotado: ${path.basename(filePath)}`);
+        event.sender.send("file:rotated", watchId, filePath);
+        waitForFile(watchId, filePath, () => {
+          logEntry("INFO", "file", `Archivo recreado: ${path.basename(filePath)}`);
+          event.sender.send("file:recreated", watchId, filePath);
+          startWatcher();
+        });
+        return;
+      }
+
+      // inode/file-index change at the same path = rotated in place (logrotate "copytruncate" or rename+recreate)
+      if (lastIno && stat.ino && stat.ino !== lastIno) {
+        clearInterval(timer);
+        watchers.delete(watchId);
+        logEntry("WARN", "file", `Archivo rotado: ${path.basename(filePath)}`);
+        event.sender.send("file:rotated", watchId, filePath);
+        event.sender.send("file:recreated", watchId, filePath);
+        startWatcher();
+        return;
+      }
+
+      if (stat.size < lastSize) {
+        lastSize = 0;
+        logEntry("WARN", "file", `Archivo truncado: ${path.basename(filePath)}`);
+        event.sender.send("file:truncated", watchId, filePath);
+        return;
+      }
+      if (stat.size === lastSize) return;
+
+      try {
+        const fd  = fs.openSync(filePath, "r");
+        const buf = Buffer.allocUnsafe(stat.size - lastSize);
+        fs.readSync(fd, buf, 0, buf.length, lastSize);
+        fs.closeSync(fd);
+        lastSize = stat.size;
+        lastIno = stat.ino || lastIno;
+        event.sender.send("file:newlines", watchId, filePath, buf.toString("utf8"));
+      } catch { /* locked by another process this tick — retry next poll */ }
+    }, WATCH_POLL_MS);
+
+    watchers.set(watchId, { watcher: null, pollTimer: timer, filePath, lastSize });
   }
 
   startWatcher();
@@ -682,6 +710,11 @@ function startNativeSshStream(event, payload) {
   remoteStreams.set(streamId, stream);
   logEntry("INFO", "remote", `Iniciando SSH nativo: ${label}`);
   client.connect(config);
+  // ssh2 copies password/passphrase into its own internal config synchronously
+  // during connect(), so our local copies are no longer needed. privateKey is
+  // kept by reference and parsed later during auth, so it must not be cleared here.
+  config.password = null;
+  config.passphrase = null;
 }
 
 ipcMain.handle("remote:logs:start", (event, payload) => {

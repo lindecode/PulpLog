@@ -3,3 +3,8 @@ dist
 release/win-unpacked/
 
 release/
+
+.claude/settings.json
+
+.claude/
+release-win/
