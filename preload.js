@@ -59,25 +59,33 @@ contextBridge.exposeInMainWorld("electronAPI", {
   copyText: (text) => ipcRenderer.invoke("clipboard:writeText", text),
   exportText: (payload) => ipcRenderer.invoke("export:text", payload),
 
+  showTabContextMenu: (payload) => ipcRenderer.invoke("tabmenu:show", payload),
+  onTabMenuAction: (cb) => {
+    const h = (_e, data) => cb(data);
+    ipcRenderer.on("tabmenu:action", h);
+    return () => ipcRenderer.removeListener("tabmenu:action", h);
+  },
+
   listContainers: () => ipcRenderer.invoke("docker:list"),
 
   streamDockerLogs(containerId, { onLines, onEnd, onError, onSpawned }) {
-    const spawnH = (_e, id)       => { if (id === containerId) onSpawned?.(); };
-    const linesH = (_e, id, text) => { if (id === containerId) onLines?.(text); };
-    const endH   = (_e, id)       => { if (id === containerId) { cleanup(); onEnd?.(); } };
-    const errH   = (_e, id, msg)  => { if (id === containerId) { cleanup(); onError?.(msg); } };
+    const streamId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const spawnH = (_e, id)       => { if (id === streamId) onSpawned?.(); };
+    const linesH = (_e, id, text) => { if (id === streamId) onLines?.(text); };
+    const endH   = (_e, id)       => { if (id === streamId) { cleanup(); onEnd?.(); } };
+    const errH   = (_e, id, msg)  => { if (id === streamId) { cleanup(); onError?.(msg); } };
     ipcRenderer.on("docker:spawned", spawnH);
     ipcRenderer.on("docker:lines",   linesH);
     ipcRenderer.on("docker:end",     endH);
     ipcRenderer.on("docker:error",   errH);
-    ipcRenderer.invoke("docker:logs:start", containerId);
+    ipcRenderer.invoke("docker:logs:start", { streamId, containerId });
     function cleanup() {
       ipcRenderer.removeListener("docker:spawned", spawnH);
       ipcRenderer.removeListener("docker:lines",   linesH);
       ipcRenderer.removeListener("docker:end",     endH);
       ipcRenderer.removeListener("docker:error",   errH);
     }
-    return () => { cleanup(); ipcRenderer.invoke("docker:logs:stop", containerId); };
+    return () => { cleanup(); ipcRenderer.invoke("docker:logs:stop", streamId); };
   },
 
   /* ── App diagnostics log ── */

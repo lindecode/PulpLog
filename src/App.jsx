@@ -306,8 +306,7 @@ const LogRow = memo(({ item, showNums, isBookmarked, onToggleBookmark }) => {
                      background: isBookmarked ? "#c0a030" : s.bar }} />
       <span
         style={{ padding:"0 10px", fontSize:12, lineHeight:`${ROW_H}px`, color:s.txt,
-                 flex:1, minWidth:0, whiteSpace:"pre", overflow:"hidden",
-                 textOverflow:"ellipsis", fontFamily:"inherit" }}
+                 flex:1, whiteSpace:"pre", fontFamily:"inherit" }}
         dangerouslySetInnerHTML={{ __html: hl(item.raw, item.type) }}
       />
     </div>
@@ -351,8 +350,8 @@ function VirtualList({ items, showNums, bookmarks, onToggleBookmark, listRef }) 
     <div ref={containerRef}
          style={{ overflow:"auto", flex:1, minHeight:0 }}
          onScroll={e => setScrollTop(e.currentTarget.scrollTop)}>
-      <div style={{ height:totalH, position:"relative" }}>
-        <div style={{ position:"absolute", top: start * ROW_H, width:"100%" }}>
+      <div style={{ height:totalH, position:"relative", minWidth:"100%", width:"max-content" }}>
+        <div style={{ position:"absolute", top: start * ROW_H, minWidth:"100%", width:"max-content" }}>
           {items.slice(start, end).map(item => (
             <LogRow
               key={item.origLine}
@@ -1728,6 +1727,7 @@ export default function App() {
   const [remotePicker, setRemotePicker]= useState(false);
   const [diagOpen,     setDiagOpen]    = useState(false);
   const [settingsOpen, setSettingsOpen]= useState(false);
+  const [renamingTabId, setRenamingTabId] = useState(null);
   const [capabilities, setCapabilities]= useState(null);
   const [settings,     setSettings]    = useState({
     recentFiles:[], autoScrollDefault:false, showNumsDefault:true, language:"es", sessionTabs:[]
@@ -1833,6 +1833,60 @@ export default function App() {
     });
   };
 
+  const duplicateTab = (tabId) => {
+    let newId = null;
+    setTabs(prev => {
+      const idx = prev.findIndex(t => t.id === tabId);
+      if (idx === -1) return prev;
+      newId = nextId++;
+      const clone = { ...prev[idx], id: newId, reloadNonce: 0 };
+      const next = [...prev];
+      next.splice(idx + 1, 0, clone);
+      return next;
+    });
+    if (newId !== null) setActive(newId);
+  };
+
+  const reloadTab = (tabId) => {
+    setTabs(prev => prev.map(t => t.id === tabId ? { ...t, reloadNonce: (t.reloadNonce || 0) + 1 } : t));
+  };
+
+  const renameTab = (tabId, label) => {
+    const trimmed = label.trim();
+    if (trimmed) setTabs(prev => prev.map(t => t.id === tabId ? { ...t, label: trimmed } : t));
+    setRenamingTabId(null);
+  };
+
+  const closeOtherTabs = (tabId) => {
+    setTabs(prev => {
+      const keep = prev.find(t => t.id === tabId);
+      if (!keep) return prev;
+      prev.forEach(t => {
+        if (t.id !== tabId && t.filePath && t.filePath !== "__web__")
+          closedTabsRef.current.push({ label: t.label, filePath: t.filePath, fileSize: t.fileSize });
+      });
+      return [keep];
+    });
+    setActive(tabId);
+  };
+
+  const closeTabsToRight = (tabId) => {
+    let activeWasRemoved = false;
+    setTabs(prev => {
+      const idx = prev.findIndex(t => t.id === tabId);
+      if (idx === -1) return prev;
+      const removed = prev.slice(idx + 1);
+      if (!removed.length) return prev;
+      removed.forEach(t => {
+        if (t.filePath && t.filePath !== "__web__")
+          closedTabsRef.current.push({ label: t.label, filePath: t.filePath, fileSize: t.fileSize });
+      });
+      activeWasRemoved = removed.some(t => t.id === activeRef.current);
+      return prev.slice(0, idx + 1);
+    });
+    if (activeWasRemoved) setActive(tabId);
+  };
+
   /* ── Mount: load settings, restore session or open initial file arg ── */
   useEffect(() => {
     if (!IS_ELECTRON) return;
@@ -1925,6 +1979,19 @@ export default function App() {
     return () => { cleanClose?.(); cleanReopen?.(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* ── Tab context menu actions ── */
+  useEffect(() => {
+    if (!IS_ELECTRON) return;
+    const cleanup = window.electronAPI.onTabMenuAction(({ tabId, action }) => {
+      if (action === "duplicate") duplicateTab(tabId);
+      else if (action === "reload") reloadTab(tabId);
+      else if (action === "rename") setRenamingTabId(tabId);
+      else if (action === "close-others") closeOtherTabs(tabId);
+      else if (action === "close-right") closeTabsToRight(tabId);
+    });
+    return () => cleanup?.();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const activeTab = tabs.find(tab => tab.id === active) || tabs[0];
   const dockerCap = capabilities?.docker;
   const sshCap = capabilities?.ssh;
@@ -1941,9 +2008,22 @@ export default function App() {
         {/* tab bar */}
         <div style={{ display:"flex", alignItems:"stretch", background:"#0f0f0f",
                       borderBottom:"0.5px solid #1e1e1e", flexShrink:0, overflowX:"auto" }}>
-          {tabs.map(tab => (
+          {tabs.map((tab, idx) => (
             <div key={tab.id}
               onClick={() => setActive(tab.id)}
+              onContextMenu={e => {
+                e.preventDefault();
+                if (!IS_ELECTRON) return;
+                window.electronAPI.showTabContextMenu({
+                  tabId: tab.id,
+                  filePath: tab.filePath && tab.filePath !== "__web__" ? tab.filePath : null,
+                  hasContent: !!(tab.docker || tab.remote || (tab.filePath && tab.filePath !== "__web__")),
+                  tabCount: tabs.length,
+                  canCloseRight: idx < tabs.length - 1,
+                  x: e.clientX,
+                  y: e.clientY,
+                });
+              }}
               title={
                 tab.docker   ? `🐳 ${tab.docker.name}\nID: ${tab.docker.containerId.slice(0, 12)}` :
                 tab.remote   ? `${tab.remote.mode === "wsl" ? "WSL" : "SSH"}\n${tab.remote.filePath}` :
@@ -1956,9 +2036,24 @@ export default function App() {
                        background: tab.id===active ? "#111":"transparent",
                        color:      tab.id===active ? "#ccc":"#555",
                        borderBottom: tab.id===active ? "1.5px solid #2a7faa":"1.5px solid transparent" }}>
-              <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                {tab.label === "$welcome" ? t("welcome_tab") : tab.label}
-              </span>
+              {renamingTabId === tab.id ? (
+                <input
+                  autoFocus
+                  defaultValue={tab.label === "$welcome" ? t("welcome_tab") : tab.label}
+                  onClick={e => e.stopPropagation()}
+                  onBlur={e => renameTab(tab.id, e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") e.target.blur();
+                    else if (e.key === "Escape") setRenamingTabId(null);
+                  }}
+                  style={{ background:"#181818", border:"0.5px solid #2a7faa", borderRadius:3,
+                           color:"#ccc", fontSize:12, fontFamily:"inherit", width:120, padding:"1px 4px" }}
+                />
+              ) : (
+                <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                  {tab.label === "$welcome" ? t("welcome_tab") : tab.label}
+                </span>
+              )}
               {tabs.length > 1 && (
                 <span style={{ fontSize:10, color:"#444", padding:"0 2px", cursor:"pointer",
                                flexShrink:0, borderRadius:3 }}
@@ -2038,13 +2133,13 @@ export default function App() {
         </div>
 
         {activeTab.docker
-          ? <DockerTab key={`docker-${activeTab.id}`}
+          ? <DockerTab key={`docker-${activeTab.id}-${activeTab.reloadNonce || 0}`}
                        containerId={activeTab.docker.containerId}
                        containerName={activeTab.docker.name} />
           : activeTab.remote
-            ? <RemoteTab key={`remote-${activeTab.id}`} config={activeTab.remote} />
+            ? <RemoteTab key={`remote-${activeTab.id}-${activeTab.reloadNonce || 0}`} config={activeTab.remote} />
             : activeTab.filePath
-            ? <LogTab key={`${activeTab.id}-${activeTab.filePath}`}
+            ? <LogTab key={`${activeTab.id}-${activeTab.filePath}-${activeTab.reloadNonce || 0}`}
                       filePath={activeTab.filePath}
                       fileName={activeTab.label}
                       fileSize={activeTab.fileSize}

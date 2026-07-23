@@ -412,6 +412,34 @@ ipcMain.handle("export:text", async (_e, payload) => {
   return filePath;
 });
 
+/* ─── Tab context menu ─── */
+ipcMain.handle("tabmenu:show", (event, payload) => {
+  const { tabId, filePath, hasContent, tabCount, canCloseRight, x, y } = payload || {};
+
+  function sendAction(action) {
+    if (!event.sender.isDestroyed()) event.sender.send("tabmenu:action", { tabId, action });
+  }
+
+  const template = [];
+  if (filePath) {
+    template.push({ label: "Abrir ubicación del archivo", click: () => shell.showItemInFolder(filePath) });
+    template.push({ label: "Copiar ruta del archivo", click: () => clipboard.writeText(filePath) });
+    template.push({ type: "separator" });
+  }
+  if (hasContent) {
+    template.push({ label: "Duplicar bitácora", click: () => sendAction("duplicate") });
+    template.push({ label: "Recargar bitácora", click: () => sendAction("reload") });
+    template.push({ type: "separator" });
+  }
+  template.push({ label: "Renombrar pestaña", click: () => sendAction("rename") });
+  template.push({ type: "separator" });
+  template.push({ label: "Cerrar otras pestañas", enabled: tabCount > 1, click: () => sendAction("close-others") });
+  template.push({ label: "Cerrar pestañas a la derecha", enabled: !!canCloseRight, click: () => sendAction("close-right") });
+
+  const win = BrowserWindow.fromWebContents(event.sender);
+  Menu.buildFromTemplate(template).popup({ window: win || undefined, x, y });
+});
+
 /* ─── Docker ─── */
 const DOCKER_SOCKET = process.platform === "win32"
   ? "//./pipe/docker_engine"
@@ -448,12 +476,15 @@ ipcMain.handle("docker:list", async (event) => {
   }
 });
 
-const dockerStreams = new Map(); // containerId → { proc, stopped }
+const dockerStreams = new Map(); // streamId → { proc, stopped }
 
-ipcMain.handle("docker:logs:start", (event, containerId) => {
+ipcMain.handle("docker:logs:start", (event, payload) => {
+  const streamId = payload?.streamId;
+  const containerId = payload?.containerId;
+  if (!streamId || !containerId) throw new Error("Invalid docker stream request");
   const shortId = containerId.slice(0, 12);
   logEntry("INFO", "docker", `Iniciando stream: ${shortId}`);
-  stopDockerStream(containerId);
+  stopDockerStream(streamId);
 
   const proc = spawn("docker", ["logs", "--follow", "--tail=500", containerId], {
     windowsHide: true,
@@ -473,7 +504,7 @@ ipcMain.handle("docker:logs:start", (event, containerId) => {
     const parts = lineBuf.split("\n");
     lineBuf = parts.pop();
     const complete = parts.filter(Boolean);
-    if (complete.length) { hadLines = true; send("docker:lines", containerId, complete.join("\n")); }
+    if (complete.length) { hadLines = true; send("docker:lines", streamId, complete.join("\n")); }
   }
 
   proc.stdout.on("data", flushLines);
@@ -481,11 +512,11 @@ ipcMain.handle("docker:logs:start", (event, containerId) => {
 
   proc.on("spawn", () => {
     logEntry("INFO", "docker", `Proceso iniciado: ${shortId}`);
-    send("docker:spawned", containerId);
+    send("docker:spawned", streamId);
   });
 
   proc.on("close", (code) => {
-    dockerStreams.delete(containerId);
+    dockerStreams.delete(streamId);
     // Killed intentionally (tab closed, stop button, React StrictMode cleanup) — not an error
     if (stream.stopped) {
       logEntry("INFO", "docker", `Stream ${shortId} detenido`);
@@ -497,35 +528,35 @@ ipcMain.handle("docker:logs:start", (event, containerId) => {
       logEntry("ERROR", "docker", `Stream ${shortId} terminó con código ${code}`);
       const msg = `docker logs terminó con código ${code}`;
       showErrorAlert(event.sender, "docker", "Error en logs Docker", msg);
-      send("docker:error", containerId, msg);
+      send("docker:error", streamId, msg);
     } else {
       logEntry("INFO", "docker", `Stream ${shortId} terminado (código ${code})`);
-      send("docker:end", containerId);
+      send("docker:end", streamId);
     }
   });
 
   proc.on("error", (e) => {
-    dockerStreams.delete(containerId);
+    dockerStreams.delete(streamId);
     if (stream.stopped) return;
     logEntry("ERROR", "docker", `Error proceso ${shortId}: ${e.message}`);
     showErrorAlert(event.sender, "docker", "Error en logs Docker", e.message);
-    send("docker:error", containerId, e.message);
+    send("docker:error", streamId, e.message);
   });
 
-  dockerStreams.set(containerId, stream);
+  dockerStreams.set(streamId, stream);
 });
 
-ipcMain.handle("docker:logs:stop", (_e, containerId) => {
-  logEntry("INFO", "docker", `Stream detenido manualmente: ${containerId.slice(0, 12)}`);
-  stopDockerStream(containerId);
+ipcMain.handle("docker:logs:stop", (_e, streamId) => {
+  logEntry("INFO", "docker", `Stream detenido manualmente: ${streamId}`);
+  stopDockerStream(streamId);
 });
 
-function stopDockerStream(containerId) {
-  const stream = dockerStreams.get(containerId);
+function stopDockerStream(streamId) {
+  const stream = dockerStreams.get(streamId);
   if (!stream) return;
   stream.stopped = true;
   try { stream.proc.kill(); } catch {}
-  dockerStreams.delete(containerId);
+  dockerStreams.delete(streamId);
 }
 
 /* ─── Remote logs: SSH / WSL tail -F ─── */
