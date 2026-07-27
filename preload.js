@@ -1,9 +1,10 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
   openFileDialog: () => ipcRenderer.invoke("dialog:open"),
   openSshKeyDialog: () => ipcRenderer.invoke("dialog:ssh-key"),
   statFile:  (p) => ipcRenderer.invoke("file:stat", p),
+  getPathForFile: (file) => webUtils.getPathForFile(file),
 
   readFile(filePath, { onChunk, onProgress, onDone, onError }) {
     const readId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -54,6 +55,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onMenuOpenFile: (cb) => { ipcRenderer.on("menu:open-file", cb); return () => ipcRenderer.removeListener("menu:open-file", cb); },
   onMenuNewTab:   (cb) => { ipcRenderer.on("menu:new-tab",   cb); return () => ipcRenderer.removeListener("menu:new-tab",   cb); },
   onMenuAbout:    (cb) => { ipcRenderer.on("menu:about",     cb); return () => ipcRenderer.removeListener("menu:about",     cb); },
+  onMenuSplitRight: (cb) => { ipcRenderer.on("menu:split-right", cb); return () => ipcRenderer.removeListener("menu:split-right", cb); },
+  onMenuSplitDown:  (cb) => { ipcRenderer.on("menu:split-down",  cb); return () => ipcRenderer.removeListener("menu:split-down",  cb); },
+  onMenuSplitClose: (cb) => { ipcRenderer.on("menu:split-close", cb); return () => ipcRenderer.removeListener("menu:split-close", cb); },
 
   getCapabilities: () => ipcRenderer.invoke("system:capabilities"),
   copyText: (text) => ipcRenderer.invoke("clipboard:writeText", text),

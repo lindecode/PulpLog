@@ -188,6 +188,13 @@ function buildMenu(win) {
       { type:"separator" },
       { role:"resetZoom" }, { role:"zoomIn" }, { role:"zoomOut" },
       { type:"separator" }, { role:"togglefullscreen", label:"Pantalla completa" },
+      { type:"separator" },
+      { label:"Dividir a la derecha", accelerator:"CmdOrCtrl+\\",
+        click: () => win.webContents.send("menu:split-right") },
+      { label:"Dividir abajo", accelerator:"CmdOrCtrl+Shift+\\",
+        click: () => win.webContents.send("menu:split-down") },
+      { label:"Cerrar división", accelerator:"CmdOrCtrl+Alt+\\",
+        click: () => win.webContents.send("menu:split-close") },
     ]},
     { label:"Ayuda", submenu:[
       { label:"GitHub", click: () => shell.openExternal("https://github.com/lindecode/PulpLog") },
@@ -414,10 +421,10 @@ ipcMain.handle("export:text", async (_e, payload) => {
 
 /* ─── Tab context menu ─── */
 ipcMain.handle("tabmenu:show", (event, payload) => {
-  const { tabId, filePath, hasContent, tabCount, canCloseRight, x, y } = payload || {};
+  const { tabId, paneId, filePath, hasContent, tabCount, canCloseRight, groupStart, x, y } = payload || {};
 
   function sendAction(action) {
-    if (!event.sender.isDestroyed()) event.sender.send("tabmenu:action", { tabId, action });
+    if (!event.sender.isDestroyed()) event.sender.send("tabmenu:action", { tabId, paneId, action });
   }
 
   const template = [];
@@ -432,6 +439,10 @@ ipcMain.handle("tabmenu:show", (event, payload) => {
     template.push({ type: "separator" });
   }
   template.push({ label: "Renombrar pestaña", click: () => sendAction("rename") });
+  template.push({
+    label: groupStart ? "Quitar separador de grupo" : "Iniciar grupo aquí",
+    click: () => sendAction("toggle-group-start"),
+  });
   template.push({ type: "separator" });
   template.push({ label: "Cerrar otras pestañas", enabled: tabCount > 1, click: () => sendAction("close-others") });
   template.push({ label: "Cerrar pestañas a la derecha", enabled: !!canCloseRight, click: () => sendAction("close-right") });
@@ -848,21 +859,46 @@ function stopRemoteStream(streamId) {
 function getSettingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
 }
+function normalizePaneTabs(tabsArr) {
+  return Array.isArray(tabsArr)
+    ? tabsArr
+        .filter(t => t && typeof t.filePath === "string")
+        .map(t => ({
+          filePath: t.filePath,
+          label: typeof t.label === "string" ? t.label : path.basename(t.filePath),
+          fileSize: Number.isFinite(t.fileSize) ? t.fileSize : null,
+          groupStart: Boolean(t.groupStart),
+        }))
+    : [];
+}
+
 function normalizeSettings(value) {
   const s = value && typeof value === "object" ? value : {};
   const language = ["es", "en"].includes(s.language) ? s.language : "es";
+
+  let panes;
+  if (Array.isArray(s.panes)) {
+    panes = s.panes.slice(0, 2).map(p => ({ tabs: normalizePaneTabs(p?.tabs) }));
+  } else if (Array.isArray(s.sessionTabs)) {
+    // migration: pre-split-view flat sessionTabs → single pane
+    panes = [{ tabs: normalizePaneTabs(s.sessionTabs) }];
+  } else {
+    panes = [{ tabs: [] }];
+  }
+  if (panes.length === 0) panes = [{ tabs: [] }];
+
+  const splitDirection = ["row", "column"].includes(s.splitDirection) && panes.length === 2
+    ? s.splitDirection
+    : null;
+  const splitRatio = Number.isFinite(s.splitRatio) ? Math.min(Math.max(s.splitRatio, 0.15), 0.85) : 0.5;
+
+  const { sessionTabs, ...rest } = s;
   return {
-    ...s,
+    ...rest,
     recentFiles: Array.isArray(s.recentFiles) ? s.recentFiles.filter(f => typeof f === "string") : [],
-    sessionTabs: Array.isArray(s.sessionTabs)
-      ? s.sessionTabs
-          .filter(t => t && typeof t.filePath === "string")
-          .map(t => ({
-            filePath: t.filePath,
-            label: typeof t.label === "string" ? t.label : path.basename(t.filePath),
-            fileSize: Number.isFinite(t.fileSize) ? t.fileSize : null,
-          }))
-      : [],
+    panes,
+    splitDirection,
+    splitRatio,
     autoScrollDefault: Boolean(s.autoScrollDefault),
     showNumsDefault: s.showNumsDefault !== false,
     language,

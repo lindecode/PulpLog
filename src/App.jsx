@@ -103,6 +103,9 @@ const T = {
     about_btn:       "Acerca de",
     about_title:     "Acerca de PulpLog",
     welcome_tab:     "Bienvenida",
+    split_right_title: "Dividir a la derecha",
+    split_down_title:  "Dividir abajo",
+    split_close_title: "Cerrar división",
   },
   en: {
     bm_add:          "Bookmark line",
@@ -196,6 +199,9 @@ const T = {
     about_btn:       "About",
     about_title:     "About PulpLog",
     welcome_tab:     "Welcome",
+    split_right_title: "Split right",
+    split_down_title:  "Split down",
+    split_close_title: "Close split",
   },
 };
 
@@ -1719,54 +1725,28 @@ function RemoteTab({ config }) {
 ═══════════════════════════════════════════ */
 let nextId = 1;
 
-export default function App() {
-  const [tabs,         setTabs]        = useState([{ id: nextId++, label:"$welcome", filePath:null, fileSize:null }]);
-  const [active,       setActive]      = useState(1);
-  const [about,        setAbout]       = useState(false);
-  const [dockerPicker, setDockerPicker]= useState(false);
-  const [remotePicker, setRemotePicker]= useState(false);
-  const [diagOpen,     setDiagOpen]    = useState(false);
-  const [settingsOpen, setSettingsOpen]= useState(false);
-  const [renamingTabId, setRenamingTabId] = useState(null);
-  const [capabilities, setCapabilities]= useState(null);
-  const [settings,     setSettings]    = useState({
-    recentFiles:[], autoScrollDefault:false, showNumsDefault:true, language:"es", sessionTabs:[]
-  });
+/* ═══════════════════════════════════════════
+   usePaneTabs — one independent tab list + all
+   its tab-management actions. Called twice (pane
+   A / pane B) from App() so each pane owns its
+   own tabs/active/reopen-stack.
+═══════════════════════════════════════════ */
+function usePaneTabs(setSettings) {
+  const [tabs,          setTabs]         = useState(() => [{ id: nextId++, label:"$welcome", filePath:null, fileSize:null }]);
+  const [active,        setActive]       = useState(() => tabs[0].id);
+  const [dockerPicker,  setDockerPicker] = useState(false);
+  const [remotePicker,  setRemotePicker] = useState(false);
+  const [renamingTabId, setRenamingTabId]= useState(null);
   const fileRef       = useRef(null);
   const closedTabsRef = useRef([]);   // stack for reopen-last-tab
   const activeRef     = useRef(active);
   useEffect(() => { activeRef.current = active; }, [active]);
 
-  useEffect(() => {
-    if (!IS_ELECTRON) return;
-    let alive = true;
-    window.electronAPI.getCapabilities()
-      .then(caps => { if (alive) setCapabilities(caps); })
-      .catch(() => { if (alive) setCapabilities({}); });
-    return () => { alive = false; };
-  }, []);
-
-  /* ── Translation function ── */
-  const t = useCallback((key, ...args) => {
-    const lang = settings.language || "es";
-    const entry = (T[lang] ?? T.es)[key] ?? T.es[key] ?? key;
-    return typeof entry === "function" ? entry(...args) : entry;
-  }, [settings.language]);
-
-  const savePref = useCallback((key, val) => {
-    setSettings(prev => ({ ...prev, [key]: val }));
-    if (IS_ELECTRON) window.electronAPI.setSettings({ [key]: val });
-  }, []);
-
-  const removeRecent = useCallback(async (fp) => {
-    const recent = await window.electronAPI.removeRecentFile(fp);
-    setSettings(prev => ({ ...prev, recentFiles: recent }));
-  }, []);
-
-  const clearAllRecent = useCallback(async () => {
-    await window.electronAPI.setSettings({ recentFiles: [] });
-    setSettings(prev => ({ ...prev, recentFiles: [] }));
-  }, []);
+  const addTab = (label, filePath, fileSize) => {
+    const id = nextId++;
+    setTabs(p => [...p, { id, label, filePath, fileSize }]);
+    setActive(id);
+  };
 
   const openFileByPath = useCallback(async (fp) => {
     const stat  = await window.electronAPI.statFile(fp);
@@ -1774,7 +1754,7 @@ export default function App() {
     addTab(label, fp, stat?.size ?? null);
     const recent = await window.electronAPI.addRecentFile(fp);
     setSettings(prev => ({ ...prev, recentFiles: recent }));
-  }, []);
+  }, [setSettings]);
 
   const openFile = useCallback(async () => {
     if (IS_ELECTRON) {
@@ -1785,12 +1765,6 @@ export default function App() {
       fileRef.current?.click();
     }
   }, [openFileByPath]);
-
-  const addTab = (label, filePath, fileSize) => {
-    const id = nextId++;
-    setTabs(p => [...p, { id, label, filePath, fileSize }]);
-    setActive(id);
-  };
 
   const openDockerTab = (containerId, name) => {
     const id = nextId++;
@@ -1887,107 +1861,88 @@ export default function App() {
     if (activeWasRemoved) setActive(tabId);
   };
 
-  /* ── Mount: load settings, restore session or open initial file arg ── */
+  // exact behavior of the former inline global-shortcut handlers, now reusable
+  const closeActiveTab = () => closeTab(activeRef.current);
+
+  const reopenLastClosedTab = () => {
+    const last = closedTabsRef.current.pop();
+    if (!last) return;
+    const id = nextId++;
+    setTabs(p => [...p, { id, label: last.label, filePath: last.filePath, fileSize: last.fileSize }]);
+    setActive(id);
+  };
+
+  const toggleGroupStart = (tabId) => {
+    setTabs(prev => prev.map(t => t.id === tabId ? { ...t, groupStart: !t.groupStart } : t));
+  };
+
+  const reorderTab = (draggedId, targetId) => {
+    setTabs(prev => {
+      const from = prev.findIndex(t => t.id === draggedId);
+      const to   = prev.findIndex(t => t.id === targetId);
+      if (from === -1 || to === -1 || from === to) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  };
+
+  return {
+    tabs, setTabs, active, setActive,
+    dockerPicker, setDockerPicker, remotePicker, setRemotePicker,
+    renamingTabId, setRenamingTabId, fileRef, closedTabsRef, activeRef,
+    addTab, openDockerTab, openRemoteTab, openFile, openFileByPath,
+    closeTab, duplicateTab, reloadTab, renameTab,
+    closeOtherTabs, closeTabsToRight, closeActiveTab, reopenLastClosedTab,
+    toggleGroupStart, reorderTab,
+  };
+}
+
+/* ═══════════════════════════════════════════
+   Pane — one pane's tab bar + content. Two of
+   these are rendered by App() (side by side or
+   stacked) when split, one when not.
+═══════════════════════════════════════════ */
+function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
+  const t = useLang();
+  const {
+    tabs, active, setActive,
+    dockerPicker, setDockerPicker, remotePicker, setRemotePicker,
+    renamingTabId, setRenamingTabId, fileRef,
+    addTab, openDockerTab, openRemoteTab, openFile, openFileByPath,
+    closeTab, duplicateTab, reloadTab, renameTab,
+    closeOtherTabs, closeTabsToRight, closeActiveTab, reopenLastClosedTab,
+    toggleGroupStart, reorderTab,
+  } = pane;
+
+  const isFocusedRef = useRef(focused);
+  useEffect(() => { isFocusedRef.current = focused; }, [focused]);
+
   useEffect(() => {
     if (!IS_ELECTRON) return;
-    let alive = true;
-    (async () => {
-      const s = await window.electronAPI.getSettings();
-      if (!alive) return;
-      setSettings(prev => ({ ...prev, ...s, recentFiles: s.recentFiles || [] }));
-
-      const initialArg = await window.electronAPI.getInitialFileArg();
-      if (!alive) return;
-
-      if (initialArg) {
-        const stat  = await window.electronAPI.statFile(initialArg);
-        const label = initialArg.split(/[\\/]/).pop();
-        const id    = nextId++;
-        setTabs(prev => [...prev, { id, label, filePath: initialArg, fileSize: stat?.size ?? null }]);
-        setActive(id);
-        const recent = await window.electronAPI.addRecentFile(initialArg);
-        if (alive) setSettings(prev => ({ ...prev, recentFiles: recent }));
-      } else if (s.sessionTabs?.length) {
-        const valid = [];
-        for (const st of s.sessionTabs) {
-          const stat = await window.electronAPI.statFile(st.filePath);
-          if (stat) valid.push({ ...st, fileSize: st.fileSize ?? stat.size });
-        }
-        if (valid.length && alive) {
-          const entries = valid.map(st => ({
-            id: nextId++, label: st.label, filePath: st.filePath, fileSize: st.fileSize,
-          }));
-          setTabs(prev => [...prev, ...entries]);
-          setActive(entries[entries.length - 1].id);
-        }
-      }
-    })();
-    const unsub = window.electronAPI.onOpenFileArg(fp => openFileByPath(fp));
-    return () => { alive = false; unsub?.(); };
+    const cleanOpenFile = window.electronAPI.onMenuOpenFile(() => { if (isFocusedRef.current) openFile(); });
+    const cleanNewTab   = window.electronAPI.onMenuNewTab(()   => { if (isFocusedRef.current) openFile(); });
+    return () => { cleanOpenFile?.(); cleanNewTab?.(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ── Persist open file tabs as session on every tab change ── */
   useEffect(() => {
     if (!IS_ELECTRON) return;
-    const timer = setTimeout(() => {
-      const session = tabs
-        .filter(tb => tb.filePath && tb.filePath !== "__web__")
-        .map(tb => ({ filePath: tb.filePath, label: tb.label, fileSize: tb.fileSize }));
-      window.electronAPI.setSettings({ sessionTabs: session });
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [tabs]);
-
-  useEffect(() => {
-    if (!IS_ELECTRON) return;
-    const cleanOpenFile = window.electronAPI.onMenuOpenFile(() => openFile());
-    const cleanNewTab = window.electronAPI.onMenuNewTab(() => openFile());
-    const cleanAbout = window.electronAPI.onMenuAbout(() => setAbout(true));
-    return () => { cleanOpenFile?.(); cleanNewTab?.(); cleanAbout?.(); };
-  }, [openFile]);
-
-  /* ── Global OS shortcuts (Super+Shift+…) ── */
-  useEffect(() => {
-    if (!IS_ELECTRON) return;
-
-    const cleanClose = window.electronAPI.onGlobalCloseTab(() => {
-      const id = activeRef.current;
-      setTabs(prev => {
-        const idx = prev.findIndex(t => t.id === id);
-        const tab = prev[idx];
-        if (tab?.filePath && tab.filePath !== "__web__")
-          closedTabsRef.current.push({ label: tab.label, filePath: tab.filePath, fileSize: tab.fileSize });
-        const next = prev.filter(t => t.id !== id);
-        if (next.length === 0) {
-          const newId = nextId++;
-          setActive(newId);
-          return [{ id: newId, label:"$welcome", filePath:null }];
-        }
-        setActive(a => a === id ? next[Math.min(idx, next.length - 1)].id : a);
-        return next;
-      });
-    });
-
-    const cleanReopen = window.electronAPI.onGlobalReopenTab(() => {
-      const last = closedTabsRef.current.pop();
-      if (!last) return;
-      const id = nextId++;
-      setTabs(p => [...p, { id, label: last.label, filePath: last.filePath, fileSize: last.fileSize }]);
-      setActive(id);
-    });
-
+    const cleanClose  = window.electronAPI.onGlobalCloseTab(()  => { if (isFocusedRef.current) closeActiveTab(); });
+    const cleanReopen = window.electronAPI.onGlobalReopenTab(() => { if (isFocusedRef.current) reopenLastClosedTab(); });
     return () => { cleanClose?.(); cleanReopen?.(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ── Tab context menu actions ── */
   useEffect(() => {
     if (!IS_ELECTRON) return;
-    const cleanup = window.electronAPI.onTabMenuAction(({ tabId, action }) => {
+    const cleanup = window.electronAPI.onTabMenuAction(({ tabId, paneId: targetPane, action }) => {
+      if (targetPane !== paneId) return;
       if (action === "duplicate") duplicateTab(tabId);
       else if (action === "reload") reloadTab(tabId);
       else if (action === "rename") setRenamingTabId(tabId);
       else if (action === "close-others") closeOtherTabs(tabId);
       else if (action === "close-right") closeTabsToRight(tabId);
+      else if (action === "toggle-group-start") toggleGroupStart(tabId);
     });
     return () => cleanup?.();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1999,27 +1954,62 @@ export default function App() {
   const dockerEnabled = !!dockerCap?.available;
   const remoteEnabled = true;
 
-  return (
-    <LangCtx.Provider value={t}>
-      <div style={{ display:"flex", flexDirection:"column", height:"100vh",
-                    background:"#0a0a0a", color:"#ccc", overflow:"hidden",
-                    fontFamily:"'JetBrains Mono','Fira Code','Cascadia Code',monospace" }}>
+  const handleFileDrop = (e) => {
+    const files = e.dataTransfer?.files;
+    if (!files || !files.length) return;
+    e.preventDefault();
+    onFocus();
+    if (IS_ELECTRON) {
+      Array.from(files).forEach(file => {
+        let fp;
+        try { fp = window.electronAPI.getPathForFile(file); } catch { fp = null; }
+        if (fp) openFileByPath(fp);
+      });
+    } else {
+      const file = files[0];
+      window.__pendingFile = file;
+      addTab(file.name, "__web__", file.size);
+    }
+  };
 
-        {/* tab bar */}
-        <div style={{ display:"flex", alignItems:"stretch", background:"#0f0f0f",
-                      borderBottom:"0.5px solid #1e1e1e", flexShrink:0, overflowX:"auto" }}>
-          {tabs.map((tab, idx) => (
-            <div key={tab.id}
+  return (
+    <div onMouseDownCapture={onFocus} onFocusCapture={onFocus}
+         onDragOver={e => e.preventDefault()}
+         onDrop={handleFileDrop}
+         style={{ display:"flex", flexDirection:"column", flex:1, minWidth:0, minHeight:0, overflow:"hidden" }}>
+
+      {/* tab bar */}
+      <div style={{ display:"flex", alignItems:"stretch", background:"#0f0f0f",
+                    borderBottom:"0.5px solid #1e1e1e", flexShrink:0, overflowX:"auto" }}>
+        {tabs.map((tab, idx) => (
+          <div key={tab.id} style={{ display:"flex", alignItems:"stretch" }}>
+            {tab.groupStart && idx > 0 && (
+              <div style={{ width:2, alignSelf:"stretch", background:"#3a3a3a", flexShrink:0 }} />
+            )}
+            <div
+              draggable={renamingTabId !== tab.id}
+              onDragStart={e => {
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", String(tab.id));
+              }}
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => {
+                e.preventDefault();
+                const draggedId = Number(e.dataTransfer.getData("text/plain"));
+                if (draggedId && draggedId !== tab.id) reorderTab(draggedId, tab.id);
+              }}
               onClick={() => setActive(tab.id)}
               onContextMenu={e => {
                 e.preventDefault();
                 if (!IS_ELECTRON) return;
                 window.electronAPI.showTabContextMenu({
                   tabId: tab.id,
+                  paneId,
                   filePath: tab.filePath && tab.filePath !== "__web__" ? tab.filePath : null,
                   hasContent: !!(tab.docker || tab.remote || (tab.filePath && tab.filePath !== "__web__")),
                   tabCount: tabs.length,
                   canCloseRight: idx < tabs.length - 1,
+                  groupStart: !!tab.groupStart,
                   x: e.clientX,
                   y: e.clientY,
                 });
@@ -2033,6 +2023,7 @@ export default function App() {
               style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 14px",
                        borderRight:"0.5px solid #1e1e1e", cursor:"pointer", flexShrink:0,
                        fontSize:12, maxWidth:200, overflow:"hidden",
+                       WebkitUserDrag:"element", userSelect:"none",
                        background: tab.id===active ? "#111":"transparent",
                        color:      tab.id===active ? "#ccc":"#555",
                        borderBottom: tab.id===active ? "1.5px solid #2a7faa":"1.5px solid transparent" }}>
@@ -2060,35 +2051,271 @@ export default function App() {
                   onClick={e => { e.stopPropagation(); closeTab(tab.id); }}>✕</span>
               )}
             </div>
-          ))}
+          </div>
+        ))}
 
-          <button onClick={openFile}
-            style={{ background:"transparent", border:"none", color:"#444",
-                     padding:"0 14px", cursor:"pointer", fontSize:18,
+        <button onClick={openFile}
+          style={{ background:"transparent", border:"none", color:"#444",
+                   padding:"0 14px", cursor:"pointer", fontSize:18,
+                   borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+          title={t("open_file_title")}>+</button>
+
+        {IS_ELECTRON && (
+          <button onClick={() => dockerEnabled && setDockerPicker(true)}
+            disabled={!dockerEnabled}
+            style={{ background:"transparent", border:"none", color: dockerEnabled ? "#2a6a2a" : "#333",
+                     padding:"0 14px", cursor: dockerEnabled ? "pointer" : "not-allowed", fontSize:14,
                      borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
-            title={t("open_file_title")}>+</button>
+            title={dockerEnabled ? t("docker_btn_title") : (dockerCap?.reason || t("capability_checking"))}>
+            🐳
+          </button>
+        )}
 
-          {IS_ELECTRON && (
-            <button onClick={() => dockerEnabled && setDockerPicker(true)}
-              disabled={!dockerEnabled}
-              style={{ background:"transparent", border:"none", color: dockerEnabled ? "#2a6a2a" : "#333",
-                       padding:"0 14px", cursor: dockerEnabled ? "pointer" : "not-allowed", fontSize:14,
+        {IS_ELECTRON && (
+          <button onClick={() => remoteEnabled && setRemotePicker(true)}
+            disabled={!remoteEnabled}
+            style={{ background:"transparent", border:"none", color: remoteEnabled ? "#6a6aaa" : "#333",
+                     padding:"0 14px", cursor: remoteEnabled ? "pointer" : "not-allowed", fontSize:12,
+                     borderRight:"0.5px solid #1e1e1e", flexShrink:0,
+                     fontFamily:"inherit", fontWeight:700 }}
+            title={remoteEnabled ? t("remote_btn_title") : (sshCap?.reason || wslCap?.reason || t("capability_checking"))}>
+            SSH
+          </button>
+        )}
+
+        {!IS_ELECTRON && (
+          <input ref={fileRef} type="file" accept=".log,.txt,.out" style={{ display:"none" }}
+            onChange={e => {
+              const f = e.target.files[0];
+              if (!f) return;
+              window.__pendingFile = f;
+              addTab(f.name, "__web__", f.size);
+            }} />
+        )}
+      </div>
+
+      {activeTab.docker
+        ? <DockerTab key={`docker-${activeTab.id}-${activeTab.reloadNonce || 0}`}
+                     containerId={activeTab.docker.containerId}
+                     containerName={activeTab.docker.name} />
+        : activeTab.remote
+          ? <RemoteTab key={`remote-${activeTab.id}-${activeTab.reloadNonce || 0}`} config={activeTab.remote} />
+          : activeTab.filePath
+          ? <LogTab key={`${activeTab.id}-${activeTab.filePath}-${activeTab.reloadNonce || 0}`}
+                    filePath={activeTab.filePath}
+                    fileName={activeTab.label}
+                    fileSize={activeTab.fileSize}
+                    autoScrollDefault={settings.autoScrollDefault}
+                    showNumsDefault={settings.showNumsDefault} />
+          : <Welcome onOpen={openFile} isElectron={IS_ELECTRON}
+                     recentFiles={settings.recentFiles}
+                     onOpenRecent={openFileByPath} />
+      }
+
+      {dockerPicker && <DockerPicker onSelect={openDockerTab} onClose={() => setDockerPicker(false)} />}
+      {remotePicker && <RemotePicker onSelect={openRemoteTab} onClose={() => setRemotePicker(false)} capabilities={capabilities} />}
+    </div>
+  );
+}
+
+export default function App() {
+  const [about,        setAbout]       = useState(false);
+  const [diagOpen,     setDiagOpen]    = useState(false);
+  const [settingsOpen, setSettingsOpen]= useState(false);
+  const [capabilities, setCapabilities]= useState(null);
+  const [settings,     setSettings]    = useState({
+    recentFiles:[], autoScrollDefault:false, showNumsDefault:true, language:"es"
+  });
+  const [splitDirection, setSplitDirection] = useState(null); // null | "row" | "column"
+  const [splitRatio,     setSplitRatio]     = useState(0.5);
+  const [focusedPane,    setFocusedPane]    = useState("A");   // "A" | "B" — transient, not persisted
+  const containerRef = useRef(null);
+
+  const paneA = usePaneTabs(setSettings);
+  const paneB = usePaneTabs(setSettings);
+
+  // Safety net: without this, dropping a file anywhere it isn't explicitly
+  // handled (e.g. the chrome bar) makes Chromium navigate the window to
+  // that file:// path instead of doing nothing.
+  useEffect(() => {
+    const prevent = (e) => e.preventDefault();
+    window.addEventListener("dragover", prevent);
+    window.addEventListener("drop", prevent);
+    return () => {
+      window.removeEventListener("dragover", prevent);
+      window.removeEventListener("drop", prevent);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!IS_ELECTRON) return;
+    let alive = true;
+    window.electronAPI.getCapabilities()
+      .then(caps => { if (alive) setCapabilities(caps); })
+      .catch(() => { if (alive) setCapabilities({}); });
+    return () => { alive = false; };
+  }, []);
+
+  /* ── Translation function ── */
+  const t = useCallback((key, ...args) => {
+    const lang = settings.language || "es";
+    const entry = (T[lang] ?? T.es)[key] ?? T.es[key] ?? key;
+    return typeof entry === "function" ? entry(...args) : entry;
+  }, [settings.language]);
+
+  const savePref = useCallback((key, val) => {
+    setSettings(prev => ({ ...prev, [key]: val }));
+    if (IS_ELECTRON) window.electronAPI.setSettings({ [key]: val });
+  }, []);
+
+  const removeRecent = useCallback(async (fp) => {
+    const recent = await window.electronAPI.removeRecentFile(fp);
+    setSettings(prev => ({ ...prev, recentFiles: recent }));
+  }, []);
+
+  const clearAllRecent = useCallback(async () => {
+    await window.electronAPI.setSettings({ recentFiles: [] });
+    setSettings(prev => ({ ...prev, recentFiles: [] }));
+  }, []);
+
+  const closeSplit = () => {
+    let contentTabs = [];
+    let newWelcomeId = null;
+    paneB.setTabs(prev => {
+      contentTabs = prev.filter(t => t.filePath || t.docker || t.remote);
+      newWelcomeId = nextId++;
+      return [{ id: newWelcomeId, label:"$welcome", filePath:null, fileSize:null }];
+    });
+    paneB.setActive(newWelcomeId);
+    if (contentTabs.length) paneA.setTabs(prev => [...prev, ...contentTabs]);
+    setSplitDirection(null);
+    setFocusedPane("A");
+  };
+
+  const startDividerDrag = (e) => {
+    e.preventDefault();
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    document.body.style.userSelect = "none";
+    const onMove = (ev) => {
+      const pos  = splitDirection === "column" ? ev.clientY - rect.top : ev.clientX - rect.left;
+      const size = splitDirection === "column" ? rect.height : rect.width;
+      setSplitRatio(Math.min(0.85, Math.max(0.15, pos / size)));
+    };
+    const onUp = () => {
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  /* ── Mount: load settings, restore session (both panes) or open initial file arg ── */
+  useEffect(() => {
+    if (!IS_ELECTRON) return;
+    let alive = true;
+    (async () => {
+      const s = await window.electronAPI.getSettings();
+      if (!alive) return;
+      setSettings(prev => ({ ...prev, ...s, recentFiles: s.recentFiles || [] }));
+
+      const initialArg = await window.electronAPI.getInitialFileArg();
+      if (!alive) return;
+
+      if (initialArg) {
+        const stat  = await window.electronAPI.statFile(initialArg);
+        const label = initialArg.split(/[\\/]/).pop();
+        const id    = nextId++;
+        paneA.setTabs(prev => [...prev, { id, label, filePath: initialArg, fileSize: stat?.size ?? null }]);
+        paneA.setActive(id);
+        const recent = await window.electronAPI.addRecentFile(initialArg);
+        if (alive) setSettings(prev => ({ ...prev, recentFiles: recent }));
+      } else if (s.panes?.length) {
+        const restorePane = async (entries, setTabs, setActive) => {
+          const valid = [];
+          for (const st of entries || []) {
+            const stat = await window.electronAPI.statFile(st.filePath);
+            if (stat) valid.push({ ...st, fileSize: st.fileSize ?? stat.size });
+          }
+          if (!valid.length || !alive) return;
+          const tabEntries = valid.map(st => ({
+            id: nextId++, label: st.label, filePath: st.filePath, fileSize: st.fileSize, groupStart: !!st.groupStart,
+          }));
+          setTabs(prev => [...prev, ...tabEntries]);
+          setActive(tabEntries[tabEntries.length - 1].id);
+        };
+        await restorePane(s.panes[0]?.tabs, paneA.setTabs, paneA.setActive);
+        if (s.splitDirection && s.panes[1]?.tabs?.length) {
+          await restorePane(s.panes[1].tabs, paneB.setTabs, paneB.setActive);
+          setSplitDirection(s.splitDirection);
+          setSplitRatio(s.splitRatio ?? 0.5);
+        }
+      }
+    })();
+    const unsub = window.electronAPI.onOpenFileArg(fp => paneA.openFileByPath(fp));
+    return () => { alive = false; unsub?.(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── Persist both panes' tabs + split state on every change ── */
+  useEffect(() => {
+    if (!IS_ELECTRON) return;
+    const timer = setTimeout(() => {
+      const serialize = tabs => tabs
+        .filter(tb => tb.filePath && tb.filePath !== "__web__")
+        .map(tb => ({ filePath: tb.filePath, label: tb.label, fileSize: tb.fileSize, groupStart: !!tb.groupStart }));
+      const panes = [{ tabs: serialize(paneA.tabs) }];
+      if (splitDirection) panes.push({ tabs: serialize(paneB.tabs) });
+      window.electronAPI.setSettings({ panes, splitDirection, splitRatio });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [paneA.tabs, paneB.tabs, splitDirection, splitRatio]);
+
+  useEffect(() => {
+    if (!IS_ELECTRON) return;
+    const cleanAbout = window.electronAPI.onMenuAbout(() => setAbout(true));
+    return () => { cleanAbout?.(); };
+  }, []);
+
+  /* ── Split-view menu commands ── */
+  useEffect(() => {
+    if (!IS_ELECTRON) return;
+    const cleanRight = window.electronAPI.onMenuSplitRight(() => setSplitDirection("row"));
+    const cleanDown  = window.electronAPI.onMenuSplitDown(()  => setSplitDirection("column"));
+    const cleanClose = window.electronAPI.onMenuSplitClose(() => closeSplit());
+    return () => { cleanRight?.(); cleanDown?.(); cleanClose?.(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <LangCtx.Provider value={t}>
+      <div style={{ display:"flex", flexDirection:"column", height:"100vh",
+                    background:"#0a0a0a", color:"#ccc", overflow:"hidden",
+                    fontFamily:"'JetBrains Mono','Fira Code','Cascadia Code',monospace" }}>
+
+        {/* chrome bar */}
+        <div style={{ display:"flex", alignItems:"stretch", background:"#0f0f0f",
+                      borderBottom:"0.5px solid #1e1e1e", flexShrink:0 }}>
+          <button onClick={() => setSplitDirection("row")}
+            style={{ background: splitDirection==="row" ? "#141a24" : "transparent",
+                     border:"none", color: splitDirection==="row" ? "#4a8ac0" : "#444",
+                     padding:"0 14px", cursor:"pointer", fontSize:13,
+                     borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+            title={t("split_right_title")}>⬓</button>
+
+          <button onClick={() => setSplitDirection("column")}
+            style={{ background: splitDirection==="column" ? "#141a24" : "transparent",
+                     border:"none", color: splitDirection==="column" ? "#4a8ac0" : "#444",
+                     padding:"0 14px", cursor:"pointer", fontSize:13,
+                     borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+            title={t("split_down_title")}>▤</button>
+
+          {splitDirection && (
+            <button onClick={closeSplit}
+              style={{ background:"transparent", border:"none", color:"#a05050",
+                       padding:"0 14px", cursor:"pointer", fontSize:13,
                        borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
-              title={dockerEnabled ? t("docker_btn_title") : (dockerCap?.reason || t("capability_checking"))}>
-              🐳
-            </button>
-          )}
-
-          {IS_ELECTRON && (
-            <button onClick={() => remoteEnabled && setRemotePicker(true)}
-              disabled={!remoteEnabled}
-              style={{ background:"transparent", border:"none", color: remoteEnabled ? "#6a6aaa" : "#333",
-                       padding:"0 14px", cursor: remoteEnabled ? "pointer" : "not-allowed", fontSize:12,
-                       borderRight:"0.5px solid #1e1e1e", flexShrink:0,
-                       fontFamily:"inherit", fontWeight:700 }}
-              title={remoteEnabled ? t("remote_btn_title") : (sshCap?.reason || wslCap?.reason || t("capability_checking"))}>
-              SSH
-            </button>
+              title={t("split_close_title")}>✕</button>
           )}
 
           {IS_ELECTRON && (
@@ -2120,35 +2347,31 @@ export default function App() {
             title={t("about_title")}>
             {t("about_btn")}
           </button>
-
-          {!IS_ELECTRON && (
-            <input ref={fileRef} type="file" accept=".log,.txt,.out" style={{ display:"none" }}
-              onChange={e => {
-                const f = e.target.files[0];
-                if (!f) return;
-                window.__pendingFile = f;
-                addTab(f.name, "__web__", f.size);
-              }} />
-          )}
         </div>
 
-        {activeTab.docker
-          ? <DockerTab key={`docker-${activeTab.id}-${activeTab.reloadNonce || 0}`}
-                       containerId={activeTab.docker.containerId}
-                       containerName={activeTab.docker.name} />
-          : activeTab.remote
-            ? <RemoteTab key={`remote-${activeTab.id}-${activeTab.reloadNonce || 0}`} config={activeTab.remote} />
-            : activeTab.filePath
-            ? <LogTab key={`${activeTab.id}-${activeTab.filePath}-${activeTab.reloadNonce || 0}`}
-                      filePath={activeTab.filePath}
-                      fileName={activeTab.label}
-                      fileSize={activeTab.fileSize}
-                      autoScrollDefault={settings.autoScrollDefault}
-                      showNumsDefault={settings.showNumsDefault} />
-            : <Welcome onOpen={openFile} isElectron={IS_ELECTRON}
-                       recentFiles={settings.recentFiles}
-                       onOpenRecent={openFileByPath} />
-        }
+        <div ref={containerRef}
+             style={{ display:"flex", flex:1, minHeight:0, overflow:"hidden",
+                      flexDirection: splitDirection === "column" ? "column" : "row" }}>
+          <div style={{ flexBasis: splitDirection ? `${splitRatio*100}%` : "100%",
+                        minWidth:0, minHeight:0, display:"flex", overflow:"hidden" }}>
+            <Pane paneId="A" focused={focusedPane==="A"} onFocus={() => setFocusedPane("A")}
+                  pane={paneA} capabilities={capabilities} settings={settings} />
+          </div>
+
+          {splitDirection && (
+            <>
+              <div onMouseDown={startDividerDrag}
+                   style={{ [splitDirection==="column" ? "height" : "width"]: 6, flexShrink:0,
+                            cursor: splitDirection==="column" ? "row-resize" : "col-resize",
+                            background:"#1a1a1a" }} />
+              <div style={{ flexBasis: `${(1-splitRatio)*100}%`,
+                            minWidth:0, minHeight:0, display:"flex", overflow:"hidden" }}>
+                <Pane paneId="B" focused={focusedPane==="B"} onFocus={() => setFocusedPane("B")}
+                      pane={paneB} capabilities={capabilities} settings={settings} />
+              </div>
+            </>
+          )}
+        </div>
 
         {diagOpen     && IS_ELECTRON && <DiagPanel onClose={() => setDiagOpen(false)} />}
 
@@ -2156,15 +2379,13 @@ export default function App() {
           <SettingsModal
             settings={settings}
             onClose={() => setSettingsOpen(false)}
-            onOpenFile={openFileByPath}
+            onOpenFile={(focusedPane === "B" ? paneB : paneA).openFileByPath}
             onRemoveRecent={removeRecent}
             onClearRecent={clearAllRecent}
             onTogglePref={savePref}
           />
         )}
-        {about        && <AboutModal onClose={() => setAbout(false)} />}
-        {dockerPicker && <DockerPicker onSelect={openDockerTab} onClose={() => setDockerPicker(false)} />}
-        {remotePicker && <RemotePicker onSelect={openRemoteTab} onClose={() => setRemotePicker(false)} capabilities={capabilities} />}
+        {about && <AboutModal onClose={() => setAbout(false)} />}
       </div>
     </LangCtx.Provider>
   );
