@@ -8,12 +8,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   readFile(filePath, { onChunk, onProgress, onDone, onError }) {
     const readId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const ch = (_e, id, c) => { if (id === readId) onChunk?.(c); };
-    const pg = (_e, id, b) => { if (id === readId) onProgress?.(b); };
+    const ch = (_e, id, c, b) => {
+      if (id === readId) {
+        onChunk?.(c);
+        if (Number.isFinite(b)) onProgress?.(b);
+      }
+    };
     const dn = (_e, id)    => { if (id === readId) { cleanup(); onDone?.(); } };
     const er = (_e, id, m) => { if (id === readId) { cleanup(); onError?.(m); } };
     ipcRenderer.on("file:chunk", ch);
-    ipcRenderer.on("file:progress", pg);
     ipcRenderer.on("file:done",  dn);
     ipcRenderer.on("file:error", er);
     ipcRenderer.invoke("file:read", { readId, filePath }).catch(m => {
@@ -22,7 +25,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
     });
     function cleanup() {
       ipcRenderer.removeListener("file:chunk", ch);
-      ipcRenderer.removeListener("file:progress", pg);
       ipcRenderer.removeListener("file:done",  dn);
       ipcRenderer.removeListener("file:error", er);
     }

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut, clipboard } = require("electron");
 const path = require("path");
 const fs   = require("fs");
+const { StringDecoder } = require("string_decoder");
 const http           = require("http");
 const { execFile, spawn } = require("child_process");
 const { Client: SshClient } = require("ssh2");
@@ -154,9 +155,73 @@ ipcMain.handle("system:capabilities", async () => {
 });
 
 /* ─── window ─── */
-function createWindow() {
+function createSplashWindow() {
+  const splash = new BrowserWindow({
+    width: 360,
+    height: 220,
+    frame: false,
+    resizable: false,
+    movable: true,
+    show: false,
+    center: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    backgroundColor: "#0a0a0a",
+    icon: path.join(__dirname, "assets", "icon.png"),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  const html = `<!doctype html>
+    <html lang="es">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>
+          * { box-sizing: border-box; }
+          html, body { width: 100%; height: 100%; margin: 0; }
+          body {
+            display: grid; place-items: center; overflow: hidden;
+            background: radial-gradient(circle at 50% 30%, #18242b 0, #0d1114 48%, #080909 100%);
+            color: #d7e0e4; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            user-select: none;
+          }
+          main { display: flex; flex-direction: column; align-items: center; }
+          .mark {
+            width: 62px; height: 62px; display: grid; place-items: center;
+            border: 1px solid #2a7faa; border-radius: 15px;
+            background: linear-gradient(145deg, #182c36, #0d171c);
+            color: #65c7ef; font: 700 31px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+            box-shadow: 0 10px 35px rgba(0,0,0,.45), inset 0 0 24px rgba(42,127,170,.12);
+          }
+          h1 { margin: 14px 0 4px; font-size: 20px; letter-spacing: .7px; }
+          p { margin: 0; color: #65737a; font-size: 12px; }
+          .loader { width: 150px; height: 2px; margin-top: 22px; overflow: hidden; background: #182126; }
+          .loader::after {
+            content: ""; display: block; width: 45%; height: 100%; background: #3aa6d6;
+            animation: loading 1.05s ease-in-out infinite;
+          }
+          @keyframes loading { from { transform: translateX(-110%); } to { transform: translateX(335%); } }
+          @media (prefers-reduced-motion: reduce) { .loader::after { animation-duration: 2.5s; } }
+        </style>
+      </head>
+      <body><main><div class="mark">P</div><h1>PulpLog</h1><p>Abriendo aplicación…</p><div class="loader"></div></main></body>
+    </html>`;
+
+  splash.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(html)}`);
+  splash.once("ready-to-show", () => {
+    if (!splash.isDestroyed()) splash.show();
+  });
+  return splash;
+}
+function createWindow(splash = null) {
+  const splashStartedAt = Date.now();
   const win = new BrowserWindow({
     width: 1280, height: 800, minWidth: 800, minHeight: 500,
+    show: false,
     backgroundColor: "#0a0a0a",
     icon: path.join(__dirname, "assets", "icon.png"),
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
@@ -166,6 +231,32 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
     },
+  });
+  let revealed = false;
+  let revealDelayTimer = null;
+  let revealFallback = null;
+  const revealWindow = (force = false) => {
+    if (revealed || win.isDestroyed()) return;
+    const remaining = splash ? Math.max(0, 550 - (Date.now() - splashStartedAt)) : 0;
+    if (!force && remaining > 0) {
+      clearTimeout(revealDelayTimer);
+      revealDelayTimer = setTimeout(() => revealWindow(), remaining);
+      return;
+    }
+    revealed = true;
+    clearTimeout(revealDelayTimer);
+    clearTimeout(revealFallback);
+    if (splash && !splash.isDestroyed()) splash.destroy();
+    win.show();
+    win.focus();
+  };
+  win.once("ready-to-show", () => revealWindow());
+  win.webContents.once("did-fail-load", () => revealWindow(true));
+  revealFallback = setTimeout(() => revealWindow(true), 12000);
+  win.once("closed", () => {
+    clearTimeout(revealFallback);
+    clearTimeout(revealDelayTimer);
+    if (splash && !splash.isDestroyed()) splash.destroy();
   });
   if (IS_DEV) { win.loadURL("http://localhost:5173"); win.webContents.openDevTools(); }
   else          win.loadFile(path.join(__dirname, "dist", "index.html"));
@@ -234,7 +325,10 @@ ipcMain.handle("dialog:ssh-key", async () => {
 
 /* ─── IPC: stat ─── */
 ipcMain.handle("file:stat", async (_e, filePath) => {
-  try { const s = fs.statSync(filePath); return { size: s.size, mtime: s.mtimeMs }; }
+  try {
+    const s = await fs.promises.stat(filePath);
+    return { size: s.size, mtime: s.mtimeMs };
+  }
   catch { return null; }
 });
 
@@ -247,17 +341,19 @@ ipcMain.handle("file:read", async (event, payload) => {
   return new Promise((resolve, reject) => {
     let bytesRead = 0;
     let settled = false;
+    const decoder = new StringDecoder("utf8");
     const stream = fs.createReadStream(filePath, { highWaterMark: 1024*1024 });
     activeReads.set(readId, stream);
     stream.on("data",  chunk => {
       bytesRead += chunk.length;
-      event.sender.send("file:chunk", readId, chunk.toString("utf8"));
-      event.sender.send("file:progress", readId, bytesRead);
+      event.sender.send("file:chunk", readId, decoder.write(chunk), bytesRead);
     });
     stream.on("end",   ()    => {
       settled = true;
       activeReads.delete(readId);
-      event.sender.send("file:done", readId);
+      const remainder = decoder.end();
+      if (remainder) event.sender.send("file:chunk", readId, remainder, bytesRead);
+      event.sender.send("file:done", readId, bytesRead);
       resolve();
     });
     stream.on("error", err  => {
@@ -1007,7 +1103,8 @@ function registerShortcuts(win) {
 
 /* ─── lifecycle ─── */
 app.whenReady().then(() => {
-  const win = createWindow();
+  const splash = createSplashWindow();
+  const win = createWindow(splash);
   registerShortcuts(win);
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });

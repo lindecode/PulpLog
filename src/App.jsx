@@ -17,6 +17,8 @@ const T = {
     filter_ph:       "🔍  filtrar…",
     regex_ph:        "regex…",
     regex_btn_title: "Activar filtro por expresión regular",
+    context_title:   "Líneas de contexto antes/después de cada resultado",
+    context_gap:     n => `${n} ${n === 1 ? "línea omitida" : "líneas omitidas"}`,
     bm_prev_title:   "Marcador anterior (Shift+F2)",
     bm_next_title:   "Marcador siguiente (F2)",
     bm_clear_title:  "Limpiar todos los marcadores",
@@ -113,6 +115,8 @@ const T = {
     filter_ph:       "🔍  filter…",
     regex_ph:        "regex…",
     regex_btn_title: "Enable regular expression filter",
+    context_title:   "Context lines before/after each match",
+    context_gap:     n => `${n} line${n === 1 ? "" : "s"} skipped`,
     bm_prev_title:   "Previous bookmark (Shift+F2)",
     bm_next_title:   "Next bookmark (F2)",
     bm_clear_title:  "Clear all bookmarks",
@@ -252,16 +256,46 @@ const fmtSize = b => b>=1e9?`${(b/1e9).toFixed(2)} GB`:b>=1e6?`${(b/1e6).toFixed
 const fmtNum  = n => n>=1e6?`${(n/1e6).toFixed(1)}M`:n>=1e3?`${(n/1e3).toFixed(1)}k`:String(n);
 const safeFileName = s => String(s || "pulplog-results").replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").slice(0, 80);
 
+// Expands each match into a window of `context` lines before/after it (grep -C style),
+// merging overlapping windows and marking the gaps between separate windows.
+function applyContext(classified, isMatch, context) {
+  if (!context) return classified.filter(isMatch);
+  const n = classified.length;
+  const ranges = [];
+  for (let i = 0; i < n; i++) {
+    if (!isMatch(classified[i])) continue;
+    const start = Math.max(0, i - context);
+    const end = Math.min(n - 1, i + context);
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last.end + 1) last.end = Math.max(last.end, end);
+    else ranges.push({ start, end });
+  }
+  const out = [];
+  let prevEnd = -1;
+  for (const r of ranges) {
+    if (prevEnd >= 0) out.push({ separator: true, key: `sep-${r.start}`, skipped: r.start - prevEnd - 1 });
+    for (let i = r.start; i <= r.end; i++) {
+      const item = classified[i];
+      out.push(isMatch(item) ? item : { ...item, contextOnly: true });
+    }
+    prevEnd = r.end;
+  }
+  return out;
+}
+
 function buildResultText({ source, filter, items, total }) {
+  const realRows = items.filter(x => !x.separator).length;
   const header = [
     `PulpLog export`,
     `Source: ${source || "unknown"}`,
     `Filter: ${filter || "(none)"}`,
-    `Rows: ${items.length} / ${total}`,
+    `Rows: ${realRows} / ${total}`,
     `Exported: ${new Date().toISOString()}`,
     "",
   ];
-  return header.concat(items.map(item => `${item.origLine}\t${item.raw}`)).join("\n");
+  return header.concat(items.map(item =>
+    item.separator ? `--- ${item.skipped} líneas omitidas ---` : `${item.origLine}\t${item.raw}`
+  )).join("\n");
 }
 
 async function copyResultText(text) {
@@ -286,6 +320,16 @@ async function exportResultText(defaultPath, content) {
 ═══════════════════════════════════════════ */
 const LogRow = memo(({ item, showNums, isBookmarked, onToggleBookmark }) => {
   const t = useLang();
+  if (item.separator) {
+    return (
+      <div style={{ display:"flex", alignItems:"center", height:ROW_H, gap:8,
+                    borderBottom:"0.5px solid rgba(255,255,255,.02)" }}>
+        <div style={{ flex:1, borderTop:"0.5px dashed #262626", margin:"0 10px" }} />
+        <span style={{ flexShrink:0, fontSize:10, color:"#3a3a3a" }}>{t("context_gap", item.skipped)}</span>
+        <div style={{ flex:1, borderTop:"0.5px dashed #262626", margin:"0 10px" }} />
+      </div>
+    );
+  }
   const s = STYLE[item.type] || STYLE.plain;
   return (
     <div style={{
@@ -293,6 +337,7 @@ const LogRow = memo(({ item, showNums, isBookmarked, onToggleBookmark }) => {
       background: isBookmarked ? "rgba(255,200,50,.07)" : s.bg,
       borderBottom:"0.5px solid rgba(255,255,255,.02)",
       outline: isBookmarked ? "0.5px solid rgba(255,200,50,.25)" : "none",
+      opacity: item.contextOnly ? 0.55 : 1,
     }}>
       {showNums && (
         <span
@@ -360,7 +405,7 @@ function VirtualList({ items, showNums, bookmarks, onToggleBookmark, listRef }) 
         <div style={{ position:"absolute", top: start * ROW_H, minWidth:"100%", width:"max-content" }}>
           {items.slice(start, end).map(item => (
             <LogRow
-              key={item.origLine}
+              key={item.separator ? item.key : item.origLine}
               item={item}
               showNums={showNums}
               isBookmarked={bookmarks.has(item.origLine)}
@@ -378,7 +423,8 @@ function VirtualList({ items, showNums, bookmarks, onToggleBookmark, listRef }) 
 ═══════════════════════════════════════════ */
 function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showNumsDefault = true }) {
   const t = useLang();
-  const [rawLines,    setRawLines]    = useState([]);
+  const [classified,  setClassified] = useState([]);
+  const [stats,       setStats]      = useState({ error:0, warn:0, info:0, debug:0 });
   const [loading,     setLoading]     = useState(true);
   const [progress,    setProgress]    = useState(0);
   const [tailing,     setTailing]     = useState(true);
@@ -386,6 +432,7 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
   const [showNums,    setShowNums]    = useState(showNumsDefault);
   const [filter,      setFilter]      = useState("");
   const [useRegex,    setUseRegex]    = useState(false);
+  const [context,     setContext]     = useState(0);
   const [regexError,  setRegexError]  = useState(false);
   const [bookmarks,   setBookmarks]   = useState(new Set());
   const [bmCursor,    setBmCursor]    = useState(-1);
@@ -396,31 +443,65 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
   });
 
   const listRef       = useRef(null);
-  const bufRef        = useRef("");
+  const itemsRef      = useRef([]);
+  const carryRef      = useRef("");
+  const statsRef      = useRef({ error:0, warn:0, info:0, debug:0 });
+  const progressRef   = useRef(0);
   const timerRef      = useRef(null);
   const autoScrollRef = useRef(autoScroll);
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
 
-  /* ── Stream read ── */
+  const appendCompleteLines = (lines) => {
+    const items = itemsRef.current;
+    const counts = statsRef.current;
+    for (const raw of lines) {
+      const type = classify(raw);
+      items.push({ raw, origLine: items.length + 1, type });
+      if (type === "error" || type === "exception") counts.error++;
+      else if (type === "warn") counts.warn++;
+      else if (type === "info") counts.info++;
+      else if (type === "debug") counts.debug++;
+    }
+  };
+
+  const appendChunk = (chunk) => {
+    const parts = (carryRef.current + chunk).split("\n");
+    carryRef.current = parts.pop() ?? "";
+    appendCompleteLines(parts);
+  };
+
+  const publishLoadedData = () => {
+    if (carryRef.current) appendCompleteLines([carryRef.current]);
+    carryRef.current = "";
+    setClassified(itemsRef.current);
+    setStats({ ...statsRef.current });
+  };
+
+  /* Stream read */
   useEffect(() => {
     if (!filePath) return;
-    setLoading(true); setProgress(0); setRawLines([]);
-    bufRef.current = "";
+    setLoading(true); setProgress(0); setClassified([]);
+    itemsRef.current = [];
+    carryRef.current = "";
+    statsRef.current = { error:0, warn:0, info:0, debug:0 };
+    progressRef.current = 0;
+    setStats({ ...statsRef.current });
 
     if (IS_ELECTRON) {
       const totalBytes = fileSize || 1;
       const cancel = window.electronAPI.readFile(filePath, {
         onProgress(bytesRead) {
-          setProgress(Math.min(bytesRead / totalBytes, 0.99));
+          const next = Math.min(bytesRead / totalBytes, 0.99);
+          if (next - progressRef.current >= 0.02) {
+            progressRef.current = next;
+            setProgress(next);
+          }
         },
         onChunk(chunk) {
-          bufRef.current += chunk;
+          appendChunk(chunk);
         },
         onDone() {
-          const lines = bufRef.current.split("\n");
-          if (lines[lines.length-1] === "") lines.pop();
-          setRawLines(lines);
-          bufRef.current = "";
+          publishLoadedData();
           setLoading(false);
           setProgress(1);
         },
@@ -435,9 +516,8 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
         if (e.lengthComputable) setProgress(e.loaded / e.total);
       };
       reader.onload = (e) => {
-        const lines = e.target.result.split("\n");
-        if (lines[lines.length - 1] === "") lines.pop();
-        setRawLines(lines);
+        appendChunk(e.target.result);
+        publishLoadedData();
         setLoading(false);
         setProgress(1);
       };
@@ -469,7 +549,9 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
     if (!tailing || loading || !IS_ELECTRON || !filePath) return;
     const unwatch = window.electronAPI.watchFile(filePath, {
       onNewLines(text) {
-        setRawLines(prev => [...prev, ...text.split("\n").filter(Boolean)]);
+        appendChunk(text);
+        setClassified([...itemsRef.current]);
+        setStats({ ...statsRef.current });
         if (autoScrollRef.current) listRef.current?.scrollToBottom();
       },
       onRotated()   { setRotation({ event:"rotated",   countdown: 3 }); setTailing(false); },
@@ -479,41 +561,34 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
     return () => unwatch?.();
   }, [tailing, loading, filePath]); // eslint-disable-line
 
-  const classified = useMemo(() =>
-    rawLines.map((raw, i) => ({ raw, origLine: i + 1, type: classify(raw) })),
-    [rawLines]
-  );
-
-  const stats = useMemo(() => ({
-    error: classified.filter(x => x.type==="error"||x.type==="exception").length,
-    warn:  classified.filter(x => x.type==="warn").length,
-    info:  classified.filter(x => x.type==="info").length,
-    debug: classified.filter(x => x.type==="debug").length,
-  }), [classified]);
-
   const { filtered, regexValid } = useMemo(() => {
     const hide = new Set();
     if (!lvl.error) { hide.add("error"); hide.add("exception"); }
     if (!lvl.stack) { hide.add("stack"); hide.add("causedby"); }
     ["warn","info","debug","trace","plain"].forEach(k => { if (!lvl[k]) hide.add(k); });
 
-    if (!filter) return { filtered: classified.filter(x => !hide.has(x.type)), regexValid: true };
+    if (!filter) return {
+      filtered: hide.size ? classified.filter(x => !hide.has(x.type)) : classified,
+      regexValid: true,
+    };
 
     if (useRegex) {
       let re;
       try { re = new RegExp(filter, "i"); }
       catch { return { filtered: [], regexValid: false }; }
       return {
-        filtered: classified.filter(x => !hide.has(x.type) && re.test(x.raw)),
+        filtered: applyContext(classified, x => !hide.has(x.type) && re.test(x.raw), context),
         regexValid: true,
       };
     }
     const lf = filter.toLowerCase();
     return {
-      filtered: classified.filter(x => !hide.has(x.type) && x.raw.toLowerCase().includes(lf)),
+      filtered: applyContext(classified, x => !hide.has(x.type) && x.raw.toLowerCase().includes(lf), context),
       regexValid: true,
     };
-  }, [classified, filter, useRegex, lvl]);
+  }, [classified, filter, useRegex, lvl, context]);
+
+  const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
 
   useEffect(() => setRegexError(!regexValid), [regexValid]);
 
@@ -551,15 +626,15 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
   ];
 
   const copyResults = useCallback(() => {
-    const text = buildResultText({ source: filePath || fileName, filter, items: filtered, total: rawLines.length });
+    const text = buildResultText({ source: filePath || fileName, filter, items: filtered, total: classified.length });
     copyResultText(text);
-  }, [filePath, fileName, filter, filtered, rawLines.length]);
+  }, [filePath, fileName, filter, filtered, classified.length]);
 
   const exportResults = useCallback(() => {
     const source = fileName || filePath || "pulplog-results";
-    const text = buildResultText({ source: filePath || fileName, filter, items: filtered, total: rawLines.length });
+    const text = buildResultText({ source: filePath || fileName, filter, items: filtered, total: classified.length });
     exportResultText(`${safeFileName(source)}-filtered.log`, text);
-  }, [filePath, fileName, filter, filtered, rawLines.length]);
+  }, [filePath, fileName, filter, filtered, classified.length]);
 
   return (
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
@@ -590,6 +665,18 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
                      cursor:"pointer", fontWeight: useRegex ? 700 : 400 }}>
             .*
           </button>
+        </div>
+
+        <div style={{ display:"flex", alignItems:"center", gap:4 }} title={t("context_title")}>
+          <span style={{ fontSize:10, color:"#555" }}>±</span>
+          <input
+            type="number" min={0} max={50}
+            value={context}
+            onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
+            style={{ width:40, background:"#181818", border:"0.5px solid #2e2e2e",
+                     borderRadius:6, color:"#bbb", fontFamily:"inherit", fontSize:11,
+                     padding:"3px 4px", textAlign:"center" }}
+          />
         </div>
 
         <Sep />
@@ -708,8 +795,8 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
         )}
         <span style={{ marginLeft:"auto", color:"#444" }}>
           {fileSize
-            ? t("lines_size", filtered.length, rawLines.length, fmtSize(fileSize))
-            : t("lines", filtered.length, rawLines.length)}
+            ? t("lines_size", shownCount, classified.length, fmtSize(fileSize))
+            : t("lines", shownCount, classified.length)}
         </span>
       </div>
     </div>
@@ -1080,6 +1167,7 @@ function DockerTab({ containerId, containerName }) {
   const [error,      setError]     = useState(null);
   const [filter,     setFilter]    = useState("");
   const [useRegex,   setUseRegex]  = useState(false);
+  const [context,    setContext]  = useState(0);
   const [regexError, setRegexError]= useState(false);
   const [bookmarks,  setBookmarks] = useState(new Set());
   const [bmCursor,   setBmCursor]  = useState(-1);
@@ -1131,11 +1219,13 @@ function DockerTab({ containerId, containerName }) {
       let re;
       try { re = new RegExp(filter, "i"); }
       catch { return { filtered: [], regexValid: false }; }
-      return { filtered: classified.filter(x => !hide.has(x.type) && re.test(x.raw)), regexValid: true };
+      return { filtered: applyContext(classified, x => !hide.has(x.type) && re.test(x.raw), context), regexValid: true };
     }
     const lf = filter.toLowerCase();
-    return { filtered: classified.filter(x => !hide.has(x.type) && x.raw.toLowerCase().includes(lf)), regexValid: true };
-  }, [classified, filter, useRegex, lvl]);
+    return { filtered: applyContext(classified, x => !hide.has(x.type) && x.raw.toLowerCase().includes(lf), context), regexValid: true };
+  }, [classified, filter, useRegex, lvl, context]);
+
+  const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
 
   useEffect(() => setRegexError(!regexValid), [regexValid]);
 
@@ -1219,6 +1309,18 @@ function DockerTab({ containerId, containerName }) {
           </button>
         </div>
 
+        <div style={{ display:"flex", alignItems:"center", gap:4 }} title={t("context_title")}>
+          <span style={{ fontSize:10, color:"#555" }}>±</span>
+          <input
+            type="number" min={0} max={50}
+            value={context}
+            onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
+            style={{ width:40, background:"#181818", border:"0.5px solid #2e2e2e",
+                     borderRadius:6, color:"#bbb", fontFamily:"inherit", fontSize:11,
+                     padding:"3px 4px", textAlign:"center" }}
+          />
+        </div>
+
         <Sep />
 
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
@@ -1297,7 +1399,7 @@ function DockerTab({ containerId, containerName }) {
         {!connected && rawLines.length > 0 && <span style={{ color:"#555" }}>{t("stopped")}</span>}
         {bookmarks.size > 0 && <span style={{ color:"#c0a030" }}>◆ {bookmarks.size}</span>}
         <span style={{ marginLeft:"auto", color:"#444" }}>
-          {t("lines", filtered.length, rawLines.length)}
+          {t("lines", shownCount, rawLines.length)}
         </span>
       </div>
     </div>
@@ -1500,6 +1602,7 @@ function RemoteTab({ config }) {
   const [error,      setError]     = useState(null);
   const [filter,     setFilter]    = useState("");
   const [useRegex,   setUseRegex]  = useState(false);
+  const [context,    setContext]  = useState(0);
   const [regexError, setRegexError]= useState(false);
   const [bookmarks,  setBookmarks] = useState(new Set());
   const [bmCursor,   setBmCursor]  = useState(-1);
@@ -1551,11 +1654,13 @@ function RemoteTab({ config }) {
       let re;
       try { re = new RegExp(filter, "i"); }
       catch { return { filtered: [], regexValid: false }; }
-      return { filtered: classified.filter(x => !hide.has(x.type) && re.test(x.raw)), regexValid: true };
+      return { filtered: applyContext(classified, x => !hide.has(x.type) && re.test(x.raw), context), regexValid: true };
     }
     const lf = filter.toLowerCase();
-    return { filtered: classified.filter(x => !hide.has(x.type) && x.raw.toLowerCase().includes(lf)), regexValid: true };
-  }, [classified, filter, useRegex, lvl]);
+    return { filtered: applyContext(classified, x => !hide.has(x.type) && x.raw.toLowerCase().includes(lf), context), regexValid: true };
+  }, [classified, filter, useRegex, lvl, context]);
+
+  const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
 
   useEffect(() => setRegexError(!regexValid), [regexValid]);
 
@@ -1644,6 +1749,18 @@ function RemoteTab({ config }) {
             .*
           </button>
         </div>
+
+        <div style={{ display:"flex", alignItems:"center", gap:4 }} title={t("context_title")}>
+          <span style={{ fontSize:10, color:"#555" }}>±</span>
+          <input
+            type="number" min={0} max={50}
+            value={context}
+            onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
+            style={{ width:40, background:"#181818", border:"0.5px solid #2e2e2e",
+                     borderRadius:6, color:"#bbb", fontFamily:"inherit", fontSize:11,
+                     padding:"3px 4px", textAlign:"center" }}
+          />
+        </div>
         <Sep />
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
           <span key={key} onClick={() => toggle(key)}
@@ -1713,7 +1830,7 @@ function RemoteTab({ config }) {
         {!connected && rawLines.length > 0 && <span style={{ color:"#555" }}>{t("stopped")}</span>}
         {bookmarks.size > 0 && <span style={{ color:"#c0a030" }}>◆ {bookmarks.size}</span>}
         <span style={{ marginLeft:"auto", color:"#444" }}>
-          {t("lines", filtered.length, rawLines.length)}
+          {t("lines", shownCount, rawLines.length)}
         </span>
       </div>
     </div>
@@ -2150,10 +2267,12 @@ export default function App() {
   useEffect(() => {
     if (!IS_ELECTRON) return;
     let alive = true;
-    window.electronAPI.getCapabilities()
-      .then(caps => { if (alive) setCapabilities(caps); })
-      .catch(() => { if (alive) setCapabilities({}); });
-    return () => { alive = false; };
+    const timer = setTimeout(() => {
+      window.electronAPI.getCapabilities()
+        .then(caps => { if (alive) setCapabilities(caps); })
+        .catch(() => { if (alive) setCapabilities({}); });
+    }, 600);
+    return () => { alive = false; clearTimeout(timer); };
   }, []);
 
   /* ── Translation function ── */
@@ -2234,11 +2353,11 @@ export default function App() {
         if (alive) setSettings(prev => ({ ...prev, recentFiles: recent }));
       } else if (s.panes?.length) {
         const restorePane = async (entries, setTabs, setActive) => {
-          const valid = [];
-          for (const st of entries || []) {
+          const checked = await Promise.all((entries || []).map(async st => {
             const stat = await window.electronAPI.statFile(st.filePath);
-            if (stat) valid.push({ ...st, fileSize: st.fileSize ?? stat.size });
-          }
+            return stat ? { ...st, fileSize: st.fileSize ?? stat.size } : null;
+          }));
+          const valid = checked.filter(Boolean);
           if (!valid.length || !alive) return;
           const tabEntries = valid.map(st => ({
             id: nextId++, label: st.label, filePath: st.filePath, fileSize: st.fileSize, groupStart: !!st.groupStart,
