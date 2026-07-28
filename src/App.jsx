@@ -156,7 +156,7 @@ const T = {
     theme_h:         "TEMA",
     theme_classic:   "Clásica",
     theme_light:     "Blanca",
-    theme_vscode:    "Oscura (VS Code)",
+    theme_vscode:    "Oscura",
     open_file_btn:   "Abrir archivo…",
     recent_h:        "RECIENTES",
     hint_electron:   "Ctrl+O  ·  Ctrl+T nueva pestaña  ·  clic en ◇ para marcar líneas",
@@ -269,7 +269,7 @@ const T = {
     theme_h:         "THEME",
     theme_classic:   "Classic",
     theme_light:     "Light",
-    theme_vscode:    "Dark (VS Code)",
+    theme_vscode:    "Dark",
     open_file_btn:   "Open file…",
     recent_h:        "RECENT",
     hint_electron:   "Ctrl+O  ·  Ctrl+T new tab  ·  click ◇ to bookmark lines",
@@ -374,6 +374,11 @@ const LogRow = memo(({ item, showNums, isBookmarked, isSelected, isActive, onTog
     <div
       role="option"
       aria-selected={isSelected}
+      onMouseDown={event => {
+        if (!event.shiftKey) return;
+        event.preventDefault();
+        window.getSelection?.()?.removeAllRanges();
+      }}
       onClick={event => onSelectLine(item.origLine, event)}
       onContextMenu={event => onOpenContextMenu(item, event)}
       style={{
@@ -497,7 +502,8 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
   const nativeText = () => window.getSelection?.()?.toString() || "";
 
   const selectLine = (line, event = {}, ignoreNativeText = false) => {
-    if (!ignoreNativeText && nativeText().trim()) return;
+    const hasRowModifier = !!(event.shiftKey || event.ctrlKey || event.metaKey);
+    if (!ignoreNativeText && !hasRowModifier && nativeText().trim()) return;
     const additive = !!(event.ctrlKey || event.metaKey);
     const extending = !!event.shiftKey;
     setSelection(previous => {
