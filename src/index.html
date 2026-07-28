@@ -8,8 +8,140 @@
     <title>PulpLog</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      html, body, #root { height: 100%; background: #0a0a0a; }
-      body { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; }
+      html, body, #root { height: 100%; }
+      body { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; background: var(--pl-bg-app); }
+
+      /* classic is the default palette (also used before React sets data-theme) */
+      html {
+        --pl-bg-app: #0a0a0a; --pl-bg-panel: #111111; --pl-bg-input: #181818;
+        --pl-bg-footer: #0d0d0d; --pl-bg-hover: #131313; --pl-bg-tabbar: #0f0f0f;
+        --pl-border: #2e2e2e; --pl-border-soft: #1e1e1e; --pl-border-strong: #2a2a2a; --pl-border-focus: #2a6a9a;
+        --pl-text-1: #cccccc; --pl-text-2: #999999; --pl-text-3: #777777; --pl-text-4: #666666;
+        --pl-text-5: #555555; --pl-text-6: #444444; --pl-text-7: #333333; --pl-text-8: #252525;
+        --pl-accent: #2a7faa; --pl-accent-hover: #60b8e8; --pl-accent-alt: #4a8ac0;
+        --pl-status-live: #2a9a4a; --pl-status-stopped: #555555; --pl-status-warn: #66552a;
+        --pl-bookmark: #f0c040; --pl-error-text: #ff8888; --pl-error-bg: #3a1010; --pl-error-border: #883030;
+        --pl-cat-docker: #2a9a4a; --pl-cat-file: #2a7faa; --pl-cat-remote: #7a7aaa;
+        --pl-cat-system: #8a8a4a; --pl-cat-performance: #aa7a3a; --pl-cat-settings: #7a6a8a;
+        --pl-toggle-on-bg: #1a5f1a; --pl-toggle-on-knob: #4aaa4a; --pl-toggle-off-bg: #1e1e1e; --pl-toggle-off-knob: #333333;
+        --pl-scroll-track: #181818; --pl-scroll-thumb: #2e2e2e; --pl-scroll-thumb-hover: #2a7faa; --pl-scroll-thumb-active: #60b8e8;
+        --pl-hairline: rgba(255,255,255,.02); --pl-badge-overlay: rgba(255,255,255,.18);
+        --pl-icon-close: #a05050; --pl-icon-diag: #4a8a4a;
+        --pl-syn-fallback: #aaaaaa; --pl-syn-dim: #484848; --pl-syn-bracket: #5a5a7a; --pl-syn-match: #5a7a5a;
+        --pl-lvl-error-bg: #3a1010; --pl-lvl-error-bar: #e04444; --pl-lvl-error-txt: #ff8888;
+        --pl-lvl-exception-bg: #3a1010; --pl-lvl-exception-bar: #b03030; --pl-lvl-exception-txt: #ff6666;
+        --pl-lvl-causedby-bg: #3a2010; --pl-lvl-causedby-bar: #d06030; --pl-lvl-causedby-txt: #ffaa66;
+        --pl-lvl-stack-bg: #16122a; --pl-lvl-stack-bar: #5a3a9a; --pl-lvl-stack-txt: #a090d0;
+        --pl-lvl-warn-bg: #281e08; --pl-lvl-warn-bar: #c08020; --pl-lvl-warn-txt: #f0c060;
+        --pl-lvl-info-bg: #081c2c; --pl-lvl-info-bar: #2a7faa; --pl-lvl-info-txt: #60b8e8;
+        --pl-lvl-debug-bg: #101010; --pl-lvl-debug-bar: #2a4a2a; --pl-lvl-debug-txt: #6a9a6a;
+        --pl-lvl-trace-bg: #0e0e0e; --pl-lvl-trace-bar: #222222; --pl-lvl-trace-txt: #555555;
+        --pl-lvl-plain-txt: #b0b0b0;
+        --pl-chip-error-bg: #a02020; --pl-chip-error-fg: #ffcccc;
+        --pl-chip-warn-bg: #906010; --pl-chip-warn-fg: #ffe090;
+        --pl-chip-info-bg: #1a5f88; --pl-chip-info-fg: #90d0f0;
+        --pl-chip-debug-bg: #244024; --pl-chip-debug-fg: #90c890;
+        --pl-chip-stack-bg: #3a256a; --pl-chip-stack-fg: #c0a8f0;
+        --pl-chip-plain-bg: #2a2a2a; --pl-chip-plain-fg: #aaaaaa;
+        --pl-stat-warn: #806010; --pl-stat-info: #1a5070; --pl-stat-debug: #284028;
+        --pl-banner-rotated-bg: #2a1a00; --pl-banner-truncated-bg: #0a1e2a; --pl-banner-recreated-bg: #0a2a0a;
+        --pl-diag-error-bg: #2a0808; --pl-diag-warn-bg: #1c1408;
+        --pl-btn-active-bg: #1a3a1a; --pl-btn-active-border: #3a6a3a; --pl-btn-active-text: #8dc88d;
+        --pl-docker-row-hover: #1e2a1e;
+        --pl-docker-badge-bg: #0a1a0a; --pl-docker-badge-border: #1a3a1a;
+        --pl-remote-badge-bg: #101024; --pl-remote-badge-border: #2a2a5a;
+        --pl-split-active-bg: #141a24; --pl-diag-active-bg: #141a14; --pl-settings-active-bg: #1a1a24;
+      }
+
+      html[data-theme="light"] {
+        --pl-bg-app: #ffffff; --pl-bg-panel: #f7f7f7; --pl-bg-input: #ffffff;
+        --pl-bg-footer: #f0f0f0; --pl-bg-hover: #eef3f8; --pl-bg-tabbar: #eeeeee;
+        --pl-border: #d5d5d5; --pl-border-soft: #e6e6e6; --pl-border-strong: #c2c2c2; --pl-border-focus: #3a8fd0;
+        --pl-text-1: #1a1a1a; --pl-text-2: #333333; --pl-text-3: #555555; --pl-text-4: #707070;
+        --pl-text-5: #8a8a8a; --pl-text-6: #a3a3a3; --pl-text-7: #bdbdbd; --pl-text-8: #cfcfcf;
+        --pl-accent: #1a6fb0; --pl-accent-hover: #2a8fd8; --pl-accent-alt: #3a7ac0;
+        --pl-status-live: #1f8a3a; --pl-status-stopped: #999999; --pl-status-warn: #a8860a;
+        --pl-bookmark: #d8a000; --pl-error-text: #c02020; --pl-error-bg: #fdecec; --pl-error-border: #e0a0a0;
+        --pl-cat-docker: #1f8a3a; --pl-cat-file: #1a6fb0; --pl-cat-remote: #6a5aa8;
+        --pl-cat-system: #8a7a2a; --pl-cat-performance: #b06a1a; --pl-cat-settings: #7a5a9a;
+        --pl-toggle-on-bg: #cdeccd; --pl-toggle-on-knob: #2f9e44; --pl-toggle-off-bg: #e2e2e2; --pl-toggle-off-knob: #9a9a9a;
+        --pl-scroll-track: #f0f0f0; --pl-scroll-thumb: #c7c7c7; --pl-scroll-thumb-hover: #1a6fb0; --pl-scroll-thumb-active: #2a8fd8;
+        --pl-hairline: rgba(0,0,0,.05); --pl-badge-overlay: rgba(0,0,0,.08);
+        --pl-icon-close: #c0392b; --pl-icon-diag: #2f8f4f;
+        --pl-syn-fallback: #888888; --pl-syn-dim: #9a9a9a; --pl-syn-bracket: #6a6aa0; --pl-syn-match: #4a8a4a;
+        --pl-lvl-error-bg: #fdecec; --pl-lvl-error-bar: #d33a3a; --pl-lvl-error-txt: #a02020;
+        --pl-lvl-exception-bg: #fdecec; --pl-lvl-exception-bar: #b8302f; --pl-lvl-exception-txt: #901f1f;
+        --pl-lvl-causedby-bg: #fdf1e6; --pl-lvl-causedby-bar: #cc7a30; --pl-lvl-causedby-txt: #995c17;
+        --pl-lvl-stack-bg: #f2eefb; --pl-lvl-stack-bar: #7a4fbf; --pl-lvl-stack-txt: #5a3a99;
+        --pl-lvl-warn-bg: #fdf6df; --pl-lvl-warn-bar: #c99a12; --pl-lvl-warn-txt: #8a6d00;
+        --pl-lvl-info-bg: #eaf3fb; --pl-lvl-info-bar: #1a6fb0; --pl-lvl-info-txt: #145a8c;
+        --pl-lvl-debug-bg: #eef5ee; --pl-lvl-debug-bar: #4a8a4a; --pl-lvl-debug-txt: #2f6b2f;
+        --pl-lvl-trace-bg: #f7f7f7; --pl-lvl-trace-bar: #bbbbbb; --pl-lvl-trace-txt: #999999;
+        --pl-lvl-plain-txt: #333333;
+        --pl-chip-error-bg: #f5c6c6; --pl-chip-error-fg: #8a1f1f;
+        --pl-chip-warn-bg: #f5e2b8; --pl-chip-warn-fg: #7a5a00;
+        --pl-chip-info-bg: #c8e2f5; --pl-chip-info-fg: #145a8c;
+        --pl-chip-debug-bg: #cce8cc; --pl-chip-debug-fg: #2f6b2f;
+        --pl-chip-stack-bg: #ddd0f5; --pl-chip-stack-fg: #5a3a99;
+        --pl-chip-plain-bg: #e2e2e2; --pl-chip-plain-fg: #555555;
+        --pl-stat-warn: #8a6d00; --pl-stat-info: #145a8c; --pl-stat-debug: #2f6b2f;
+        --pl-banner-rotated-bg: #fdf3d8; --pl-banner-truncated-bg: #ddeefc; --pl-banner-recreated-bg: #dff5df;
+        --pl-diag-error-bg: #fbe4e4; --pl-diag-warn-bg: #fbf1d8;
+        --pl-btn-active-bg: #d7f0d7; --pl-btn-active-border: #7ac47a; --pl-btn-active-text: #1f6b1f;
+        --pl-docker-row-hover: #dff0df;
+        --pl-docker-badge-bg: #e3f5e3; --pl-docker-badge-border: #a8d8a8;
+        --pl-remote-badge-bg: #ececf8; --pl-remote-badge-border: #c5bce6;
+        --pl-split-active-bg: #dce8f5; --pl-diag-active-bg: #dcf0dc; --pl-settings-active-bg: #e6e0f5;
+      }
+
+      html[data-theme="vscode"] {
+        --pl-bg-app: #1e1e1e; --pl-bg-panel: #252526; --pl-bg-input: #3c3c3c;
+        --pl-bg-footer: #1e1e1e; --pl-bg-hover: #2a2d2e; --pl-bg-tabbar: #252526;
+        --pl-border: #3c3c3c; --pl-border-soft: #2d2d2d; --pl-border-strong: #454545; --pl-border-focus: #007acc;
+        --pl-text-1: #d4d4d4; --pl-text-2: #cccccc; --pl-text-3: #9d9d9d; --pl-text-4: #858585;
+        --pl-text-5: #6a6a6a; --pl-text-6: #585858; --pl-text-7: #454545; --pl-text-8: #3a3a3a;
+        --pl-accent: #007acc; --pl-accent-hover: #3794ff; --pl-accent-alt: #0e639c;
+        --pl-status-live: #89d185; --pl-status-stopped: #808080; --pl-status-warn: #cca700;
+        --pl-bookmark: #dcdcaa; --pl-error-text: #f48771; --pl-error-bg: #5a1d1d; --pl-error-border: #be1100;
+        --pl-cat-docker: #89d185; --pl-cat-file: #3794ff; --pl-cat-remote: #c586c0;
+        --pl-cat-system: #b5cea8; --pl-cat-performance: #d7ba7d; --pl-cat-settings: #c586c0;
+        --pl-toggle-on-bg: #14401f; --pl-toggle-on-knob: #89d185; --pl-toggle-off-bg: #3c3c3c; --pl-toggle-off-knob: #6a6a6a;
+        --pl-scroll-track: #1e1e1e; --pl-scroll-thumb: #424242; --pl-scroll-thumb-hover: #4f4f4f; --pl-scroll-thumb-active: #007acc;
+        --pl-hairline: rgba(255,255,255,.03); --pl-badge-overlay: rgba(255,255,255,.15);
+        --pl-icon-close: #f14c4c; --pl-icon-diag: #89d185;
+        --pl-syn-fallback: #9d9d9d; --pl-syn-dim: #6a6a6a; --pl-syn-bracket: #c586c0; --pl-syn-match: #b5cea8;
+        --pl-lvl-error-bg: #5a1d1d; --pl-lvl-error-bar: #f14c4c; --pl-lvl-error-txt: #f48771;
+        --pl-lvl-exception-bg: #5a1d1d; --pl-lvl-exception-bar: #be1100; --pl-lvl-exception-txt: #f14c4c;
+        --pl-lvl-causedby-bg: #4a3018; --pl-lvl-causedby-bar: #d7ba7d; --pl-lvl-causedby-txt: #ce9178;
+        --pl-lvl-stack-bg: #2d1f47; --pl-lvl-stack-bar: #c586c0; --pl-lvl-stack-txt: #c586c0;
+        --pl-lvl-warn-bg: #4d3800; --pl-lvl-warn-bar: #cca700; --pl-lvl-warn-txt: #dcdcaa;
+        --pl-lvl-info-bg: #0d3a5c; --pl-lvl-info-bar: #3794ff; --pl-lvl-info-txt: #569cd6;
+        --pl-lvl-debug-bg: #1e2b1e; --pl-lvl-debug-bar: #6a9955; --pl-lvl-debug-txt: #6a9955;
+        --pl-lvl-trace-bg: #1a1a1a; --pl-lvl-trace-bar: #585858; --pl-lvl-trace-txt: #6a6a6a;
+        --pl-lvl-plain-txt: #d4d4d4;
+        --pl-chip-error-bg: #be1100; --pl-chip-error-fg: #f48771;
+        --pl-chip-warn-bg: #4d3800; --pl-chip-warn-fg: #dcdcaa;
+        --pl-chip-info-bg: #0d3a5c; --pl-chip-info-fg: #569cd6;
+        --pl-chip-debug-bg: #1e2b1e; --pl-chip-debug-fg: #b5cea8;
+        --pl-chip-stack-bg: #2d1f47; --pl-chip-stack-fg: #c586c0;
+        --pl-chip-plain-bg: #3c3c3c; --pl-chip-plain-fg: #cccccc;
+        --pl-stat-warn: #dcdcaa; --pl-stat-info: #569cd6; --pl-stat-debug: #6a9955;
+        --pl-banner-rotated-bg: #3a2e00; --pl-banner-truncated-bg: #163247; --pl-banner-recreated-bg: #14401f;
+        --pl-diag-error-bg: #3a1414; --pl-diag-warn-bg: #332600;
+        --pl-btn-active-bg: #17381d; --pl-btn-active-border: #4a8a4a; --pl-btn-active-text: #89d185;
+        --pl-docker-row-hover: #234a2a;
+        --pl-docker-badge-bg: #14401f; --pl-docker-badge-border: #2d6a3f;
+        --pl-remote-badge-bg: #2a1f42; --pl-remote-badge-border: #4a3a70;
+        --pl-split-active-bg: #14293d; --pl-diag-active-bg: #163a1e; --pl-settings-active-bg: #2e2140;
+      }
+
+      * { scrollbar-width: thin; scrollbar-color: var(--pl-scroll-thumb) var(--pl-scroll-track); }
+      ::-webkit-scrollbar { width: 12px; height: 12px; }
+      ::-webkit-scrollbar-track { background: var(--pl-scroll-track); }
+      ::-webkit-scrollbar-thumb { background: var(--pl-scroll-thumb); border: 2px solid var(--pl-scroll-track); border-radius: 8px; }
+      ::-webkit-scrollbar-thumb:hover { background: var(--pl-scroll-thumb-hover); }
+      ::-webkit-scrollbar-thumb:active { background: var(--pl-scroll-thumb-active); }
+      ::-webkit-scrollbar-corner { background: var(--pl-scroll-track); }
     </style>
   </head>
   <body>

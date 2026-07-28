@@ -6,8 +6,30 @@ const http           = require("http");
 const { execFile, spawn } = require("child_process");
 const { Client: SshClient } = require("ssh2");
 
-const IS_DEV = process.env.NODE_ENV === "development" || !app.isPackaged;
+const IS_SMOKE_TEST = process.env.PULPLOG_SMOKE_TEST === "1";
+const IS_DEV = !IS_SMOKE_TEST && (process.env.NODE_ENV === "development" || !app.isPackaged);
 
+function assertTrustedSender(event) {
+  const source = event?.senderFrame?.url || event?.sender?.getURL?.() || "";
+  const trusted = IS_DEV
+    ? /^http:\/\/(?:localhost|127\.0\.0\.1):5173(?:\/|$)/.test(source)
+    : source.startsWith("file:");
+  if (!trusted) throw new Error("IPC sender is not trusted");
+}
+
+function normalizeLocalPath(value) {
+  if (typeof value !== "string" || !value || value.length > 32767 || value.includes("\0")) {
+    throw new Error("Invalid file path");
+  }
+  return path.resolve(value);
+}
+
+function normalizeIdentifier(value, label) {
+  if (typeof value !== "string" || !value || value.length > 160 || /[\x00-\x1f]/.test(value)) {
+    throw new Error(`Invalid ${label}`);
+  }
+  return value;
+}
 /* ── file IO state ── */
 const activeReads = new Map(); // readId → stream
 const watchers = new Map(); // watchId → { watcher, pollTimer, filePath, lastSize }
@@ -154,6 +176,20 @@ ipcMain.handle("system:capabilities", async () => {
   return caps;
 });
 
+function loadSplashLogoDataUri() {
+  const candidates = [
+    path.join(__dirname, "src", "public", "lindecode-max.jpeg"),
+    path.join(__dirname, "dist", "lindecode-max.jpeg"),
+  ];
+  for (const p of candidates) {
+    try {
+      const buf = fs.readFileSync(p);
+      return `data:image/jpeg;base64,${buf.toString("base64")}`;
+    } catch {}
+  }
+  return null;
+}
+
 /* ─── window ─── */
 function createSplashWindow() {
   const splash = new BrowserWindow({
@@ -175,6 +211,8 @@ function createSplashWindow() {
     },
   });
 
+  const logoDataUri = loadSplashLogoDataUri();
+
   const html = `<!doctype html>
     <html lang="es">
       <head>
@@ -192,11 +230,12 @@ function createSplashWindow() {
           main { display: flex; flex-direction: column; align-items: center; }
           .mark {
             width: 62px; height: 62px; display: grid; place-items: center;
-            border: 1px solid #2a7faa; border-radius: 15px;
+            border: 1px solid #2a7faa; border-radius: 15px; overflow: hidden;
             background: linear-gradient(145deg, #182c36, #0d171c);
             color: #65c7ef; font: 700 31px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
             box-shadow: 0 10px 35px rgba(0,0,0,.45), inset 0 0 24px rgba(42,127,170,.12);
           }
+          .mark img { width: 100%; height: 100%; object-fit: cover; }
           h1 { margin: 14px 0 4px; font-size: 20px; letter-spacing: .7px; }
           p { margin: 0; color: #65737a; font-size: 12px; }
           .loader { width: 150px; height: 2px; margin-top: 22px; overflow: hidden; background: #182126; }
@@ -208,7 +247,7 @@ function createSplashWindow() {
           @media (prefers-reduced-motion: reduce) { .loader::after { animation-duration: 2.5s; } }
         </style>
       </head>
-      <body><main><div class="mark">P</div><h1>PulpLog</h1><p>Abriendo aplicación…</p><div class="loader"></div></main></body>
+      <body><main><div class="mark">${logoDataUri ? `<img src="${logoDataUri}" alt="LindeCode">` : "P"}</div><h1>PulpLog</h1><p>Abriendo aplicación…</p><div class="loader"></div></main></body>
     </html>`;
 
   splash.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(html)}`);
@@ -229,7 +268,7 @@ function createWindow(splash = null) {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
   let revealed = false;
@@ -247,8 +286,10 @@ function createWindow(splash = null) {
     clearTimeout(revealDelayTimer);
     clearTimeout(revealFallback);
     if (splash && !splash.isDestroyed()) splash.destroy();
-    win.show();
-    win.focus();
+    if (!IS_SMOKE_TEST) {
+      win.show();
+      win.focus();
+    }
   };
   win.once("ready-to-show", () => revealWindow());
   win.webContents.once("did-fail-load", () => revealWindow(true));
@@ -258,17 +299,46 @@ function createWindow(splash = null) {
     clearTimeout(revealDelayTimer);
     if (splash && !splash.isDestroyed()) splash.destroy();
   });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action:"deny" };
+  });
+  win.webContents.on("will-navigate", (event, url) => {
+    const current = win.webContents.getURL();
+    if (current && url !== current) event.preventDefault();
+  });
   if (IS_DEV) { win.loadURL("http://localhost:5173"); win.webContents.openDevTools(); }
   else          win.loadFile(path.join(__dirname, "dist", "index.html"));
   buildMenu(win);
+  loadSettings().then(settings => buildMenu(win, settings.recentFiles)).catch(() => {});
   return win;
 }
 
-function buildMenu(win) {
+function buildMenu(win, recentFiles = []) {
+  const recentSubmenu = recentFiles.length
+    ? recentFiles.slice(0, 10).map(filePath => ({
+        label:path.basename(filePath),
+        toolTip:filePath,
+        click:async () => {
+          try {
+            const normalized = normalizeLocalPath(filePath);
+            const stat = await fs.promises.stat(normalized);
+            if (!stat.isFile()) throw new Error("No es un archivo");
+            if (!win.isDestroyed()) win.webContents.send("menu:open-recent", normalized);
+          } catch {
+            dialog.showMessageBox(win, {
+              type:"warning", title:"Archivo no disponible",
+              message:"No se pudo abrir el archivo reciente", detail:filePath,
+            });
+          }
+        },
+      }))
+    : [{ label:"Sin archivos recientes", enabled:false }];
   const template = [
     { label: "Archivo", submenu: [
       { label:"Abrir archivo…", accelerator:"CmdOrCtrl+O",
         click: () => win.webContents.send("menu:open-file") },
+      { id:"open-recent", label:"Abrir reciente", submenu:recentSubmenu },
       { label:"Nueva pestaña",  accelerator:"CmdOrCtrl+T",
         click: () => win.webContents.send("menu:new-tab") },
       { type:"separator" }, { role:"quit", label:"Salir" },
@@ -298,6 +368,10 @@ function buildMenu(win) {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+function refreshApplicationMenu(settings) {
+  const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+  if (win && !win.isDestroyed()) buildMenu(win, settings?.recentFiles || []);
+}
 /* ─── IPC: open dialog ─── */
 ipcMain.handle("dialog:open", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
@@ -324,8 +398,10 @@ ipcMain.handle("dialog:ssh-key", async () => {
 });
 
 /* ─── IPC: stat ─── */
-ipcMain.handle("file:stat", async (_e, filePath) => {
+ipcMain.handle("file:stat", async (event, requestedPath) => {
+  assertTrustedSender(event);
   try {
+    const filePath = normalizeLocalPath(requestedPath);
     const s = await fs.promises.stat(filePath);
     return { size: s.size, mtime: s.mtimeMs };
   }
@@ -334,7 +410,8 @@ ipcMain.handle("file:stat", async (_e, filePath) => {
 
 /* ─── IPC: stream read in 1 MB chunks ─── */
 ipcMain.handle("file:read", async (event, payload) => {
-  const filePath = typeof payload === "string" ? payload : payload?.filePath;
+  assertTrustedSender(event);
+  const filePath = normalizeLocalPath(typeof payload === "string" ? payload : payload?.filePath);
   const readId = typeof payload === "string" ? filePath : payload?.readId;
   if (!filePath || !readId) throw new Error("Invalid file read request");
 
@@ -382,7 +459,7 @@ ipcMain.handle("file:read:cancel", async (_event, readId) => {
 });
 
 /* ─── IPC: tail -f with rotation detection ───
- * Pure polling (fs.statSync on an interval) instead of fs.watch.
+ * Asynchronous, non-overlapping polling instead of fs.watch.
  * fs.watch is backed by a different native mechanism per OS
  * (inotify / FSEvents / ReadDirectoryChangesW) and each one can miss or
  * delay events depending on how the writer flushes, or on network/virtual
@@ -393,72 +470,120 @@ ipcMain.handle("file:read:cancel", async (_event, readId) => {
 const WATCH_POLL_MS = 400;
 
 ipcMain.handle("file:watch", async (event, payload) => {
-  const filePath = typeof payload === "string" ? payload : payload?.filePath;
+  assertTrustedSender(event);
+  const filePath = normalizeLocalPath(typeof payload === "string" ? payload : payload?.filePath);
   const watchId = typeof payload === "string" ? filePath : payload?.watchId;
   if (!filePath || !watchId) throw new Error("Invalid file watch request");
 
   stopWatch(watchId);
   logEntry("INFO", "file", `Iniciando watch: ${path.basename(filePath)}`);
 
-  function startWatcher() {
-    let lastSize = 0;
-    let lastIno = null;
-    try {
-      const s = fs.statSync(filePath);
-      lastSize = s.size;
-      lastIno = s.ino || null;
-    } catch {}
+  async function startWatcher() {
+    const entry = {
+      watcher: null,
+      pollTimer: null,
+      filePath,
+      lastSize: 0,
+      lastIno: null,
+      stopped: false,
+      decoder: new StringDecoder("utf8"),
+    };
+    watchers.set(watchId, entry);
 
-    const timer = setInterval(() => {
+    try {
+      const stat = await fs.promises.stat(filePath);
+      if (entry.stopped) return;
+      entry.lastSize = stat.size;
+      entry.lastIno = stat.ino || null;
+    } catch { /* the polling loop handles files that disappear during startup */ }
+
+    const schedule = (delay = WATCH_POLL_MS) => {
+      if (entry.stopped) return;
+      clearTimeout(entry.pollTimer);
+      entry.pollTimer = setTimeout(tick, delay);
+    };
+
+    const send = (channel, ...args) => {
+      if (!entry.stopped && !event.sender.isDestroyed()) event.sender.send(channel, ...args);
+    };
+
+    const waitForRecreation = () => {
+      if (entry.stopped) return;
+      entry.pollTimer = setTimeout(async () => {
+        if (entry.stopped) return;
+        try {
+          await fs.promises.access(filePath, fs.constants.R_OK);
+          if (entry.stopped) return;
+          const stat = await fs.promises.stat(filePath);
+          entry.lastSize = stat.size;
+          entry.lastIno = stat.ino || null;
+          entry.decoder = new StringDecoder("utf8");
+          logEntry("INFO", "file", `Archivo recreado: ${path.basename(filePath)}`);
+          send("file:recreated", watchId, filePath);
+          schedule();
+        } catch {
+          waitForRecreation();
+        }
+      }, 500);
+    };
+
+    const tick = async () => {
+      if (entry.stopped) return;
       let stat;
       try {
-        stat = fs.statSync(filePath);
+        stat = await fs.promises.stat(filePath);
       } catch {
-        clearInterval(timer);
-        watchers.delete(watchId);
         logEntry("WARN", "file", `Archivo rotado: ${path.basename(filePath)}`);
-        event.sender.send("file:rotated", watchId, filePath);
-        waitForFile(watchId, filePath, () => {
-          logEntry("INFO", "file", `Archivo recreado: ${path.basename(filePath)}`);
-          event.sender.send("file:recreated", watchId, filePath);
-          startWatcher();
-        });
+        send("file:rotated", watchId, filePath);
+        waitForRecreation();
         return;
       }
 
-      // inode/file-index change at the same path = rotated in place (logrotate "copytruncate" or rename+recreate)
-      if (lastIno && stat.ino && stat.ino !== lastIno) {
-        clearInterval(timer);
-        watchers.delete(watchId);
+      if (entry.lastIno && stat.ino && stat.ino !== entry.lastIno) {
+        entry.lastSize = stat.size;
+        entry.lastIno = stat.ino;
+        entry.decoder = new StringDecoder("utf8");
         logEntry("WARN", "file", `Archivo rotado: ${path.basename(filePath)}`);
-        event.sender.send("file:rotated", watchId, filePath);
-        event.sender.send("file:recreated", watchId, filePath);
-        startWatcher();
+        send("file:rotated", watchId, filePath);
+        send("file:recreated", watchId, filePath);
+        schedule();
         return;
       }
 
-      if (stat.size < lastSize) {
-        lastSize = 0;
+      if (stat.size < entry.lastSize) {
+        entry.lastSize = 0;
+        entry.decoder = new StringDecoder("utf8");
         logEntry("WARN", "file", `Archivo truncado: ${path.basename(filePath)}`);
-        event.sender.send("file:truncated", watchId, filePath);
+        send("file:truncated", watchId, filePath);
+        schedule();
         return;
       }
-      if (stat.size === lastSize) return;
+      if (stat.size === entry.lastSize) {
+        schedule();
+        return;
+      }
 
+      let handle;
       try {
-        const fd  = fs.openSync(filePath, "r");
-        const buf = Buffer.allocUnsafe(stat.size - lastSize);
-        fs.readSync(fd, buf, 0, buf.length, lastSize);
-        fs.closeSync(fd);
-        lastSize = stat.size;
-        lastIno = stat.ino || lastIno;
-        event.sender.send("file:newlines", watchId, filePath, buf.toString("utf8"));
-      } catch { /* locked by another process this tick — retry next poll */ }
-    }, WATCH_POLL_MS);
+        handle = await fs.promises.open(filePath, "r");
+        const length = stat.size - entry.lastSize;
+        const buf = Buffer.allocUnsafe(length);
+        const { bytesRead } = await handle.read(buf, 0, length, entry.lastSize);
+        if (entry.stopped) return;
+        entry.lastSize += bytesRead;
+        entry.lastIno = stat.ino || entry.lastIno;
+        const decoded = entry.decoder.write(buf.subarray(0, bytesRead));
+        if (decoded) send("file:newlines", watchId, filePath, decoded);
+      } catch {
+        // The writer may lock the file briefly; keep the previous offset and retry.
+      } finally {
+        try { await handle?.close(); } catch {}
+      }
+      schedule();
+    };
 
-    watchers.set(watchId, { watcher: null, pollTimer: timer, filePath, lastSize });
+    schedule();
   }
-
   startWatcher();
   return true;
 });
@@ -466,22 +591,10 @@ ipcMain.handle("file:watch", async (event, payload) => {
 function stopWatch(watchId) {
   const entry = watchers.get(watchId);
   if (!entry) return;
+  entry.stopped = true;
   try { entry.watcher && entry.watcher.close(); } catch {}
-  if (entry.pollTimer) clearInterval(entry.pollTimer);
+  if (entry.pollTimer) clearTimeout(entry.pollTimer);
   watchers.delete(watchId);
-}
-
-/** Poll every 500 ms until filePath exists again, then call cb */
-function waitForFile(watchId, filePath, cb) {
-  const timer = setInterval(() => {
-    try {
-      fs.accessSync(filePath, fs.constants.R_OK);
-      clearInterval(timer);
-      watchers.delete(watchId);
-      cb();
-    } catch { /* not yet */ }
-  }, 500);
-  watchers.set(watchId, { watcher: null, pollTimer: timer, filePath, lastSize: 0 });
 }
 
 /* ─── IPC: stop watching ─── */
@@ -497,9 +610,11 @@ ipcMain.handle("clipboard:writeText", async (_e, text) => {
   return true;
 });
 
-ipcMain.handle("export:text", async (_e, payload) => {
+ipcMain.handle("export:text", async (event, payload) => {
+  assertTrustedSender(event);
   const defaultPath = payload?.defaultPath || "pulplog-results.log";
   const content = String(payload?.content ?? "");
+  if (Buffer.byteLength(content, "utf8") > 512 * 1024 * 1024) throw new Error("Export exceeds 512 MB");
   const { canceled, filePath } = await dialog.showSaveDialog({
     title: "Exportar resultados",
     defaultPath,
@@ -510,7 +625,7 @@ ipcMain.handle("export:text", async (_e, payload) => {
     ],
   });
   if (canceled || !filePath) return null;
-  fs.writeFileSync(filePath, content, "utf8");
+  await fs.promises.writeFile(filePath, content, "utf8");
   logEntry("INFO", "file", `Resultados exportados: ${path.basename(filePath)}`);
   return filePath;
 });
@@ -586,8 +701,9 @@ ipcMain.handle("docker:list", async (event) => {
 const dockerStreams = new Map(); // streamId → { proc, stopped }
 
 ipcMain.handle("docker:logs:start", (event, payload) => {
-  const streamId = payload?.streamId;
-  const containerId = payload?.containerId;
+  assertTrustedSender(event);
+  const streamId = normalizeIdentifier(payload?.streamId, "stream id");
+  const containerId = normalizeIdentifier(payload?.containerId, "container id");
   if (!streamId || !containerId) throw new Error("Invalid docker stream request");
   const shortId = containerId.slice(0, 12);
   logEntry("INFO", "docker", `Iniciando stream: ${shortId}`);
@@ -595,7 +711,7 @@ ipcMain.handle("docker:logs:start", (event, payload) => {
 
   const proc = spawn("docker", ["logs", "--follow", "--tail=500", containerId], {
     windowsHide: true,
-    shell: process.platform === "win32",
+    shell: false,
   });
 
   const stream = { proc, stopped: false };
@@ -856,7 +972,8 @@ function startNativeSshStream(event, payload) {
 }
 
 ipcMain.handle("remote:logs:start", (event, payload) => {
-  const streamId = payload?.streamId;
+  assertTrustedSender(event);
+  const streamId = normalizeIdentifier(payload?.streamId, "stream id");
   if (!streamId) throw new Error("Invalid remote stream request");
   stopRemoteStream(streamId);
 
@@ -971,6 +1088,7 @@ function normalizePaneTabs(tabsArr) {
 function normalizeSettings(value) {
   const s = value && typeof value === "object" ? value : {};
   const language = ["es", "en"].includes(s.language) ? s.language : "es";
+  const theme = ["classic", "light", "vscode"].includes(s.theme) ? s.theme : "classic";
 
   let panes;
   if (Array.isArray(s.panes)) {
@@ -987,6 +1105,9 @@ function normalizeSettings(value) {
     ? s.splitDirection
     : null;
   const splitRatio = Number.isFinite(s.splitRatio) ? Math.min(Math.max(s.splitRatio, 0.15), 0.85) : 0.5;
+  const maxLiveLines = Number.isFinite(s.maxLiveLines)
+    ? Math.min(Math.max(Math.round(s.maxLiveLines), 50_000), 2_000_000)
+    : 500_000;
 
   const { sessionTabs, ...rest } = s;
   return {
@@ -997,41 +1118,69 @@ function normalizeSettings(value) {
     splitRatio,
     autoScrollDefault: Boolean(s.autoScrollDefault),
     showNumsDefault: s.showNumsDefault !== false,
+    maxLiveLines,
     language,
+    theme,
   };
 }
-function loadSettings() {
-  try { return normalizeSettings(JSON.parse(fs.readFileSync(getSettingsPath(), "utf8"))); }
+async function loadSettings() {
+  try { return normalizeSettings(JSON.parse(await fs.promises.readFile(getSettingsPath(), "utf8"))); }
   catch { return normalizeSettings({}); }
 }
-function saveSettings(data) {
-  try { fs.writeFileSync(getSettingsPath(), JSON.stringify(normalizeSettings(data), null, 2), "utf8"); }
-  catch {}
+
+let settingsWriteQueue = Promise.resolve();
+function updateSettings(mutator) {
+  const operation = settingsWriteQueue.then(async () => {
+    const current = await loadSettings();
+    const next = normalizeSettings(await mutator(current));
+    const target = getSettingsPath();
+    const temporary = `${target}.${process.pid}.tmp`;
+    await fs.promises.mkdir(path.dirname(target), { recursive:true });
+    await fs.promises.writeFile(temporary, JSON.stringify(next, null, 2), "utf8");
+    await fs.promises.rename(temporary, target);
+    return next;
+  });
+  settingsWriteQueue = operation.catch(err => {
+    logEntry("ERROR", "settings", `No se pudo guardar la configuración: ${err.message}`);
+  });
+  return operation;
 }
 
-ipcMain.handle("settings:get", () => loadSettings());
-ipcMain.handle("settings:set", (_e, data) => {
-  saveSettings({ ...loadSettings(), ...data });
+ipcMain.handle("settings:get", async () => {
+  await settingsWriteQueue;
+  return loadSettings();
 });
-ipcMain.handle("recentfiles:add", (_e, fp) => {
-  const s = loadSettings();
-  const recent = (s.recentFiles || []).filter(f => f !== fp);
+ipcMain.handle("settings:set", (_event, data) =>
+  updateSettings(current => ({ ...current, ...(data && typeof data === "object" ? data : {}) }))
+    .then(settings => { refreshApplicationMenu(settings); return settings; })
+);
+ipcMain.handle("recentfiles:add", (_event, fp) => updateSettings(current => {
+  if (typeof fp !== "string" || !fp) return current;
+  const recent = (current.recentFiles || []).filter(file => file !== fp);
   recent.unshift(fp);
-  s.recentFiles = recent.slice(0, 10);
-  saveSettings(s);
-  return s.recentFiles;
-});
-ipcMain.handle("recentfiles:remove", (_e, fp) => {
-  const s = loadSettings();
-  s.recentFiles = (s.recentFiles || []).filter(f => f !== fp);
-  saveSettings(s);
-  return s.recentFiles;
-});
-
+  return { ...current, recentFiles:recent.slice(0, 10) };
+}).then(settings => {
+  refreshApplicationMenu(settings);
+  return settings.recentFiles;
+}));
+ipcMain.handle("recentfiles:remove", (_event, fp) => updateSettings(current => ({
+  ...current,
+  recentFiles:(current.recentFiles || []).filter(file => file !== fp),
+})).then(settings => {
+  refreshApplicationMenu(settings);
+  return settings.recentFiles;
+}));
 /* ─── IPC: app diagnostics log ─── */
 ipcMain.handle("applog:get",   () => [...appLogEntries]);
 ipcMain.handle("applog:clear", () => { appLogEntries.length = 0; });
-
+ipcMain.handle("diagnostics:metric", (_event, data) => {
+  const name = typeof data?.name === "string" ? data.name.slice(0, 40) : "metric";
+  const value = Number(data?.value);
+  const detail = typeof data?.detail === "string" ? data.detail.slice(0, 160) : "";
+  if (!Number.isFinite(value)) return false;
+  logEntry("INFO", "performance", `${name}: ${value.toFixed(1)} ms${detail ? ` · ${detail}` : ""}`);
+  return true;
+});
 /* ─── IPC: initial file arg (pull model — renderer asks on mount) ─── */
 ipcMain.handle("file:getInitialArg", () => {
   const fp = pendingFileArg;
@@ -1103,9 +1252,48 @@ function registerShortcuts(win) {
 
 /* ─── lifecycle ─── */
 app.whenReady().then(() => {
-  const splash = createSplashWindow();
+  const splash = IS_SMOKE_TEST ? null : createSplashWindow();
   const win = createWindow(splash);
-  registerShortcuts(win);
+  if (!IS_SMOKE_TEST) registerShortcuts(win);
+  if (IS_SMOKE_TEST) {
+    win.webContents.once("did-finish-load", () => {
+      setTimeout(async () => {
+        try {
+          const smokeFile = JSON.stringify(process.env.PULPLOG_SMOKE_FILE || "");
+          const result = await win.webContents.executeJavaScript(`(async () => {
+            const stat = await window.electronAPI.statFile(${smokeFile});
+            const readText = await new Promise((resolve, reject) => {
+              let text = "";
+              window.electronAPI.readFile(${smokeFile}, {
+                onChunk: chunk => { text += chunk; },
+                onDone: () => resolve(text),
+                onError: reject,
+              });
+            });
+            await window.electronAPI.setSettings({ maxLiveLines:250000 });
+            const settings = await window.electronAPI.getSettings();
+            return {
+              hasRoot: document.querySelector("#root")?.childElementCount > 0,
+              hasPreload: typeof window.electronAPI?.statFile === "function",
+              sandboxed: typeof process === "undefined",
+              statSize: stat?.size,
+              readMatches: readText === "INFO ready\\n",
+              settingsPersisted: settings?.maxLiveLines === 250000
+            };
+          })()`);
+          const recentMenu = Menu.getApplicationMenu()?.getMenuItemById("open-recent");
+          if (!result.hasRoot || !result.hasPreload || !result.sandboxed ||
+              result.statSize !== 11 || !result.readMatches || !result.settingsPersisted ||
+              !recentMenu?.submenu) throw new Error(JSON.stringify(result));
+          console.log("PULPLOG_SMOKE_OK");
+          app.exit(0);
+        } catch (error) {
+          console.error("PULPLOG_SMOKE_FAILED", error);
+          app.exit(1);
+        }
+      }, 250);
+    });
+  }
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on("will-quit", () => globalShortcut.unregisterAll());
@@ -1113,8 +1301,9 @@ app.on("window-all-closed", () => {
   activeReads.forEach((stream) => { try { stream.destroy(); } catch {} });
   activeReads.clear();
   watchers.forEach((e) => {
+    e.stopped = true;
     try { e.watcher && e.watcher.close(); } catch {}
-    if (e.pollTimer) clearInterval(e.pollTimer);
+    if (e.pollTimer) clearTimeout(e.pollTimer);
   });
   watchers.clear();
   dockerStreams.forEach((_e, id) => stopDockerStream(id));

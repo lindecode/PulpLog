@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, memo, createContext, useContext } from "react";
+import { appendRecentItems, classify, classifyLines, countLevels, findAdjacentLineIndex, findLineRange, splitTextChunk } from "./logProcessing.mjs";
+import { getRememberedScroll, setRememberedScroll, useBatchedLines, useFilteredLogs, useRememberedState } from "./logHooks.mjs";
+import { createLogWorkerClient } from "./logWorkerClient.mjs";
 
 /* ═══════════════════════════════════════════
    Constants
@@ -6,7 +9,52 @@ import { useState, useEffect, useRef, useMemo, useCallback, memo, createContext,
 const ROW_H    = 22;
 const OVERSCAN = 40;
 const IS_ELECTRON = typeof window !== "undefined" && !!window.electronAPI;
+const RENDERER_STARTED_AT = performance.now();
 
+const reportMetric = (name, value, detail = "") => {
+  if (IS_ELECTRON) window.electronAPI.recordMetric({ name, value, detail }).catch(() => {});
+};
+const FILE_CACHE_MAX_ENTRIES = 3;
+const FILE_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const fileCache = new Map();
+let fileCacheBytes = 0;
+
+function getCachedFile(filePath, stat) {
+  const entry = fileCache.get(filePath);
+  if (!entry) return null;
+  if (!stat || entry.size !== stat.size || entry.mtime !== stat.mtime) {
+    fileCache.delete(filePath);
+    fileCacheBytes -= entry.size;
+    return null;
+  }
+  fileCache.delete(filePath);
+  fileCache.set(filePath, entry);
+  return entry;
+}
+
+function cacheFile(filePath, stat, items, stats) {
+  const previous = fileCache.get(filePath);
+  if (previous) fileCacheBytes -= previous.size;
+  fileCache.delete(filePath);
+  if (!stat || stat.size > FILE_CACHE_MAX_BYTES) return;
+  const entry = { size:stat.size, mtime:stat.mtime, items, stats:{ ...stats } };
+  fileCache.set(filePath, entry);
+  fileCacheBytes += entry.size;
+  while (fileCache.size > FILE_CACHE_MAX_ENTRIES || fileCacheBytes > FILE_CACHE_MAX_BYTES) {
+    const oldestKey = fileCache.keys().next().value;
+    const oldest = fileCache.get(oldestKey);
+    fileCache.delete(oldestKey);
+    fileCacheBytes -= oldest?.size || 0;
+  }
+}
+function useDebouncedValue(value, delay = 180) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return debounced;
+}
 /* ═══════════════════════════════════════════
    i18n
 ═══════════════════════════════════════════ */
@@ -45,6 +93,15 @@ const T = {
     stopped:         "● detenido",
     lines:           (f, tot) => `${fmtNum(f)} / ${fmtNum(tot)} líneas`,
     lines_size:      (f, tot, s) => `${fmtNum(f)} / ${fmtNum(tot)} líneas · ${s}`,
+    selected_line:   n => `Línea ${fmtNum(n)} seleccionada · ↑/↓ navegar · Esc liberar`,
+    clear_selection: "Quitar selección (Esc)",
+    selected_rows:   (n, visible) => visible === n ? `${fmtNum(n)} filas seleccionadas` : `${fmtNum(n)} seleccionadas · ${fmtNum(visible)} visibles`,
+    copy_selected:   "Copiar filas",
+    copy_selected_numbers:"Copiar con números de línea",
+    export_selected: "Exportar selección",
+    bookmark_selected_add:"Agregar marcadores",
+    bookmark_selected_remove:"Quitar marcadores",
+    filter_this_text:"Filtrar por este texto",
     rotated:         c => `Archivo rotado — recargando en ${c}s…`,
     truncated:       c => `Archivo truncado — recargando en ${c}s…`,
     recreated:       "Nuevo archivo detectado — cargando…",
@@ -93,7 +150,13 @@ const T = {
     prefs_h:         "PREFERENCIAS",
     pref_autoscroll: "Auto-scroll activado al abrir archivo",
     pref_linenums:   "Mostrar números de línea por defecto",
+    pref_max_lines:  "Máximo de líneas conservadas en flujos vivos",
+    lines_discarded: n => `${fmtNum(n)} líneas antiguas descartadas`,
     lang_h:          "IDIOMA",
+    theme_h:         "TEMA",
+    theme_classic:   "Clásica",
+    theme_light:     "Blanca",
+    theme_vscode:    "Oscura (VS Code)",
     open_file_btn:   "Abrir archivo…",
     recent_h:        "RECIENTES",
     hint_electron:   "Ctrl+O  ·  Ctrl+T nueva pestaña  ·  clic en ◇ para marcar líneas",
@@ -143,6 +206,15 @@ const T = {
     stopped:         "● stopped",
     lines:           (f, tot) => `${fmtNum(f)} / ${fmtNum(tot)} lines`,
     lines_size:      (f, tot, s) => `${fmtNum(f)} / ${fmtNum(tot)} lines · ${s}`,
+    selected_line:   n => `Line ${fmtNum(n)} selected · ↑/↓ navigate · Esc release`,
+    clear_selection: "Clear selection (Esc)",
+    selected_rows:   (n, visible) => visible === n ? `${fmtNum(n)} rows selected` : `${fmtNum(n)} selected · ${fmtNum(visible)} visible`,
+    copy_selected:   "Copy rows",
+    copy_selected_numbers:"Copy with line numbers",
+    export_selected: "Export selection",
+    bookmark_selected_add:"Add bookmarks",
+    bookmark_selected_remove:"Remove bookmarks",
+    filter_this_text:"Filter by this text",
     rotated:         c => `File rotated — reloading in ${c}s…`,
     truncated:       c => `File truncated — reloading in ${c}s…`,
     recreated:       "New file detected — loading…",
@@ -191,7 +263,13 @@ const T = {
     prefs_h:         "PREFERENCES",
     pref_autoscroll: "Auto-scroll enabled when opening file",
     pref_linenums:   "Show line numbers by default",
+    pref_max_lines:  "Maximum retained lines in live streams",
+    lines_discarded: n => `${fmtNum(n)} old lines discarded`,
     lang_h:          "LANGUAGE",
+    theme_h:         "THEME",
+    theme_classic:   "Classic",
+    theme_light:     "Light",
+    theme_vscode:    "Dark (VS Code)",
     open_file_btn:   "Open file…",
     recent_h:        "RECENT",
     hint_electron:   "Ctrl+O  ·  Ctrl+T new tab  ·  click ◇ to bookmark lines",
@@ -215,73 +293,34 @@ const useLang = () => useContext(LangCtx);
 /* ═══════════════════════════════════════════
    Log classification & styling
 ═══════════════════════════════════════════ */
-function classify(line) {
-  if (/^\s*(at |\.{3}\s*\d+ more)/.test(line))  return "stack";
-  if (/^Caused by:/i.test(line.trimStart()))      return "causedby";
-  if (/\bERROR\b/.test(line))                     return "error";
-  if (/\bWARN\b/.test(line))                      return "warn";
-  if (/\bINFO\b/.test(line))                      return "info";
-  if (/\bDEBUG\b/.test(line))                     return "debug";
-  if (/\bTRACE\b/.test(line))                     return "trace";
-  if (/Exception|Error:/.test(line))              return "exception";
-  return "plain";
-}
-
 const STYLE = {
-  error:     { bg:"#3a1010", bar:"#e04444", txt:"#ff8888" },
-  exception: { bg:"#3a1010", bar:"#b03030", txt:"#ff6666" },
-  causedby:  { bg:"#3a2010", bar:"#d06030", txt:"#ffaa66" },
-  stack:     { bg:"#16122a", bar:"#5a3a9a", txt:"#a090d0" },
-  warn:      { bg:"#281e08", bar:"#c08020", txt:"#f0c060" },
-  info:      { bg:"#081c2c", bar:"#2a7faa", txt:"#60b8e8" },
-  debug:     { bg:"#101010", bar:"#2a4a2a", txt:"#6a9a6a" },
-  trace:     { bg:"#0e0e0e", bar:"#222",    txt:"#555"    },
-  plain:     { bg:"transparent", bar:"transparent", txt:"#b0b0b0" },
+  error:     { bg:"var(--pl-lvl-error-bg)",     bar:"var(--pl-lvl-error-bar)",     txt:"var(--pl-lvl-error-txt)" },
+  exception: { bg:"var(--pl-lvl-exception-bg)", bar:"var(--pl-lvl-exception-bar)", txt:"var(--pl-lvl-exception-txt)" },
+  causedby:  { bg:"var(--pl-lvl-causedby-bg)",  bar:"var(--pl-lvl-causedby-bar)",  txt:"var(--pl-lvl-causedby-txt)" },
+  stack:     { bg:"var(--pl-lvl-stack-bg)",     bar:"var(--pl-lvl-stack-bar)",     txt:"var(--pl-lvl-stack-txt)" },
+  warn:      { bg:"var(--pl-lvl-warn-bg)",      bar:"var(--pl-lvl-warn-bar)",      txt:"var(--pl-lvl-warn-txt)" },
+  info:      { bg:"var(--pl-lvl-info-bg)",      bar:"var(--pl-lvl-info-bar)",      txt:"var(--pl-lvl-info-txt)" },
+  debug:     { bg:"var(--pl-lvl-debug-bg)",     bar:"var(--pl-lvl-debug-bar)",     txt:"var(--pl-lvl-debug-txt)" },
+  trace:     { bg:"var(--pl-lvl-trace-bg)",     bar:"var(--pl-lvl-trace-bar)",     txt:"var(--pl-lvl-trace-txt)" },
+  plain:     { bg:"transparent", bar:"transparent", txt:"var(--pl-lvl-plain-txt)" },
 };
 
 function hl(raw, type) {
   if (type === "stack" || type === "causedby") return esc(raw);
   return esc(raw)
     .replace(/\b(ERROR|WARN|INFO|DEBUG|TRACE)\b/g,
-      m => `<b style="color:${STYLE[m.toLowerCase()]?.bar||"#aaa"};font-weight:700">${m}</b>`)
+      m => `<b style="color:${STYLE[m.toLowerCase()]?.bar||"var(--pl-syn-fallback)"};font-weight:700">${m}</b>`)
     .replace(/(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[.,]\d+)/g,
-      '<span style="color:#484848">$1</span>')
+      '<span style="color:var(--pl-syn-dim)">$1</span>')
     .replace(/\[([\w\-]+)\]/g,
-      '<span style="color:#5a5a7a">[$1]</span>')
+      '<span style="color:var(--pl-syn-bracket)">[$1]</span>')
     .replace(/([a-z][a-z0-9_]*\.){2,}[A-Z][a-zA-Z0-9_]*/g,
-      '<span style="color:#5a7a5a">$&</span>');
+      '<span style="color:var(--pl-syn-match)">$&</span>');
 }
 const esc     = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 const fmtSize = b => b>=1e9?`${(b/1e9).toFixed(2)} GB`:b>=1e6?`${(b/1e6).toFixed(1)} MB`:b>=1e3?`${(b/1e3).toFixed(0)} KB`:`${b} B`;
 const fmtNum  = n => n>=1e6?`${(n/1e6).toFixed(1)}M`:n>=1e3?`${(n/1e3).toFixed(1)}k`:String(n);
 const safeFileName = s => String(s || "pulplog-results").replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").slice(0, 80);
-
-// Expands each match into a window of `context` lines before/after it (grep -C style),
-// merging overlapping windows and marking the gaps between separate windows.
-function applyContext(classified, isMatch, context) {
-  if (!context) return classified.filter(isMatch);
-  const n = classified.length;
-  const ranges = [];
-  for (let i = 0; i < n; i++) {
-    if (!isMatch(classified[i])) continue;
-    const start = Math.max(0, i - context);
-    const end = Math.min(n - 1, i + context);
-    const last = ranges[ranges.length - 1];
-    if (last && start <= last.end + 1) last.end = Math.max(last.end, end);
-    else ranges.push({ start, end });
-  }
-  const out = [];
-  let prevEnd = -1;
-  for (const r of ranges) {
-    if (prevEnd >= 0) out.push({ separator: true, key: `sep-${r.start}`, skipped: r.start - prevEnd - 1 });
-    for (let i = r.start; i <= r.end; i++) {
-      const item = classified[i];
-      out.push(isMatch(item) ? item : { ...item, contextOnly: true });
-    }
-    prevEnd = r.end;
-  }
-  return out;
-}
 
 function buildResultText({ source, filter, items, total }) {
   const realRows = items.filter(x => !x.separator).length;
@@ -318,65 +357,112 @@ async function exportResultText(defaultPath, content) {
 /* ═══════════════════════════════════════════
    LogRow
 ═══════════════════════════════════════════ */
-const LogRow = memo(({ item, showNums, isBookmarked, onToggleBookmark }) => {
+const LogRow = memo(({ item, showNums, isBookmarked, isSelected, isActive, onToggleBookmark, onSelectLine, onOpenContextMenu }) => {
   const t = useLang();
   if (item.separator) {
     return (
       <div style={{ display:"flex", alignItems:"center", height:ROW_H, gap:8,
-                    borderBottom:"0.5px solid rgba(255,255,255,.02)" }}>
-        <div style={{ flex:1, borderTop:"0.5px dashed #262626", margin:"0 10px" }} />
-        <span style={{ flexShrink:0, fontSize:10, color:"#3a3a3a" }}>{t("context_gap", item.skipped)}</span>
-        <div style={{ flex:1, borderTop:"0.5px dashed #262626", margin:"0 10px" }} />
+                    borderBottom:"0.5px solid var(--pl-hairline)" }}>
+        <div style={{ flex:1, borderTop:"0.5px dashed var(--pl-border-soft)", margin:"0 10px" }} />
+        <span style={{ flexShrink:0, fontSize:10, color:"var(--pl-text-7)" }}>{t("context_gap", item.skipped)}</span>
+        <div style={{ flex:1, borderTop:"0.5px dashed var(--pl-border-soft)", margin:"0 10px" }} />
       </div>
     );
   }
   const s = STYLE[item.type] || STYLE.plain;
   return (
-    <div style={{
-      display:"flex", alignItems:"stretch", height:ROW_H,
-      background: isBookmarked ? "rgba(255,200,50,.07)" : s.bg,
-      borderBottom:"0.5px solid rgba(255,255,255,.02)",
-      outline: isBookmarked ? "0.5px solid rgba(255,200,50,.25)" : "none",
-      opacity: item.contextOnly ? 0.55 : 1,
-    }}>
+    <div
+      role="option"
+      aria-selected={isSelected}
+      onClick={event => onSelectLine(item.origLine, event)}
+      onContextMenu={event => onOpenContextMenu(item, event)}
+      style={{
+        display:"flex", alignItems:"stretch", height:ROW_H,
+        background: isSelected ? "color-mix(in srgb, var(--pl-accent) 24%, var(--pl-bg-panel))"
+          : isBookmarked ? "rgba(255,200,50,.07)" : s.bg,
+        borderBottom:"0.5px solid var(--pl-hairline)",
+        outline: isActive ? "1px solid var(--pl-accent)"
+          : isSelected ? "1px solid color-mix(in srgb, var(--pl-accent) 55%, transparent)"
+          : isBookmarked ? "0.5px solid rgba(255,200,50,.25)" : "none",
+        outlineOffset:-1,
+        opacity: item.contextOnly && !isSelected ? 0.55 : 1,
+        cursor:"default",
+      }}>
       {showNums && (
         <span
           onClick={() => onToggleBookmark(item.origLine)}
           title={isBookmarked ? t("bm_remove") : t("bm_add")}
           style={{ minWidth:58, display:"flex", alignItems:"center", justifyContent:"flex-end",
-                   gap:4, padding:"0 6px 0 4px", fontSize:10, color:"#2e2e2e",
+                   gap:4, padding:"0 6px 0 4px", fontSize:10, color:"var(--pl-text-7)",
                    lineHeight:`${ROW_H}px`, flexShrink:0, userSelect:"none",
                    cursor:"pointer", fontFamily:"inherit" }}>
           {isBookmarked
-            ? <span style={{ color:"#f0c040", fontSize:10 }}>◆</span>
-            : <span style={{ color:"#1e1e1e", fontSize:10 }}>◇</span>}
+            ? <span style={{ color:"var(--pl-bookmark)", fontSize:10 }}>◆</span>
+            : <span style={{ color:"var(--pl-border-soft)", fontSize:10 }}>◇</span>}
           {item.origLine}
         </span>
       )}
       <span style={{ width:4, flexShrink:0,
-                     background: isBookmarked ? "#c0a030" : s.bar }} />
+                     background: isBookmarked ? "var(--pl-bookmark)" : s.bar }} />
       <span
         style={{ padding:"0 10px", fontSize:12, lineHeight:`${ROW_H}px`, color:s.txt,
-                 flex:1, whiteSpace:"pre", fontFamily:"inherit" }}
+                 flex:1, whiteSpace:"pre", fontFamily:"inherit", userSelect:"text" }}
         dangerouslySetInnerHTML={{ __html: hl(item.raw, item.type) }}
       />
     </div>
   );
 });
 
-/* ═══════════════════════════════════════════
-   VirtualList
-═══════════════════════════════════════════ */
-function VirtualList({ items, showNums, bookmarks, onToggleBookmark, listRef }) {
-  const [scrollTop, setScrollTop] = useState(0);
+function useRowSelection(tabKey, classified) {
+  const [selection, setStoredSelection] = useRememberedState(tabKey, "rowSelection", () => ({
+    lines:new Set(), active:null, anchor:null,
+  }));
+  const selectionRef = useRef(selection);
+  const setSelection = useCallback(updater => {
+    setStoredSelection(previous => {
+      const next = typeof updater === "function" ? updater(previous) : updater;
+      selectionRef.current = next;
+      return next;
+    });
+  }, [setStoredSelection]);
+  useEffect(() => { selectionRef.current = selection; }, [selection]);
+  useEffect(() => {
+    if (!classified.length || !selection.lines.size) return;
+    const firstLine = classified[0].origLine;
+    const lastLine = classified[classified.length - 1].origLine;
+    const kept = new Set([...selection.lines].filter(line => line >= firstLine && line <= lastLine));
+    if (kept.size === selection.lines.size) return;
+    const active = kept.has(selection.active) ? selection.active : (kept.values().next().value ?? null);
+    const anchor = kept.has(selection.anchor) ? selection.anchor : active;
+    setSelection({ lines:kept, active, anchor });
+  }, [classified, selection, setSelection]);
+  return { selection, setSelection, selectionRef };
+}
+
+function selectedLogRows(sourceItems, lines) {
+  return sourceItems.filter(item => !item.separator && lines.has(item.origLine));
+}
+
+function selectedLogText(sourceItems, lines, includeLineNumbers = false) {
+  return selectedLogRows(sourceItems, lines)
+    .map(item => includeLineNumbers ? `${item.origLine}\t${item.raw}` : item.raw)
+    .join("\n");
+}
+
+function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark, selection, setSelection,
+                       listRef, stateKey, selectionSource, onFilterText }) {
+  const t = useLang();
+  const [scrollTop, setScrollTop] = useState(() => getRememberedScroll(stateKey));
   const [height,    setHeight]    = useState(500);
+  const [contextMenu, setContextMenu] = useState(null);
   const containerRef = useRef(null);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(([e]) => setHeight(e.contentRect.height));
+    const ro = new ResizeObserver(([entry]) => setHeight(entry.contentRect.height));
     ro.observe(el);
+    el.scrollTop = getRememberedScroll(stateKey);
     return () => ro.disconnect();
   }, []);
 
@@ -385,22 +471,125 @@ function VirtualList({ items, showNums, bookmarks, onToggleBookmark, listRef }) 
     listRef.current = {
       scrollToBottom: () => { if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight; },
       scrollToTop:    () => { if (containerRef.current) containerRef.current.scrollTop = 0; },
-      scrollToIndex:  (idx) => {
+      scrollToIndex:  (index) => {
         if (containerRef.current)
-          containerRef.current.scrollTop = Math.max(0, idx * ROW_H - height / 2);
+          containerRef.current.scrollTop = Math.max(0, index * ROW_H - height / 2);
       },
     };
   });
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const onKey = event => { if (event.key === "Escape") close(); };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [contextMenu]);
 
   const total  = items.length;
   const totalH = total * ROW_H;
   const start  = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
   const end    = Math.min(total, Math.ceil((scrollTop + height) / ROW_H) + OVERSCAN);
+  const nativeText = () => window.getSelection?.()?.toString() || "";
+
+  const selectLine = (line, event = {}, ignoreNativeText = false) => {
+    if (!ignoreNativeText && nativeText().trim()) return;
+    const additive = !!(event.ctrlKey || event.metaKey);
+    const extending = !!event.shiftKey;
+    setSelection(previous => {
+      if (extending) {
+        const anchor = previous.anchor ?? previous.active ?? line;
+        const range = new Set(findLineRange(items, anchor, line));
+        const lines = additive ? new Set([...previous.lines, ...range]) : range;
+        return { lines, active:line, anchor };
+      }
+      if (additive) {
+        const lines = new Set(previous.lines);
+        lines.has(line) ? lines.delete(line) : lines.add(line);
+        const active = lines.has(line) ? line : (lines.values().next().value ?? null);
+        return { lines, active, anchor:line };
+      }
+      return { lines:new Set([line]), active:line, anchor:line };
+    });
+  };
+
+  const navigateSelection = (direction, extending) => {
+    const index = findAdjacentLineIndex(items, selection.active, direction);
+    if (index < 0) return;
+    selectLine(items[index].origLine, { shiftKey:extending }, true);
+    listRef.current?.scrollToIndex(index);
+  };
+
+  const copySelection = (includeLineNumbers = false) => {
+    const text = selectedLogText(sourceItems, selection.lines, includeLineNumbers);
+    if (text) copyResultText(text);
+    setContextMenu(null);
+  };
+
+  const exportSelection = () => {
+    const text = selectedLogText(sourceItems, selection.lines, false);
+    if (text) exportResultText(`${safeFileName(selectionSource)}-selection.log`, text);
+    setContextMenu(null);
+  };
+
+  const toggleSelectionBookmarks = () => {
+    const lines = [...selection.lines];
+    const remove = lines.length > 0 && lines.every(line => bookmarks.has(line));
+    for (const line of lines) {
+      if ((remove && bookmarks.has(line)) || (!remove && !bookmarks.has(line))) onToggleBookmark(line);
+    }
+    setContextMenu(null);
+  };
+
+  const openContextMenu = (item, event) => {
+    event.preventDefault();
+    if (!selection.lines.has(item.origLine)) selectLine(item.origLine, {}, true);
+    containerRef.current?.focus({ preventScroll:true });
+    setContextMenu({ x:event.clientX, y:event.clientY, item });
+  };
+
+  const menuButtonStyle = {
+    display:"block", width:"100%", padding:"7px 12px", border:0, background:"transparent",
+    color:"var(--pl-text-2)", textAlign:"left", font:"inherit", fontSize:11, cursor:"pointer",
+    whiteSpace:"nowrap",
+  };
+  const allSelectedBookmarked = selection.lines.size > 0 && [...selection.lines].every(line => bookmarks.has(line));
 
   return (
     <div ref={containerRef}
-         style={{ overflow:"auto", flex:1, minHeight:0 }}
-         onScroll={e => setScrollTop(e.currentTarget.scrollTop)}>
+         role="listbox"
+         aria-multiselectable="true"
+         tabIndex={0}
+         aria-label="Log lines"
+         style={{ overflow:"auto", flex:1, minHeight:0, outline:"none" }}
+         onMouseDown={() => containerRef.current?.focus({ preventScroll:true })}
+         onKeyDown={event => {
+           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+             if (nativeText()) return;
+             if (selection.lines.size) { event.preventDefault(); copySelection(false); }
+           } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+             event.preventDefault();
+             const lines = new Set(items.filter(item => !item.separator).map(item => item.origLine));
+             const active = items.find(item => !item.separator)?.origLine ?? null;
+             setSelection({ lines, active, anchor:active });
+           } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+             event.preventDefault();
+             navigateSelection(event.key === "ArrowUp" ? -1 : 1, event.shiftKey);
+           } else if (event.key === "Escape" && selection.lines.size) {
+             event.preventDefault();
+             setSelection({ lines:new Set(), active:null, anchor:null });
+           }
+         }}
+         onScroll={event => {
+           const next = event.currentTarget.scrollTop;
+           setScrollTop(next);
+           setRememberedScroll(stateKey, next);
+           setContextMenu(null);
+         }}>
       <div style={{ height:totalH, position:"relative", minWidth:"100%", width:"max-content" }}>
         <div style={{ position:"absolute", top: start * ROW_H, minWidth:"100%", width:"max-content" }}>
           {items.slice(start, end).map(item => (
@@ -409,122 +598,243 @@ function VirtualList({ items, showNums, bookmarks, onToggleBookmark, listRef }) 
               item={item}
               showNums={showNums}
               isBookmarked={bookmarks.has(item.origLine)}
+              isSelected={selection.lines.has(item.origLine)}
+              isActive={selection.active === item.origLine}
               onToggleBookmark={onToggleBookmark}
+              onSelectLine={selectLine}
+              onOpenContextMenu={openContextMenu}
             />
           ))}
         </div>
       </div>
+      {contextMenu && (
+        <div onPointerDown={event => event.stopPropagation()} onContextMenu={event => event.preventDefault()}
+          style={{ position:"fixed", left:contextMenu.x, top:contextMenu.y, zIndex:1000,
+                   minWidth:210, padding:"5px 0", background:"var(--pl-bg-panel)",
+                   border:"1px solid var(--pl-border-strong)", borderRadius:7,
+                   boxShadow:"0 8px 28px rgba(0,0,0,.38)" }}>
+          <button style={menuButtonStyle} onClick={() => copySelection(false)}>{t("copy_selected")}</button>
+          <button style={menuButtonStyle} onClick={() => copySelection(true)}>{t("copy_selected_numbers")}</button>
+          <button style={menuButtonStyle} onClick={exportSelection}>{t("export_selected")}</button>
+          <div style={{ borderTop:"1px solid var(--pl-border-soft)", margin:"4px 0" }} />
+          <button style={menuButtonStyle} onClick={toggleSelectionBookmarks}>
+            {t(allSelectedBookmarked ? "bookmark_selected_remove" : "bookmark_selected_add")}
+          </button>
+          <button style={menuButtonStyle} onClick={() => {
+            const text = nativeText().trim() || contextMenu.item.raw.trim();
+            if (text) onFilterText(text);
+            setContextMenu(null);
+          }}>{t("filter_this_text")}</button>
+        </div>
+      )}
     </div>
   );
 }
 
+function SelectedLineStatus({ selection, visibleItems, onClear }) {
+  const t = useLang();
+  const total = selection.lines.size;
+  if (!total) return null;
+  const visible = visibleItems.reduce((count, item) =>
+    count + (!item.separator && selection.lines.has(item.origLine) ? 1 : 0), 0);
+  const label = total === 1 && selection.active != null
+    ? t("selected_line", selection.active)
+    : t("selected_rows", total, visible);
+  return (
+    <button type="button" onClick={onClear} title={t("clear_selection")}
+      style={{ padding:0, border:0, background:"none", color:"var(--pl-accent-hover)",
+               font:"inherit", cursor:"pointer", whiteSpace:"nowrap" }}>
+      {label}
+    </button>
+  );
+}
 /* ═══════════════════════════════════════════
    LogTab
 ═══════════════════════════════════════════ */
-function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showNumsDefault = true }) {
+function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = false, showNumsDefault = true }) {
   const t = useLang();
+  const selectionSource = fileName || filePath || "pulplog";
   const [classified,  setClassified] = useState([]);
   const [stats,       setStats]      = useState({ error:0, warn:0, info:0, debug:0 });
   const [loading,     setLoading]     = useState(true);
   const [progress,    setProgress]    = useState(0);
-  const [tailing,     setTailing]     = useState(true);
-  const [autoScroll,  setAutoScroll]  = useState(autoScrollDefault);
-  const [showNums,    setShowNums]    = useState(showNumsDefault);
-  const [filter,      setFilter]      = useState("");
-  const [useRegex,    setUseRegex]    = useState(false);
-  const [context,     setContext]     = useState(0);
+  const [tailing,     setTailing]     = useRememberedState(tabKey, "tailing", true);
+  const [autoScroll,  setAutoScroll]  = useRememberedState(tabKey, "autoScroll", autoScrollDefault);
+  const [showNums,    setShowNums]    = useRememberedState(tabKey, "showNums", showNumsDefault);
+  const [filter,      setFilter]      = useRememberedState(tabKey, "filter", "");
+  const [useRegex,    setUseRegex]    = useRememberedState(tabKey, "useRegex", false);
+  const searchFilter = useDebouncedValue(filter);
+  const [context,     setContext]     = useRememberedState(tabKey, "context", 0);
   const [regexError,  setRegexError]  = useState(false);
-  const [bookmarks,   setBookmarks]   = useState(new Set());
-  const [bmCursor,    setBmCursor]    = useState(-1);
+  const [bookmarks,   setBookmarks]   = useRememberedState(tabKey, "bookmarks", () => new Set());
+  const [bmCursor,    setBmCursor]    = useRememberedState(tabKey, "bmCursor", -1);
+
   const [rotation,    setRotation]    = useState(null);
   const [reloadKey,   setReloadKey]   = useState(0);
-  const [lvl, setLvl] = useState({
+  const [lvl, setLvl] = useRememberedState(tabKey, "levels", () => ({
     error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true
-  });
+  }));
+  const { selection, setSelection, selectionRef } = useRowSelection(tabKey, classified);
 
   const listRef       = useRef(null);
   const itemsRef      = useRef([]);
   const carryRef      = useRef("");
   const statsRef      = useRef({ error:0, warn:0, info:0, debug:0 });
   const progressRef   = useRef(0);
+  const loadedRef     = useRef(false);
+  const workerRef     = useRef(null);
+  const processingRef = useRef(Promise.resolve());
+  const nextParsedRef = useRef(1);
+  const readStartedRef= useRef(0);
   const timerRef      = useRef(null);
   const autoScrollRef = useRef(autoScroll);
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
 
   const appendCompleteLines = (lines) => {
-    const items = itemsRef.current;
-    const counts = statsRef.current;
-    for (const raw of lines) {
-      const type = classify(raw);
-      items.push({ raw, origLine: items.length + 1, type });
-      if (type === "error" || type === "exception") counts.error++;
-      else if (type === "warn") counts.warn++;
-      else if (type === "info") counts.info++;
-      else if (type === "debug") counts.debug++;
-    }
+    if (!lines.length) return processingRef.current;
+    const startLine = nextParsedRef.current;
+    nextParsedRef.current += lines.length;
+    processingRef.current = processingRef.current.then(async () => {
+      const result = workerRef.current
+        ? await workerRef.current.process(lines, startLine)
+        : (() => {
+            const items = classifyLines(lines, startLine);
+            return { items, stats:countLevels(items) };
+          })();
+      itemsRef.current.push(...result.items);
+      for (const key of ["error", "warn", "info", "debug"]) {
+        statsRef.current[key] += result.stats[key] || 0;
+      }
+    });
+    return processingRef.current;
   };
-
   const appendChunk = (chunk) => {
-    const parts = (carryRef.current + chunk).split("\n");
-    carryRef.current = parts.pop() ?? "";
-    appendCompleteLines(parts);
+    const split = splitTextChunk(carryRef.current, chunk);
+    carryRef.current = split.carry;
+    appendCompleteLines(split.lines);
   };
 
-  const publishLoadedData = () => {
+  const publishLoadedData = async () => {
     if (carryRef.current) appendCompleteLines([carryRef.current]);
+    await processingRef.current;
     carryRef.current = "";
     setClassified(itemsRef.current);
     setStats({ ...statsRef.current });
   };
 
+  const cacheCurrentFile = (expectedSize = null) => {
+    if (!IS_ELECTRON || !loadedRef.current) return;
+    const items = itemsRef.current;
+    const counts = { ...statsRef.current };
+    window.electronAPI.statFile(filePath).then(stat => {
+      if (stat && (expectedSize === null || stat.size === expectedSize)) {
+        cacheFile(filePath, stat, items, counts);
+      }
+    }).catch(() => {});
+  };
+
   /* Stream read */
   useEffect(() => {
     if (!filePath) return;
+    let disposed = false;
+    let cancelRead = null;
     setLoading(true); setProgress(0); setClassified([]);
-    itemsRef.current = [];
-    carryRef.current = "";
-    statsRef.current = { error:0, warn:0, info:0, debug:0 };
-    progressRef.current = 0;
-    setStats({ ...statsRef.current });
+    loadedRef.current = false;
+    readStartedRef.current = performance.now();
 
-    if (IS_ELECTRON) {
-      const totalBytes = fileSize || 1;
-      const cancel = window.electronAPI.readFile(filePath, {
-        onProgress(bytesRead) {
-          const next = Math.min(bytesRead / totalBytes, 0.99);
-          if (next - progressRef.current >= 0.02) {
-            progressRef.current = next;
-            setProgress(next);
-          }
-        },
-        onChunk(chunk) {
-          appendChunk(chunk);
-        },
-        onDone() {
-          publishLoadedData();
-          setLoading(false);
+    const resetBuffers = () => {
+      itemsRef.current = [];
+      carryRef.current = "";
+      statsRef.current = { error:0, warn:0, info:0, debug:0 };
+      progressRef.current = 0;
+      processingRef.current = Promise.resolve();
+      nextParsedRef.current = 1;
+      workerRef.current?.terminate();
+      workerRef.current = createLogWorkerClient();
+      setStats({ ...statsRef.current });
+    };
+
+    const start = async () => {
+      if (IS_ELECTRON) {
+        const currentStat = await window.electronAPI.statFile(filePath);
+        if (disposed) return;
+        const cached = getCachedFile(filePath, currentStat);
+        if (cached) {
+          reportMetric("file-cache-hit", performance.now() - readStartedRef.current, fileName);
+          itemsRef.current = cached.items;
+          statsRef.current = { ...cached.stats };
+          loadedRef.current = true;
+          setClassified(cached.items);
+          setStats({ ...cached.stats });
           setProgress(1);
-        },
-        onError(msg) { console.error(msg); setLoading(false); },
-      });
-      return cancel;
-    } else {
+          setLoading(false);
+          return;
+        }
+
+        reportMetric("file-cache-miss", performance.now() - readStartedRef.current, fileName);
+        resetBuffers();
+        const totalBytes = currentStat?.size || fileSize || 1;
+        cancelRead = window.electronAPI.readFile(filePath, {
+          onProgress(bytesRead) {
+            if (disposed) return;
+            const next = Math.min(bytesRead / totalBytes, 0.99);
+            if (next - progressRef.current >= 0.02) {
+              progressRef.current = next;
+              setProgress(next);
+            }
+          },
+          onChunk(chunk) {
+            if (!disposed) appendChunk(chunk);
+          },
+          async onDone(bytesRead) {
+            if (disposed) return;
+            await publishLoadedData();
+            if (disposed) return;
+            loadedRef.current = true;
+            setLoading(false);
+            setProgress(1);
+            const heap = performance.memory?.usedJSHeapSize;
+            reportMetric("file-open", performance.now() - readStartedRef.current,
+              `${fileName}: ${itemsRef.current.length} lines${heap ? ` · heap ${fmtSize(heap)}` : ""}`);
+            queueMicrotask(() => cacheCurrentFile(bytesRead));
+          },
+          onError(msg) {
+            if (!disposed) { console.error(msg); setLoading(false); }
+          },
+        });
+        return;
+      }
+
+      resetBuffers();
       const file = window.__pendingFile;
       if (!file) { setLoading(false); return; }
       const reader = new FileReader();
+      cancelRead = () => reader.abort();
       reader.onprogress = (e) => {
-        if (e.lengthComputable) setProgress(e.loaded / e.total);
+        if (!disposed && e.lengthComputable) setProgress(e.loaded / e.total);
       };
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
+        if (disposed) return;
         appendChunk(e.target.result);
-        publishLoadedData();
+        await publishLoadedData();
+        if (disposed) return;
+        loadedRef.current = true;
         setLoading(false);
         setProgress(1);
       };
-      reader.onerror = () => setLoading(false);
+      reader.onerror = () => { if (!disposed) setLoading(false); };
       reader.readAsText(file);
-      return () => reader.abort();
-    }
+    };
+
+    start().catch(err => {
+      if (!disposed) { console.error(err); setLoading(false); }
+    });
+    return () => {
+      disposed = true;
+      cancelRead?.();
+      workerRef.current?.terminate();
+      workerRef.current = null;
+    };
   }, [filePath, fileSize, reloadKey]);
 
   /* ── Rotation countdown & reload ── */
@@ -548,11 +858,12 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
   useEffect(() => {
     if (!tailing || loading || !IS_ELECTRON || !filePath) return;
     const unwatch = window.electronAPI.watchFile(filePath, {
-      onNewLines(text) {
+      async onNewLines(text) {
         appendChunk(text);
+        await processingRef.current;
         setClassified([...itemsRef.current]);
         setStats({ ...statsRef.current });
-        if (autoScrollRef.current) listRef.current?.scrollToBottom();
+        if (autoScrollRef.current && selectionRef.current.lines.size === 0) listRef.current?.scrollToBottom();
       },
       onRotated()   { setRotation({ event:"rotated",   countdown: 3 }); setTailing(false); },
       onTruncated() { setRotation({ event:"truncated", countdown: 2 }); setTailing(false); },
@@ -561,34 +872,10 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
     return () => unwatch?.();
   }, [tailing, loading, filePath]); // eslint-disable-line
 
-  const { filtered, regexValid } = useMemo(() => {
-    const hide = new Set();
-    if (!lvl.error) { hide.add("error"); hide.add("exception"); }
-    if (!lvl.stack) { hide.add("stack"); hide.add("causedby"); }
-    ["warn","info","debug","trace","plain"].forEach(k => { if (!lvl[k]) hide.add(k); });
-
-    if (!filter) return {
-      filtered: hide.size ? classified.filter(x => !hide.has(x.type)) : classified,
-      regexValid: true,
-    };
-
-    if (useRegex) {
-      let re;
-      try { re = new RegExp(filter, "i"); }
-      catch { return { filtered: [], regexValid: false }; }
-      return {
-        filtered: applyContext(classified, x => !hide.has(x.type) && re.test(x.raw), context),
-        regexValid: true,
-      };
-    }
-    const lf = filter.toLowerCase();
-    return {
-      filtered: applyContext(classified, x => !hide.has(x.type) && x.raw.toLowerCase().includes(lf), context),
-      regexValid: true,
-    };
-  }, [classified, filter, useRegex, lvl, context]);
+  const { filtered, regexValid } = useFilteredLogs("file", classified, searchFilter, useRegex, lvl, context, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
+
 
   useEffect(() => setRegexError(!regexValid), [regexValid]);
 
@@ -617,12 +904,12 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
   const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
 
   const BADGES = [
-    { key:"error", label:"ERROR", bg:"#a02020", fg:"#ffcccc", cnt:stats.error },
-    { key:"warn",  label:"WARN",  bg:"#906010", fg:"#ffe090", cnt:stats.warn  },
-    { key:"info",  label:"INFO",  bg:"#1a5f88", fg:"#90d0f0", cnt:stats.info  },
-    { key:"debug", label:"DEBUG", bg:"#244024", fg:"#90c890", cnt:stats.debug },
-    { key:"stack", label:"STACK", bg:"#3a256a", fg:"#c0a8f0", cnt:null        },
-    { key:"plain", label:"PLAIN", bg:"#2a2a2a", fg:"#aaa",    cnt:null        },
+    { key:"error", label:"ERROR", bg:"var(--pl-chip-error-bg)", fg:"var(--pl-chip-error-fg)", cnt:stats.error },
+    { key:"warn",  label:"WARN",  bg:"var(--pl-chip-warn-bg)",  fg:"var(--pl-chip-warn-fg)",  cnt:stats.warn  },
+    { key:"info",  label:"INFO",  bg:"var(--pl-chip-info-bg)",  fg:"var(--pl-chip-info-fg)",  cnt:stats.info  },
+    { key:"debug", label:"DEBUG", bg:"var(--pl-chip-debug-bg)", fg:"var(--pl-chip-debug-fg)", cnt:stats.debug },
+    { key:"stack", label:"STACK", bg:"var(--pl-chip-stack-bg)", fg:"var(--pl-chip-stack-fg)", cnt:null        },
+    { key:"plain", label:"PLAIN", bg:"var(--pl-chip-plain-bg)", fg:"var(--pl-chip-plain-fg)", cnt:null        },
   ];
 
   const copyResults = useCallback(() => {
@@ -641,14 +928,14 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
 
       {/* toolbar */}
       <div style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px",
-                    background:"#111", borderBottom:"0.5px solid #222",
+                    background:"var(--pl-bg-panel)", borderBottom:"0.5px solid var(--pl-border-soft)",
                     flexWrap:"wrap", flexShrink:0 }}>
 
         <div style={{ display:"flex", flex:1, minWidth:140, position:"relative" }}>
           <input
-            style={{ flex:1, background:"#181818",
-                     border:`0.5px solid ${regexError ? "#883030" : "#2e2e2e"}`,
-                     borderRadius:"6px 0 0 6px", color: regexError ? "#ff6060" : "#bbb",
+            style={{ flex:1, background:"var(--pl-bg-input)",
+                     border:`0.5px solid ${regexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+                     borderRadius:"6px 0 0 6px", color: regexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
                      fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
             placeholder={useRegex ? t("regex_ph") : t("filter_ph")}
             value={filter}
@@ -657,10 +944,10 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
           <button
             onClick={() => setUseRegex(p => !p)}
             title={t("regex_btn_title")}
-            style={{ background: useRegex ? "#1a2a3a" : "#181818",
-                     border:`0.5px solid ${useRegex ? "#2a6a9a" : "#2e2e2e"}`,
+            style={{ background: useRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                     border:`0.5px solid ${useRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
                      borderLeft:"none", borderRadius:"0 6px 6px 0",
-                     color: useRegex ? "#60b8e8" : "#555",
+                     color: useRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
                      fontFamily:"monospace", fontSize:11, padding:"4px 10px",
                      cursor:"pointer", fontWeight: useRegex ? 700 : 400 }}>
             .*
@@ -668,13 +955,13 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
         </div>
 
         <div style={{ display:"flex", alignItems:"center", gap:4 }} title={t("context_title")}>
-          <span style={{ fontSize:10, color:"#555" }}>±</span>
+          <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
           <input
             type="number" min={0} max={50}
             value={context}
             onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
-            style={{ width:40, background:"#181818", border:"0.5px solid #2e2e2e",
-                     borderRadius:6, color:"#bbb", fontFamily:"inherit", fontSize:11,
+            style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                     borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
                      padding:"3px 4px", textAlign:"center" }}
           />
         </div>
@@ -686,13 +973,13 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
             style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11,
                      padding:"3px 7px", borderRadius:6, fontWeight:600,
                      cursor:"pointer", userSelect:"none",
-                     background: lvl[key] ? bg : "#181818",
-                     color:      lvl[key] ? fg : "#444",
-                     border:     `1.5px solid ${lvl[key] ? bg : "#222"}`,
+                     background: lvl[key] ? bg : "var(--pl-bg-input)",
+                     color:      lvl[key] ? fg : "var(--pl-text-6)",
+                     border:     `1.5px solid ${lvl[key] ? bg : "var(--pl-border-soft)"}`,
                      opacity:    lvl[key] ? 1 : 0.45 }}>
             {label}
             {cnt > 0 && (
-              <span style={{ background:"rgba(255,255,255,.18)", borderRadius:4,
+              <span style={{ background:"var(--pl-badge-overlay)", borderRadius:4,
                              padding:"0 4px", fontSize:10 }}>{fmtNum(cnt)}</span>
             )}
           </span>
@@ -709,7 +996,7 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
           ◆ ↓
         </Btn>
         {bookmarks.size > 0 && (
-          <span style={{ fontSize:10, color:"#c0a030", padding:"0 2px" }}>
+          <span style={{ fontSize:10, color:"var(--pl-bookmark)", padding:"0 2px" }}>
             {t("bm_count", bookmarks.size)}
           </span>
         )}
@@ -745,8 +1032,8 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
 
       {/* progress */}
       {loading && (
-        <div style={{ height:3, background:"#181818", flexShrink:0 }}>
-          <div style={{ height:"100%", background:"#2a7faa", transition:"width .08s",
+        <div style={{ height:3, background:"var(--pl-bg-input)", flexShrink:0 }}>
+          <div style={{ height:"100%", background:"var(--pl-accent)", transition:"width .08s",
                         width:`${progress*100}%` }} />
         </div>
       )}
@@ -759,41 +1046,49 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
       {/* virtual list */}
       {loading ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
-                      flexDirection:"column", gap:12, color:"#444", fontSize:13 }}>
-          <span style={{ fontSize:28, display:"block", color:"#2a7faa",
+                      flexDirection:"column", gap:12, color:"var(--pl-text-6)", fontSize:13 }}>
+          <span style={{ fontSize:28, display:"block", color:"var(--pl-accent)",
             animation:"spin 1s linear infinite" }}>↻</span>
           {t("reading", Math.round(progress*100))}
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         </div>
       ) : filtered.length === 0 ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
-                      flexDirection:"column", gap:8, color:"#333", fontSize:13 }}>
+                      flexDirection:"column", gap:8, color:"var(--pl-text-7)", fontSize:13 }}>
           {regexError
-            ? <><span style={{ color:"#ff6060", fontSize:14 }}>⚠</span> {t("regex_invalid")}</>
+            ? <><span style={{ color:"var(--pl-error-text)", fontSize:14 }}>⚠</span> {t("regex_invalid")}</>
             : filter ? t("no_results", filter) : t("no_lines")}
         </div>
       ) : (
         <VirtualList
           items={filtered}
+          sourceItems={classified}
           showNums={showNums}
           bookmarks={bookmarks}
           onToggleBookmark={toggleBookmark}
+          selection={selection}
+          setSelection={setSelection}
           listRef={listRef}
+          stateKey={tabKey}
+          selectionSource={selectionSource}
+          onFilterText={setFilter}
         />
       )}
 
       {/* status bar */}
-      <div style={{ display:"flex", gap:14, padding:"4px 10px", background:"#0d0d0d",
-                    borderTop:"0.5px solid #1a1a1a", fontSize:10, flexShrink:0, alignItems:"center" }}>
-        {[["#883030",stats.error,"err"],["#806010",stats.warn,"warn"],
-          ["#1a5070",stats.info,"info"],["#284028",stats.debug,"dbg"]].map(([c,n,l])=>(
-          <span key={l} style={{ color:c }}>{fmtNum(n)} <span style={{color:"#252525"}}>{l}</span></span>
+      <div style={{ display:"flex", gap:14, padding:"4px 10px", background:"var(--pl-bg-footer)",
+                    borderTop:"0.5px solid var(--pl-border-soft)", fontSize:10, flexShrink:0, alignItems:"center" }}>
+        {[["var(--pl-error-border)",stats.error,"err"],["var(--pl-stat-warn)",stats.warn,"warn"],
+          ["var(--pl-stat-info)",stats.info,"info"],["var(--pl-stat-debug)",stats.debug,"dbg"]].map(([c,n,l])=>(
+          <span key={l} style={{ color:c }}>{fmtNum(n)} <span style={{color:"var(--pl-text-8)"}}>{l}</span></span>
         ))}
-        {tailing && <span style={{ color:"#2a9a4a" }}>{t("live")}</span>}
+        {tailing && <span style={{ color:"var(--pl-status-live)" }}>{t("live")}</span>}
         {bookmarks.size > 0 && (
-          <span style={{ color:"#c0a030" }}>◆ {bookmarks.size}</span>
+          <span style={{ color:"var(--pl-bookmark)" }}>◆ {bookmarks.size}</span>
         )}
-        <span style={{ marginLeft:"auto", color:"#444" }}>
+        <SelectedLineStatus selection={selection} visibleItems={filtered}
+          onClear={() => setSelection({ lines:new Set(), active:null, anchor:null })} />
+        <span style={{ marginLeft:"auto", color:"var(--pl-text-6)" }}>
           {fileSize
             ? t("lines_size", shownCount, classified.length, fmtSize(fileSize))
             : t("lines", shownCount, classified.length)}
@@ -809,9 +1104,9 @@ function LogTab({ filePath, fileName, fileSize, autoScrollDefault = false, showN
 function RotationBanner({ event, countdown }) {
   const t = useLang();
   const CFG = {
-    rotated:   { bg:"#2a1a00", border:"#c08020", color:"#f0c060", icon:"↻", label: t("rotated", countdown) },
-    truncated: { bg:"#0a1e2a", border:"#2a7faa", color:"#60b8e8", icon:"⬇", label: t("truncated", countdown) },
-    recreated: { bg:"#0a2a0a", border:"#2a8a2a", color:"#60d060", icon:"✓", label: t("recreated") },
+    rotated:   { bg:"var(--pl-banner-rotated-bg)", border:"var(--pl-bookmark)", color:"var(--pl-bookmark)", icon:"↻", label: t("rotated", countdown) },
+    truncated: { bg:"var(--pl-banner-truncated-bg)", border:"var(--pl-accent)", color:"var(--pl-accent-hover)", icon:"⬇", label: t("truncated", countdown) },
+    recreated: { bg:"var(--pl-banner-recreated-bg)", border:"var(--pl-status-live)", color:"var(--pl-status-live)", icon:"✓", label: t("recreated") },
   };
   const c = CFG[event] || CFG.rotated;
   return (
@@ -846,30 +1141,30 @@ function DiagPanel({ onClose }) {
   }, [entries]);
 
   const LEVEL = {
-    ERROR: { color:"#ff8888", bg:"#2a0808", label:"ERROR" },
-    WARN:  { color:"#f0c060", bg:"#1c1408", label:"WARN " },
-    INFO:  { color:"#60b8e8", bg:"transparent", label:"INFO " },
+    ERROR: { color:"var(--pl-lvl-error-txt)", bg:"var(--pl-diag-error-bg)", label:"ERROR" },
+    WARN:  { color:"var(--pl-lvl-warn-txt)", bg:"var(--pl-diag-warn-bg)", label:"WARN " },
+    INFO:  { color:"var(--pl-accent-hover)", bg:"transparent", label:"INFO " },
   };
-  const CAT_COLOR = { docker:"#2a9a4a", file:"#2a7faa", remote:"#7a7aaa", system:"#8a8a4a" };
+  const CAT_COLOR = { docker:"var(--pl-cat-docker)", file:"var(--pl-cat-file)", remote:"var(--pl-cat-remote)", system:"var(--pl-cat-system)", performance:"var(--pl-cat-performance)", settings:"var(--pl-cat-settings)" };
   const fmt = ts => new Date(ts).toLocaleTimeString(undefined, { hour12:false });
 
   return (
-    <div style={{ height:210, flexShrink:0, borderTop:"1px solid #1a1a1a",
-                  background:"#070707", display:"flex", flexDirection:"column",
+    <div style={{ height:210, flexShrink:0, borderTop:"1px solid var(--pl-border-soft)",
+                  background:"var(--pl-bg-app)", display:"flex", flexDirection:"column",
                   fontFamily:"inherit" }}>
 
       <div style={{ display:"flex", alignItems:"center", gap:8, padding:"4px 10px",
-                    background:"#0d0d0d", borderBottom:"0.5px solid #1a1a1a", flexShrink:0 }}>
-        <span style={{ fontSize:10, color:"#555", fontWeight:700, letterSpacing:1 }}>
+                    background:"var(--pl-bg-footer)", borderBottom:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}>
+        <span style={{ fontSize:10, color:"var(--pl-text-5)", fontWeight:700, letterSpacing:1 }}>
           {t("diag_title")}
         </span>
-        <span style={{ fontSize:10, color:"#252525" }}>{t("diag_entries", entries.length)}</span>
+        <span style={{ fontSize:10, color:"var(--pl-text-8)" }}>{t("diag_entries", entries.length)}</span>
         <Btn onClick={() => { window.electronAPI.clearAppLog(); setEntries([]); }}>
           {t("diag_clear")}
         </Btn>
         <button onClick={onClose}
           style={{ marginLeft:"auto", background:"none", border:"none",
-                   color:"#333", cursor:"pointer", fontSize:13, padding:"0 4px",
+                   color:"var(--pl-text-7)", cursor:"pointer", fontSize:13, padding:"0 4px",
                    fontFamily:"inherit" }}>
           ✕
         </button>
@@ -882,7 +1177,7 @@ function DiagPanel({ onClose }) {
            }}
            style={{ flex:1, overflowY:"auto" }}>
         {entries.length === 0 && (
-          <div style={{ padding:"20px 10px", color:"#222", fontSize:11, textAlign:"center" }}>
+          <div style={{ padding:"20px 10px", color:"var(--pl-text-7)", fontSize:11, textAlign:"center" }}>
             {t("diag_empty")}
           </div>
         )}
@@ -890,14 +1185,14 @@ function DiagPanel({ onClose }) {
           const s = LEVEL[e.level] || LEVEL.INFO;
           return (
             <div key={i} style={{ display:"flex", gap:10, padding:"2px 10px", fontSize:11,
-                                  background:s.bg, borderBottom:"0.5px solid rgba(255,255,255,.02)",
+                                  background:s.bg, borderBottom:"0.5px solid var(--pl-hairline)",
                                   fontFamily:"inherit" }}>
-              <span style={{ color:"#282828", flexShrink:0, minWidth:72 }}>{fmt(e.ts)}</span>
+              <span style={{ color:"var(--pl-text-8)", flexShrink:0, minWidth:72 }}>{fmt(e.ts)}</span>
               <span style={{ color:s.color, fontWeight:700, flexShrink:0, minWidth:42,
                              fontFamily:"monospace" }}>{s.label}</span>
-              <span style={{ color: CAT_COLOR[e.category] || "#444", flexShrink:0,
+              <span style={{ color: CAT_COLOR[e.category] || "var(--pl-text-6)", flexShrink:0,
                              minWidth:52 }}>[{e.category}]</span>
-              <span style={{ color:"#666" }}>{e.msg}</span>
+              <span style={{ color:"var(--pl-text-4)" }}>{e.msg}</span>
             </div>
           );
         })}
@@ -914,15 +1209,15 @@ function PrefToggle({ label, value, onChange }) {
     <label style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer", userSelect:"none" }}>
       <div onClick={() => onChange(!value)}
            style={{ width:28, height:16, borderRadius:8, flexShrink:0,
-                    background: value ? "#1a5f1a" : "#1e1e1e",
-                    border:`1px solid ${value ? "#2a9a2a" : "#2e2e2e"}`,
+                    background: value ? "var(--pl-toggle-on-bg)" : "var(--pl-toggle-off-bg)",
+                    border:`1px solid ${value ? "var(--pl-status-live)" : "var(--pl-border)"}`,
                     position:"relative", cursor:"pointer" }}>
         <div style={{ position:"absolute", top:2, left: value ? 14 : 2,
                        width:10, height:10, borderRadius:"50%",
-                       background: value ? "#4aaa4a" : "#333",
+                       background: value ? "var(--pl-toggle-on-knob)" : "var(--pl-toggle-off-knob)",
                        transition:"left .12s" }} />
       </div>
-      <span style={{ fontSize:11, color:"#666" }}>{label}</span>
+      <span style={{ fontSize:11, color:"var(--pl-text-4)" }}>{label}</span>
     </label>
   );
 }
@@ -930,33 +1225,34 @@ function PrefToggle({ label, value, onChange }) {
 function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearRecent, onTogglePref }) {
   const t = useLang();
   const lang = settings.language || "es";
+  const theme = settings.theme || "classic";
 
   return (
     <div onClick={onClose}
          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                   display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
       <div onClick={e => e.stopPropagation()}
-           style={{ background:"#111", border:"0.5px solid #2a2a2a", borderRadius:10,
+           style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                     padding:"28px 32px", minWidth:500, maxWidth:620,
                     boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
 
         <div style={{ display:"flex", alignItems:"center", marginBottom:22 }}>
-          <span style={{ fontSize:14, color:"#ccc", fontWeight:700 }}>{t("settings_header")}</span>
+          <span style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700 }}>{t("settings_header")}</span>
           <button onClick={onClose}
             style={{ marginLeft:"auto", background:"none", border:"none",
-                     color:"#444", cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>✕</button>
+                     color:"var(--pl-text-6)", cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>✕</button>
         </div>
 
         {/* language */}
-        <div style={{ fontSize:10, color:"#444", fontWeight:700, letterSpacing:1, marginBottom:10 }}>
+        <div style={{ fontSize:10, color:"var(--pl-text-6)", fontWeight:700, letterSpacing:1, marginBottom:10 }}>
           {t("lang_h")}
         </div>
         <div style={{ display:"flex", gap:8, marginBottom:24 }}>
           {["es","en"].map(l => (
             <button key={l} onClick={() => onTogglePref("language", l)}
-              style={{ background: lang === l ? "#1a2a3a" : "#181818",
-                       border:`0.5px solid ${lang === l ? "#2a6a9a" : "#2e2e2e"}`,
-                       borderRadius:6, color: lang === l ? "#60b8e8" : "#555",
+              style={{ background: lang === l ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                       border:`0.5px solid ${lang === l ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderRadius:6, color: lang === l ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
                        fontFamily:"inherit", fontSize:12, padding:"5px 18px",
                        cursor:"pointer", fontWeight: lang === l ? 700 : 400 }}>
               {l === "es" ? "Español" : "English"}
@@ -964,33 +1260,50 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
           ))}
         </div>
 
+        {/* theme */}
+        <div style={{ fontSize:10, color:"var(--pl-text-6)", fontWeight:700, letterSpacing:1, marginBottom:10 }}>
+          {t("theme_h")}
+        </div>
+        <div style={{ display:"flex", gap:8, marginBottom:24 }}>
+          {["classic","light","vscode"].map(th => (
+            <button key={th} onClick={() => onTogglePref("theme", th)}
+              style={{ background: theme === th ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                       border:`0.5px solid ${theme === th ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderRadius:6, color: theme === th ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
+                       fontFamily:"inherit", fontSize:12, padding:"5px 18px",
+                       cursor:"pointer", fontWeight: theme === th ? 700 : 400 }}>
+              {t(`theme_${th}`)}
+            </button>
+          ))}
+        </div>
+
         {/* recent files */}
-        <div style={{ fontSize:10, color:"#444", fontWeight:700, letterSpacing:1, marginBottom:8 }}>
+        <div style={{ fontSize:10, color:"var(--pl-text-6)", fontWeight:700, letterSpacing:1, marginBottom:8 }}>
           {t("recent_files_h")}
         </div>
         {settings.recentFiles.length === 0 ? (
-          <div style={{ fontSize:11, color:"#252525", padding:"10px 0 16px" }}>{t("no_recent")}</div>
+          <div style={{ fontSize:11, color:"var(--pl-text-8)", padding:"10px 0 16px" }}>{t("no_recent")}</div>
         ) : (
           <>
             <div style={{ maxHeight:200, overflowY:"auto", marginBottom:8,
-                           border:"0.5px solid #1e1e1e", borderRadius:6 }}>
+                           border:"0.5px solid var(--pl-border-soft)", borderRadius:6 }}>
               {settings.recentFiles.map((fp, i) => {
                 const name = fp.split(/[\\/]/).pop();
                 return (
                   <div key={fp}
                        style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px",
                                 borderBottom: i < settings.recentFiles.length - 1
-                                  ? "0.5px solid #1a1a1a" : "none",
-                                background:"#0e0e0e" }}>
+                                  ? "0.5px solid var(--pl-border-soft)" : "none",
+                                background:"var(--pl-bg-footer)" }}>
                     <span onClick={() => { onOpenFile(fp); onClose(); }}
                           title={fp}
-                          style={{ flex:1, fontSize:12, color:"#777", cursor:"pointer",
+                          style={{ flex:1, fontSize:12, color:"var(--pl-text-3)", cursor:"pointer",
                                    overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                      📄 <b style={{ color:"#999" }}>{name}</b>
-                      <span style={{ fontSize:10, color:"#2a2a2a", marginLeft:8 }}>{fp}</span>
+                      📄 <b style={{ color:"var(--pl-text-2)" }}>{name}</b>
+                      <span style={{ fontSize:10, color:"var(--pl-text-8)", marginLeft:8 }}>{fp}</span>
                     </span>
                     <button onClick={() => onRemoveRecent(fp)}
-                      style={{ background:"none", border:"none", color:"#333",
+                      style={{ background:"none", border:"none", color:"var(--pl-text-7)",
                                cursor:"pointer", fontSize:11, padding:"0 4px", flexShrink:0 }}>✕</button>
                   </div>
                 );
@@ -1001,7 +1314,7 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
         )}
 
         {/* preferences */}
-        <div style={{ fontSize:10, color:"#444", fontWeight:700, letterSpacing:1,
+        <div style={{ fontSize:10, color:"var(--pl-text-6)", fontWeight:700, letterSpacing:1,
                        marginTop:24, marginBottom:12 }}>
           {t("prefs_h")}
         </div>
@@ -1015,12 +1328,22 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
             label={t("pref_linenums")}
             value={settings.showNumsDefault}
             onChange={v => onTogglePref("showNumsDefault", v)}
-          />
+          />          <label style={{ display:"flex", alignItems:"center", gap:10, color:"var(--pl-text-4)", fontSize:11 }}>
+            <span style={{ flex:1 }}>{t("pref_max_lines")}</span>
+            <select value={settings.maxLiveLines || 500000}
+              onChange={e => onTogglePref("maxLiveLines", Number(e.target.value))}
+              style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:5,
+                       color:"var(--pl-text-3)", fontFamily:"inherit", fontSize:11, padding:"4px 8px" }}>
+              {[100000, 250000, 500000, 1000000, 2000000].map(value => (
+                <option key={value} value={value}>{fmtNum(value)}</option>
+              ))}
+            </select>
+          </label>
         </div>
 
         <button onClick={onClose}
-          style={{ marginTop:28, background:"#181818", border:"0.5px solid #2e2e2e",
-                   borderRadius:6, color:"#666", fontFamily:"inherit",
+          style={{ marginTop:28, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                   borderRadius:6, color:"var(--pl-text-4)", fontFamily:"inherit",
                    fontSize:11, padding:"6px 20px", cursor:"pointer" }}>
           {t("close")}
         </button>
@@ -1042,21 +1365,21 @@ function AboutModal({ onClose }) {
                display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
       <div
         onClick={e => e.stopPropagation()}
-        style={{ background:"#111", border:"0.5px solid #2a2a2a", borderRadius:10,
+        style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                  padding:"32px 40px", minWidth:300, textAlign:"center",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
         <img src={logoSrc} alt="LindeCode"
           style={{ width:96, height:96, borderRadius:12, objectFit:"cover", marginBottom:12 }} />
-        <div style={{ fontSize:18, color:"#ccc", fontWeight:700, marginBottom:4 }}>PulpLog</div>
-        <div style={{ fontSize:11, color:"#444", marginBottom:20 }}>v1.0.0</div>
-        <div style={{ width:40, height:"0.5px", background:"#2a2a2a", margin:"0 auto 20px" }} />
-        <div style={{ fontSize:13, color:"#888", marginBottom:6 }}>{t("developed_by")}</div>
-        <div style={{ fontSize:16, color:"#2a7faa", fontWeight:700, letterSpacing:1 }}>LindeCode</div>
-        <div style={{ marginTop:20, fontSize:11, color:"#333" }}>{t("license")}</div>
+        <div style={{ fontSize:18, color:"var(--pl-text-1)", fontWeight:700, marginBottom:4 }}>PulpLog</div>
+        <div style={{ fontSize:11, color:"var(--pl-text-6)", marginBottom:20 }}>v2.0.0</div>
+        <div style={{ width:40, height:"0.5px", background:"var(--pl-border-strong)", margin:"0 auto 20px" }} />
+        <div style={{ fontSize:13, color:"var(--pl-text-3)", marginBottom:6 }}>{t("developed_by")}</div>
+        <div style={{ fontSize:16, color:"var(--pl-accent)", fontWeight:700, letterSpacing:1 }}>LindeCode</div>
+        <div style={{ marginTop:20, fontSize:11, color:"var(--pl-text-7)" }}>{t("license")}</div>
         <button
           onClick={onClose}
-          style={{ marginTop:24, background:"#181818", border:"0.5px solid #2e2e2e",
-                   borderRadius:6, color:"#666", fontFamily:"inherit",
+          style={{ marginTop:24, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                   borderRadius:6, color:"var(--pl-text-4)", fontFamily:"inherit",
                    fontSize:11, padding:"6px 20px", cursor:"pointer" }}>
           {t("close")}
         </button>
@@ -1071,9 +1394,9 @@ function AboutModal({ onClose }) {
 function Btn({ children, onClick, active, title, disabled }) {
   return (
     <button onClick={onClick} title={title} disabled={disabled}
-      style={{ background: active ? "#1a3a1a" : "#181818",
-               border:`0.5px solid ${active ? "#3a6a3a":"#2e2e2e"}`,
-               borderRadius:6, color: active ? "#8dc88d":"#777",
+      style={{ background: active ? "var(--pl-btn-active-bg)" : "var(--pl-bg-input)",
+               border:`0.5px solid ${active ? "var(--pl-btn-active-border)":"var(--pl-border)"}`,
+               borderRadius:6, color: active ? "var(--pl-btn-active-text)":"var(--pl-text-3)",
                fontFamily:"inherit", fontSize:11, padding:"4px 9px",
                cursor: disabled ? "not-allowed":"pointer",
                opacity: disabled ? 0.4 : 1, whiteSpace:"nowrap" }}>
@@ -1083,7 +1406,7 @@ function Btn({ children, onClick, active, title, disabled }) {
 }
 
 function Sep() {
-  return <span style={{ width:"0.5px", background:"#252525", alignSelf:"stretch" }} />;
+  return <span style={{ width:"0.5px", background:"var(--pl-text-8)", alignSelf:"stretch" }} />;
 }
 
 /* ═══════════════════════════════════════════
@@ -1105,24 +1428,24 @@ function DockerPicker({ onSelect, onClose }) {
       style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
       <div onClick={e => e.stopPropagation()}
-        style={{ background:"#111", border:"0.5px solid #2a2a2a", borderRadius:10,
+        style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                  padding:"24px", minWidth:440, maxWidth:580, fontFamily:"inherit",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
-        <div style={{ fontSize:14, color:"#ccc", fontWeight:700, marginBottom:16 }}>
+        <div style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700, marginBottom:16 }}>
           {t("docker_title")}
         </div>
 
         {containers === null && !error && (
-          <div style={{ color:"#444", fontSize:12, padding:"8px 0" }}>{t("docker_connecting")}</div>
+          <div style={{ color:"var(--pl-text-6)", fontSize:12, padding:"8px 0" }}>{t("docker_connecting")}</div>
         )}
         {error && (
-          <div style={{ color:"#ff6060", fontSize:12, padding:"8px 0", lineHeight:1.6 }}>
+          <div style={{ color:"var(--pl-error-text)", fontSize:12, padding:"8px 0", lineHeight:1.6 }}>
             <span style={{ fontWeight:700 }}>Error:</span> {error}
-            <br /><span style={{ color:"#555" }}>{t("docker_err_hint")}</span>
+            <br /><span style={{ color:"var(--pl-text-5)" }}>{t("docker_err_hint")}</span>
           </div>
         )}
         {containers?.length === 0 && (
-          <div style={{ color:"#555", fontSize:12, padding:"8px 0" }}>{t("docker_empty")}</div>
+          <div style={{ color:"var(--pl-text-5)", fontSize:12, padding:"8px 0" }}>{t("docker_empty")}</div>
         )}
 
         <div style={{ display:"flex", flexDirection:"column", gap:6, maxHeight:320, overflowY:"auto" }}>
@@ -1133,21 +1456,21 @@ function DockerPicker({ onSelect, onClose }) {
             return (
               <div key={c.Id} onClick={() => onSelect(c.Id, name, image)}
                 style={{ padding:"10px 14px", borderRadius:6, cursor:"pointer",
-                         background:"#161616", border:"0.5px solid #222",
+                         background:"var(--pl-bg-hover)", border:"0.5px solid var(--pl-border-soft)",
                          display:"flex", flexDirection:"column", gap:3,
                          transition:"background .1s" }}
-                onMouseEnter={e => e.currentTarget.style.background="#1e2a1e"}
-                onMouseLeave={e => e.currentTarget.style.background="#161616"}>
-                <span style={{ color:"#ccc", fontSize:13, fontWeight:600 }}>{name}</span>
-                <span style={{ color:"#555", fontSize:10 }}>{image} · {status}</span>
+                onMouseEnter={e => e.currentTarget.style.background="var(--pl-docker-row-hover)"}
+                onMouseLeave={e => e.currentTarget.style.background="var(--pl-bg-hover)"}>
+                <span style={{ color:"var(--pl-text-1)", fontSize:13, fontWeight:600 }}>{name}</span>
+                <span style={{ color:"var(--pl-text-5)", fontSize:10 }}>{image} · {status}</span>
               </div>
             );
           })}
         </div>
 
         <button onClick={onClose}
-          style={{ marginTop:20, background:"#181818", border:"0.5px solid #2e2e2e",
-                   borderRadius:6, color:"#666", fontFamily:"inherit",
+          style={{ marginTop:20, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                   borderRadius:6, color:"var(--pl-text-4)", fontFamily:"inherit",
                    fontSize:11, padding:"6px 20px", cursor:"pointer" }}>
           {t("cancel")}
         </button>
@@ -1159,36 +1482,45 @@ function DockerPicker({ onSelect, onClose }) {
 /* ═══════════════════════════════════════════
    Docker – log streaming tab
 ═══════════════════════════════════════════ */
-function DockerTab({ containerId, containerName }) {
+function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
   const t = useLang();
-  const [rawLines,   setRawLines]  = useState([]);
+  const selectionSource = `docker-${containerName}`;
+  const [classified, setClassified] = useState([]);
   const [spawned,    setSpawned]   = useState(false);
   const [connected,  setConnected] = useState(false);
   const [error,      setError]     = useState(null);
-  const [filter,     setFilter]    = useState("");
-  const [useRegex,   setUseRegex]  = useState(false);
-  const [context,    setContext]  = useState(0);
+  const [filter,     setFilter]    = useRememberedState(tabKey, "filter", "");
+  const [useRegex,   setUseRegex]  = useRememberedState(tabKey, "useRegex", false);
+  const searchFilter = useDebouncedValue(filter);
+  const [context,    setContext]  = useRememberedState(tabKey, "context", 0);
   const [regexError, setRegexError]= useState(false);
-  const [bookmarks,  setBookmarks] = useState(new Set());
-  const [bmCursor,   setBmCursor]  = useState(-1);
-  const [showNums,   setShowNums]  = useState(true);
-  const [autoScroll, setAutoScroll]= useState(true);
-  const [lvl, setLvl] = useState({
+  const [bookmarks,  setBookmarks] = useRememberedState(tabKey, "bookmarks", () => new Set());
+  const [bmCursor,   setBmCursor]  = useRememberedState(tabKey, "bmCursor", -1);
+
+  const [showNums,   setShowNums]  = useRememberedState(tabKey, "showNums", true);
+  const [autoScroll, setAutoScroll]= useRememberedState(tabKey, "autoScroll", true);
+  const [lvl, setLvl] = useRememberedState(tabKey, "levels", () => ({
     error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true,
-  });
+  }));
+  const { selection, setSelection, selectionRef } = useRowSelection(tabKey, classified);
 
   const listRef       = useRef(null);
+  const nextLineRef   = useRef(1);
   const autoScrollRef = useRef(true);
+  const enqueueLines = useBatchedLines(incoming => {
+    const batch = classifyLines(incoming, nextLineRef.current);
+    nextLineRef.current += incoming.length;
+    setClassified(prev => appendRecentItems(prev, batch, maxLiveLines));
+    setConnected(true);
+    if (autoScrollRef.current && selectionRef.current.lines.size === 0) listRef.current?.scrollToBottom();
+  });
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
 
   useEffect(() => {
     const unwatch = window.electronAPI.streamDockerLogs(containerId, {
       onSpawned() { setSpawned(true); },
       onLines(text) {
-        const incoming = text.split("\n").filter(Boolean);
-        setRawLines(prev => [...prev, ...incoming]);
-        setConnected(true);
-        if (autoScrollRef.current) listRef.current?.scrollToBottom();
+        enqueueLines(text.split("\n").filter(Boolean));
       },
       onEnd()      { setConnected(false); },
       onError(msg) { setError(msg); setConnected(false); },
@@ -1196,36 +1528,13 @@ function DockerTab({ containerId, containerName }) {
     return unwatch;
   }, [containerId]);
 
-  const classified = useMemo(() =>
-    rawLines.map((raw, i) => ({ raw, origLine: i + 1, type: classify(raw) })),
-    [rawLines]
-  );
+  const stats = useMemo(() => countLevels(classified), [classified]);
 
-  const stats = useMemo(() => ({
-    error: classified.filter(x => x.type==="error"||x.type==="exception").length,
-    warn:  classified.filter(x => x.type==="warn").length,
-    info:  classified.filter(x => x.type==="info").length,
-    debug: classified.filter(x => x.type==="debug").length,
-  }), [classified]);
-
-  const { filtered, regexValid } = useMemo(() => {
-    const hide = new Set();
-    if (!lvl.error) { hide.add("error"); hide.add("exception"); }
-    if (!lvl.stack) { hide.add("stack"); hide.add("causedby"); }
-    ["warn","info","debug","trace","plain"].forEach(k => { if (!lvl[k]) hide.add(k); });
-
-    if (!filter) return { filtered: classified.filter(x => !hide.has(x.type)), regexValid: true };
-    if (useRegex) {
-      let re;
-      try { re = new RegExp(filter, "i"); }
-      catch { return { filtered: [], regexValid: false }; }
-      return { filtered: applyContext(classified, x => !hide.has(x.type) && re.test(x.raw), context), regexValid: true };
-    }
-    const lf = filter.toLowerCase();
-    return { filtered: applyContext(classified, x => !hide.has(x.type) && x.raw.toLowerCase().includes(lf), context), regexValid: true };
-  }, [classified, filter, useRegex, lvl, context]);
+  const { filtered, regexValid } = useFilteredLogs("docker", classified, searchFilter, useRegex, lvl, context, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
+
+  const droppedCount = Math.max(0, nextLineRef.current - 1 - classified.length);
 
   useEffect(() => setRegexError(!regexValid), [regexValid]);
 
@@ -1252,35 +1561,35 @@ function DockerTab({ containerId, containerName }) {
   const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
 
   const BADGES = [
-    { key:"error", label:"ERROR", bg:"#a02020", fg:"#ffcccc", cnt:stats.error },
-    { key:"warn",  label:"WARN",  bg:"#906010", fg:"#ffe090", cnt:stats.warn  },
-    { key:"info",  label:"INFO",  bg:"#1a5f88", fg:"#90d0f0", cnt:stats.info  },
-    { key:"debug", label:"DEBUG", bg:"#244024", fg:"#90c890", cnt:stats.debug },
-    { key:"stack", label:"STACK", bg:"#3a256a", fg:"#c0a8f0", cnt:null        },
-    { key:"plain", label:"PLAIN", bg:"#2a2a2a", fg:"#aaa",    cnt:null        },
+    { key:"error", label:"ERROR", bg:"var(--pl-chip-error-bg)", fg:"var(--pl-chip-error-fg)", cnt:stats.error },
+    { key:"warn",  label:"WARN",  bg:"var(--pl-chip-warn-bg)",  fg:"var(--pl-chip-warn-fg)",  cnt:stats.warn  },
+    { key:"info",  label:"INFO",  bg:"var(--pl-chip-info-bg)",  fg:"var(--pl-chip-info-fg)",  cnt:stats.info  },
+    { key:"debug", label:"DEBUG", bg:"var(--pl-chip-debug-bg)", fg:"var(--pl-chip-debug-fg)", cnt:stats.debug },
+    { key:"stack", label:"STACK", bg:"var(--pl-chip-stack-bg)", fg:"var(--pl-chip-stack-fg)", cnt:null        },
+    { key:"plain", label:"PLAIN", bg:"var(--pl-chip-plain-bg)", fg:"var(--pl-chip-plain-fg)", cnt:null        },
   ];
 
   const copyResults = useCallback(() => {
-    const text = buildResultText({ source: `Docker ${containerName}`, filter, items: filtered, total: rawLines.length });
+    const text = buildResultText({ source: `Docker ${containerName}`, filter, items: filtered, total: classified.length });
     copyResultText(text);
-  }, [containerName, filter, filtered, rawLines.length]);
+  }, [containerName, filter, filtered, classified.length]);
 
   const exportResults = useCallback(() => {
     const source = `docker-${containerName}`;
-    const text = buildResultText({ source: `Docker ${containerName}`, filter, items: filtered, total: rawLines.length });
+    const text = buildResultText({ source: `Docker ${containerName}`, filter, items: filtered, total: classified.length });
     exportResultText(`${safeFileName(source)}-filtered.log`, text);
-  }, [containerName, filter, filtered, rawLines.length]);
+  }, [containerName, filter, filtered, classified.length]);
 
   return (
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
 
       {/* toolbar */}
       <div style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px",
-                    background:"#111", borderBottom:"0.5px solid #222",
+                    background:"var(--pl-bg-panel)", borderBottom:"0.5px solid var(--pl-border-soft)",
                     flexWrap:"wrap", flexShrink:0 }}>
 
-        <span style={{ fontSize:11, color:"#2a9a4a", background:"#0a1a0a",
-                       border:"0.5px solid #1a3a1a", borderRadius:6, padding:"3px 8px",
+        <span style={{ fontSize:11, color:"var(--pl-cat-docker)", background:"var(--pl-docker-badge-bg)",
+                       border:"0.5px solid var(--pl-docker-badge-border)", borderRadius:6, padding:"3px 8px",
                        fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
           🐳 {containerName}
         </span>
@@ -1289,9 +1598,9 @@ function DockerTab({ containerId, containerName }) {
 
         <div style={{ display:"flex", flex:1, minWidth:140 }}>
           <input
-            style={{ flex:1, background:"#181818",
-                     border:`0.5px solid ${regexError ? "#883030" : "#2e2e2e"}`,
-                     borderRadius:"6px 0 0 6px", color: regexError ? "#ff6060" : "#bbb",
+            style={{ flex:1, background:"var(--pl-bg-input)",
+                     border:`0.5px solid ${regexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+                     borderRadius:"6px 0 0 6px", color: regexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
                      fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
             placeholder={useRegex ? t("regex_ph") : t("filter_ph")}
             value={filter}
@@ -1299,10 +1608,10 @@ function DockerTab({ containerId, containerName }) {
           />
           <button onClick={() => setUseRegex(p => !p)}
             title={t("regex_btn_title")}
-            style={{ background: useRegex ? "#1a2a3a" : "#181818",
-                     border:`0.5px solid ${useRegex ? "#2a6a9a" : "#2e2e2e"}`,
+            style={{ background: useRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                     border:`0.5px solid ${useRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
                      borderLeft:"none", borderRadius:"0 6px 6px 0",
-                     color: useRegex ? "#60b8e8" : "#555",
+                     color: useRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
                      fontFamily:"monospace", fontSize:11, padding:"4px 10px",
                      cursor:"pointer", fontWeight: useRegex ? 700 : 400 }}>
             .*
@@ -1310,13 +1619,13 @@ function DockerTab({ containerId, containerName }) {
         </div>
 
         <div style={{ display:"flex", alignItems:"center", gap:4 }} title={t("context_title")}>
-          <span style={{ fontSize:10, color:"#555" }}>±</span>
+          <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
           <input
             type="number" min={0} max={50}
             value={context}
             onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
-            style={{ width:40, background:"#181818", border:"0.5px solid #2e2e2e",
-                     borderRadius:6, color:"#bbb", fontFamily:"inherit", fontSize:11,
+            style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                     borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
                      padding:"3px 4px", textAlign:"center" }}
           />
         </div>
@@ -1328,12 +1637,12 @@ function DockerTab({ containerId, containerName }) {
             style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11,
                      padding:"3px 7px", borderRadius:6, fontWeight:600,
                      cursor:"pointer", userSelect:"none",
-                     background: lvl[key] ? bg : "#181818",
-                     color:      lvl[key] ? fg : "#444",
-                     border:     `1.5px solid ${lvl[key] ? bg : "#222"}`,
+                     background: lvl[key] ? bg : "var(--pl-bg-input)",
+                     color:      lvl[key] ? fg : "var(--pl-text-6)",
+                     border:     `1.5px solid ${lvl[key] ? bg : "var(--pl-border-soft)"}`,
                      opacity:    lvl[key] ? 1 : 0.45 }}>
             {label}
-            {cnt > 0 && <span style={{ background:"rgba(255,255,255,.18)", borderRadius:4, padding:"0 4px", fontSize:10 }}>{fmtNum(cnt)}</span>}
+            {cnt > 0 && <span style={{ background:"var(--pl-badge-overlay)", borderRadius:4, padding:"0 4px", fontSize:10 }}>{fmtNum(cnt)}</span>}
           </span>
         ))}
 
@@ -1341,7 +1650,7 @@ function DockerTab({ containerId, containerName }) {
 
         <Btn onClick={() => jumpBookmark("prev")} disabled={!sortedBookmarks.length} title={t("bm_prev_title")}>◆ ↑</Btn>
         <Btn onClick={() => jumpBookmark("next")} disabled={!sortedBookmarks.length} title={t("bm_next_title")}>◆ ↓</Btn>
-        {bookmarks.size > 0 && <span style={{ fontSize:10, color:"#c0a030", padding:"0 2px" }}>{t("bm_count", bookmarks.size)}</span>}
+        {bookmarks.size > 0 && <span style={{ fontSize:10, color:"var(--pl-bookmark)", padding:"0 2px" }}>{t("bm_count", bookmarks.size)}</span>}
         {bookmarks.size > 0 && <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }} title={t("bm_clear_title")}>{t("bm_clear_btn")}</Btn>}
         <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
         <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
@@ -1356,50 +1665,59 @@ function DockerTab({ containerId, containerName }) {
 
       {/* error banner */}
       {error && (
-        <div style={{ padding:"6px 14px", background:"#2a1010", borderBottom:"1px solid #883030",
-                      color:"#ff8888", fontSize:12, flexShrink:0, fontFamily:"inherit" }}>
+        <div style={{ padding:"6px 14px", background:"var(--pl-error-bg)", borderBottom:"1px solid var(--pl-error-border)",
+                      color:"var(--pl-error-text)", fontSize:12, flexShrink:0, fontFamily:"inherit" }}>
           ⚠ {error}
         </div>
       )}
 
       {/* content */}
-      {rawLines.length === 0 && !error ? (
+      {classified.length === 0 && !error ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
-                      flexDirection:"column", gap:10, color:"#333", fontSize:13 }}>
-          <span style={{ fontSize:28, color:"#2a9a4a", animation:"spin 1s linear infinite" }}>↻</span>
+                      flexDirection:"column", gap:10, color:"var(--pl-text-7)", fontSize:13 }}>
+          <span style={{ fontSize:28, color:"var(--pl-status-live)", animation:"spin 1s linear infinite" }}>↻</span>
           {spawned ? t("docker_waiting") : t("docker_starting")}
-          {spawned && <span style={{ fontSize:10, color:"#252525" }}>{t("docker_no_logs")}</span>}
+          {spawned && <span style={{ fontSize:10, color:"var(--pl-text-8)" }}>{t("docker_no_logs")}</span>}
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         </div>
       ) : filtered.length === 0 ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
-                      color:"#333", fontSize:13 }}>
+                      color:"var(--pl-text-7)", fontSize:13 }}>
           {regexError
-            ? <><span style={{ color:"#ff6060" }}>⚠</span> {t("regex_invalid")}</>
+            ? <><span style={{ color:"var(--pl-error-text)" }}>⚠</span> {t("regex_invalid")}</>
             : filter ? t("no_results", filter) : t("no_lines")}
         </div>
       ) : (
         <VirtualList
           items={filtered}
+          sourceItems={classified}
           showNums={showNums}
           bookmarks={bookmarks}
           onToggleBookmark={toggleBookmark}
+          selection={selection}
+          setSelection={setSelection}
           listRef={listRef}
+          stateKey={tabKey}
+          selectionSource={selectionSource}
+          onFilterText={setFilter}
         />
       )}
 
       {/* status bar */}
-      <div style={{ display:"flex", gap:14, padding:"4px 10px", background:"#0d0d0d",
-                    borderTop:"0.5px solid #1a1a1a", fontSize:10, flexShrink:0, alignItems:"center" }}>
-        {[["#883030",stats.error,"err"],["#806010",stats.warn,"warn"],
-          ["#1a5070",stats.info,"info"],["#284028",stats.debug,"dbg"]].map(([c,n,l])=>(
-          <span key={l} style={{ color:c }}>{fmtNum(n)} <span style={{color:"#252525"}}>{l}</span></span>
+      <div style={{ display:"flex", gap:14, padding:"4px 10px", background:"var(--pl-bg-footer)",
+                    borderTop:"0.5px solid var(--pl-border-soft)", fontSize:10, flexShrink:0, alignItems:"center" }}>
+        {[["var(--pl-error-border)",stats.error,"err"],["var(--pl-stat-warn)",stats.warn,"warn"],
+          ["var(--pl-stat-info)",stats.info,"info"],["var(--pl-stat-debug)",stats.debug,"dbg"]].map(([c,n,l])=>(
+          <span key={l} style={{ color:c }}>{fmtNum(n)} <span style={{color:"var(--pl-text-8)"}}>{l}</span></span>
         ))}
-        {connected  && <span style={{ color:"#2a9a4a" }}>{t("live")}</span>}
-        {!connected && rawLines.length > 0 && <span style={{ color:"#555" }}>{t("stopped")}</span>}
-        {bookmarks.size > 0 && <span style={{ color:"#c0a030" }}>◆ {bookmarks.size}</span>}
-        <span style={{ marginLeft:"auto", color:"#444" }}>
-          {t("lines", shownCount, rawLines.length)}
+        {connected  && <span style={{ color:"var(--pl-status-live)" }}>{t("live")}</span>}
+        {!connected && classified.length > 0 && <span style={{ color:"var(--pl-status-stopped)" }}>{t("stopped")}</span>}
+        {droppedCount > 0 && <span style={{ color:"var(--pl-status-warn)" }}>{t("lines_discarded", droppedCount)}</span>}
+        {bookmarks.size > 0 && <span style={{ color:"var(--pl-bookmark)" }}>◆ {bookmarks.size}</span>}
+        <SelectedLineStatus selection={selection} visibleItems={filtered}
+          onClear={() => setSelection({ lines:new Set(), active:null, anchor:null })} />
+        <span style={{ marginLeft:"auto", color:"var(--pl-text-6)" }}>
+          {t("lines", shownCount, classified.length)}
         </span>
       </div>
     </div>
@@ -1454,8 +1772,8 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
   };
 
   const inputStyle = {
-    background:"#181818", border:"0.5px solid #2e2e2e", borderRadius:6,
-    color:"#bbb", fontFamily:"inherit", fontSize:12, padding:"7px 9px",
+    background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:6,
+    color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:12, padding:"7px 9px",
     outline:"none", width:"100%",
   };
 
@@ -1464,14 +1782,14 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
       style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
       <form onSubmit={submit} onClick={e => e.stopPropagation()}
-        style={{ background:"#111", border:"0.5px solid #2a2a2a", borderRadius:10,
+        style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                  padding:"24px", minWidth:460, maxWidth:620, fontFamily:"inherit",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
         <div style={{ display:"flex", alignItems:"center", marginBottom:16 }}>
-          <span style={{ fontSize:14, color:"#ccc", fontWeight:700 }}>{t("remote_title")}</span>
+          <span style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700 }}>{t("remote_title")}</span>
           <button type="button" onClick={onClose}
             style={{ marginLeft:"auto", background:"none", border:"none",
-                     color:"#444", cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>x</button>
+                     color:"var(--pl-text-6)", cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>x</button>
         </div>
 
         <div style={{ display:"flex", gap:8, marginBottom:14 }}>
@@ -1483,9 +1801,9 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
             <button key={key} type="button" onClick={() => cap?.available && setMode(key)}
               disabled={!cap?.available}
               title={cap?.available ? label : (cap?.reason || t("capability_unavailable"))}
-              style={{ background: mode === key ? "#1a2a3a" : "#181818",
-                       border:`0.5px solid ${mode === key ? "#2a6a9a" : "#2e2e2e"}`,
-                       borderRadius:6, color: mode === key ? "#60b8e8" : cap?.available ? "#555" : "#333",
+              style={{ background: mode === key ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                       border:`0.5px solid ${mode === key ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderRadius:6, color: mode === key ? "var(--pl-accent-hover)" : cap?.available ? "var(--pl-text-5)" : "var(--pl-text-7)",
                        fontFamily:"inherit", fontSize:12, padding:"5px 18px",
                        cursor: cap?.available ? "pointer" : "not-allowed",
                        opacity: cap?.available ? 1 : 0.45,
@@ -1527,8 +1845,8 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
             <input style={inputStyle} value={identityFile} onChange={e => setIdentityFile(e.target.value)}
               placeholder={`${t("remote_key")} (opcional)`} />
             <button type="button" onClick={pickIdentityFile}
-              style={{ background:"#181818", border:"0.5px solid #2e2e2e",
-                       borderRadius:6, color:"#777", fontFamily:"inherit",
+              style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                       borderRadius:6, color:"var(--pl-text-3)", fontFamily:"inherit",
                        fontSize:11, padding:"7px 8px", cursor:"pointer" }}>
               {t("remote_key_pick")}
             </button>
@@ -1548,7 +1866,7 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
           <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:10, alignItems:"center", marginBottom:10 }}>
             <input style={inputStyle} value={fingerprint} onChange={e => setFingerprint(e.target.value)}
               placeholder={`${t("remote_fingerprint")} SHA256:...`} />
-            <label style={{ display:"flex", alignItems:"center", gap:6, color:"#666", fontSize:10, whiteSpace:"nowrap" }}>
+            <label style={{ display:"flex", alignItems:"center", gap:6, color:"var(--pl-text-4)", fontSize:10, whiteSpace:"nowrap" }}>
               <input type="checkbox" checked={trustHostForSession} onChange={e => setTrustHostForSession(e.target.checked)} />
               {t("remote_trust_host")}
             </label>
@@ -1566,26 +1884,26 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
           )}
         </div>
 
-        <div style={{ color:"#555", fontSize:10, lineHeight:1.5, marginBottom:18 }}>
+        <div style={{ color:"var(--pl-text-5)", fontSize:10, lineHeight:1.5, marginBottom:18 }}>
           {t("remote_hint")}
           {!modeAvailable && (
-            <div style={{ color:"#885555", marginTop:6 }}>
+            <div style={{ color:"var(--pl-error-border)", marginTop:6 }}>
               {mode === "wsl" ? (wslCap?.reason || t("capability_unavailable")) : (sshCap?.reason || t("capability_unavailable"))}
             </div>
           )}
         </div>
 
         <button type="submit" disabled={!canSubmit}
-          style={{ background: canSubmit ? "#1a2a3a" : "#181818",
-                   border:`0.5px solid ${canSubmit ? "#2a6a9a" : "#2e2e2e"}`,
-                   borderRadius:6, color: canSubmit ? "#60b8e8" : "#444",
+          style={{ background: canSubmit ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                   border:`0.5px solid ${canSubmit ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                   borderRadius:6, color: canSubmit ? "var(--pl-accent-hover)" : "var(--pl-text-6)",
                    fontFamily:"inherit", fontSize:12, padding:"7px 20px",
                    cursor: canSubmit ? "pointer" : "not-allowed", marginRight:10 }}>
           {t("remote_open")}
         </button>
         <button type="button" onClick={onClose}
-          style={{ background:"#181818", border:"0.5px solid #2e2e2e",
-                   borderRadius:6, color:"#666", fontFamily:"inherit",
+          style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                   borderRadius:6, color:"var(--pl-text-4)", fontFamily:"inherit",
                    fontSize:11, padding:"7px 20px", cursor:"pointer" }}>
           {t("cancel")}
         </button>
@@ -1594,36 +1912,45 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
   );
 }
 
-function RemoteTab({ config }) {
+function RemoteTab({ tabKey, config, maxLiveLines }) {
   const t = useLang();
-  const [rawLines,   setRawLines]  = useState([]);
+  const selectionSource = `${config.mode || "remote"}-${config.filePath || "logs"}`;
+  const [classified, setClassified] = useState([]);
   const [spawned,    setSpawned]   = useState(false);
   const [connected,  setConnected] = useState(false);
   const [error,      setError]     = useState(null);
-  const [filter,     setFilter]    = useState("");
-  const [useRegex,   setUseRegex]  = useState(false);
-  const [context,    setContext]  = useState(0);
+  const [filter,     setFilter]    = useRememberedState(tabKey, "filter", "");
+  const [useRegex,   setUseRegex]  = useRememberedState(tabKey, "useRegex", false);
+  const searchFilter = useDebouncedValue(filter);
+  const [context,    setContext]  = useRememberedState(tabKey, "context", 0);
   const [regexError, setRegexError]= useState(false);
-  const [bookmarks,  setBookmarks] = useState(new Set());
-  const [bmCursor,   setBmCursor]  = useState(-1);
-  const [showNums,   setShowNums]  = useState(true);
-  const [autoScroll, setAutoScroll]= useState(true);
-  const [lvl, setLvl] = useState({
+  const [bookmarks,  setBookmarks] = useRememberedState(tabKey, "bookmarks", () => new Set());
+  const [bmCursor,   setBmCursor]  = useRememberedState(tabKey, "bmCursor", -1);
+
+  const [showNums,   setShowNums]  = useRememberedState(tabKey, "showNums", true);
+  const [autoScroll, setAutoScroll]= useRememberedState(tabKey, "autoScroll", true);
+  const [lvl, setLvl] = useRememberedState(tabKey, "levels", () => ({
     error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true,
-  });
+  }));
+  const { selection, setSelection, selectionRef } = useRowSelection(tabKey, classified);
 
   const listRef       = useRef(null);
+  const nextLineRef   = useRef(1);
   const autoScrollRef = useRef(true);
+  const enqueueLines = useBatchedLines(incoming => {
+    const batch = classifyLines(incoming, nextLineRef.current);
+    nextLineRef.current += incoming.length;
+    setClassified(prev => appendRecentItems(prev, batch, maxLiveLines));
+    setConnected(true);
+    if (autoScrollRef.current && selectionRef.current.lines.size === 0) listRef.current?.scrollToBottom();
+  });
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
 
   useEffect(() => {
     const unwatch = window.electronAPI.streamRemoteLogs(config, {
       onSpawned() { setSpawned(true); setConnected(true); },
       onLines(text) {
-        const incoming = text.split("\n").filter(Boolean);
-        setRawLines(prev => [...prev, ...incoming]);
-        setConnected(true);
-        if (autoScrollRef.current) listRef.current?.scrollToBottom();
+        enqueueLines(text.split("\n").filter(Boolean));
       },
       onEnd()      { setConnected(false); },
       onError(msg) { setError(msg); setConnected(false); },
@@ -1631,36 +1958,13 @@ function RemoteTab({ config }) {
     return unwatch;
   }, [config]);
 
-  const classified = useMemo(() =>
-    rawLines.map((raw, i) => ({ raw, origLine: i + 1, type: classify(raw) })),
-    [rawLines]
-  );
+  const stats = useMemo(() => countLevels(classified), [classified]);
 
-  const stats = useMemo(() => ({
-    error: classified.filter(x => x.type==="error"||x.type==="exception").length,
-    warn:  classified.filter(x => x.type==="warn").length,
-    info:  classified.filter(x => x.type==="info").length,
-    debug: classified.filter(x => x.type==="debug").length,
-  }), [classified]);
-
-  const { filtered, regexValid } = useMemo(() => {
-    const hide = new Set();
-    if (!lvl.error) { hide.add("error"); hide.add("exception"); }
-    if (!lvl.stack) { hide.add("stack"); hide.add("causedby"); }
-    ["warn","info","debug","trace","plain"].forEach(k => { if (!lvl[k]) hide.add(k); });
-
-    if (!filter) return { filtered: classified.filter(x => !hide.has(x.type)), regexValid: true };
-    if (useRegex) {
-      let re;
-      try { re = new RegExp(filter, "i"); }
-      catch { return { filtered: [], regexValid: false }; }
-      return { filtered: applyContext(classified, x => !hide.has(x.type) && re.test(x.raw), context), regexValid: true };
-    }
-    const lf = filter.toLowerCase();
-    return { filtered: applyContext(classified, x => !hide.has(x.type) && x.raw.toLowerCase().includes(lf), context), regexValid: true };
-  }, [classified, filter, useRegex, lvl, context]);
+  const { filtered, regexValid } = useFilteredLogs("remote", classified, searchFilter, useRegex, lvl, context, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
+
+  const droppedCount = Math.max(0, nextLineRef.current - 1 - classified.length);
 
   useEffect(() => setRegexError(!regexValid), [regexValid]);
 
@@ -1698,41 +2002,41 @@ function RemoteTab({ config }) {
     : `${sshTarget}:${config.filePath}`;
 
   const BADGES = [
-    { key:"error", label:"ERROR", bg:"#a02020", fg:"#ffcccc", cnt:stats.error },
-    { key:"warn",  label:"WARN",  bg:"#906010", fg:"#ffe090", cnt:stats.warn  },
-    { key:"info",  label:"INFO",  bg:"#1a5f88", fg:"#90d0f0", cnt:stats.info  },
-    { key:"debug", label:"DEBUG", bg:"#244024", fg:"#90c890", cnt:stats.debug },
-    { key:"stack", label:"STACK", bg:"#3a256a", fg:"#c0a8f0", cnt:null        },
-    { key:"plain", label:"PLAIN", bg:"#2a2a2a", fg:"#aaa",    cnt:null        },
+    { key:"error", label:"ERROR", bg:"var(--pl-chip-error-bg)", fg:"var(--pl-chip-error-fg)", cnt:stats.error },
+    { key:"warn",  label:"WARN",  bg:"var(--pl-chip-warn-bg)",  fg:"var(--pl-chip-warn-fg)",  cnt:stats.warn  },
+    { key:"info",  label:"INFO",  bg:"var(--pl-chip-info-bg)",  fg:"var(--pl-chip-info-fg)",  cnt:stats.info  },
+    { key:"debug", label:"DEBUG", bg:"var(--pl-chip-debug-bg)", fg:"var(--pl-chip-debug-fg)", cnt:stats.debug },
+    { key:"stack", label:"STACK", bg:"var(--pl-chip-stack-bg)", fg:"var(--pl-chip-stack-fg)", cnt:null        },
+    { key:"plain", label:"PLAIN", bg:"var(--pl-chip-plain-bg)", fg:"var(--pl-chip-plain-fg)", cnt:null        },
   ];
 
   const copyResults = useCallback(() => {
-    const text = buildResultText({ source: `${modeLabel} ${targetLabel}`, filter, items: filtered, total: rawLines.length });
+    const text = buildResultText({ source: `${modeLabel} ${targetLabel}`, filter, items: filtered, total: classified.length });
     copyResultText(text);
-  }, [modeLabel, targetLabel, filter, filtered, rawLines.length]);
+  }, [modeLabel, targetLabel, filter, filtered, classified.length]);
 
   const exportResults = useCallback(() => {
     const source = `${modeLabel}-${targetLabel}`;
-    const text = buildResultText({ source: `${modeLabel} ${targetLabel}`, filter, items: filtered, total: rawLines.length });
+    const text = buildResultText({ source: `${modeLabel} ${targetLabel}`, filter, items: filtered, total: classified.length });
     exportResultText(`${safeFileName(source)}-filtered.log`, text);
-  }, [modeLabel, targetLabel, filter, filtered, rawLines.length]);
+  }, [modeLabel, targetLabel, filter, filtered, classified.length]);
 
   return (
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
       <div style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px",
-                    background:"#111", borderBottom:"0.5px solid #222",
+                    background:"var(--pl-bg-panel)", borderBottom:"0.5px solid var(--pl-border-soft)",
                     flexWrap:"wrap", flexShrink:0 }}>
-        <span style={{ fontSize:11, color:"#a8a8f0", background:"#101024",
-                       border:"0.5px solid #2a2a5a", borderRadius:6, padding:"3px 8px",
+        <span style={{ fontSize:11, color:"var(--pl-cat-remote)", background:"var(--pl-remote-badge-bg)",
+                       border:"0.5px solid var(--pl-remote-badge-border)", borderRadius:6, padding:"3px 8px",
                        fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
           {modeLabel} {targetLabel}
         </span>
         <Sep />
         <div style={{ display:"flex", flex:1, minWidth:140 }}>
           <input
-            style={{ flex:1, background:"#181818",
-                     border:`0.5px solid ${regexError ? "#883030" : "#2e2e2e"}`,
-                     borderRadius:"6px 0 0 6px", color: regexError ? "#ff6060" : "#bbb",
+            style={{ flex:1, background:"var(--pl-bg-input)",
+                     border:`0.5px solid ${regexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+                     borderRadius:"6px 0 0 6px", color: regexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
                      fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
             placeholder={useRegex ? t("regex_ph") : t("filter_ph")}
             value={filter}
@@ -1740,10 +2044,10 @@ function RemoteTab({ config }) {
           />
           <button onClick={() => setUseRegex(p => !p)}
             title={t("regex_btn_title")}
-            style={{ background: useRegex ? "#1a2a3a" : "#181818",
-                     border:`0.5px solid ${useRegex ? "#2a6a9a" : "#2e2e2e"}`,
+            style={{ background: useRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                     border:`0.5px solid ${useRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
                      borderLeft:"none", borderRadius:"0 6px 6px 0",
-                     color: useRegex ? "#60b8e8" : "#555",
+                     color: useRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
                      fontFamily:"monospace", fontSize:11, padding:"4px 10px",
                      cursor:"pointer", fontWeight: useRegex ? 700 : 400 }}>
             .*
@@ -1751,13 +2055,13 @@ function RemoteTab({ config }) {
         </div>
 
         <div style={{ display:"flex", alignItems:"center", gap:4 }} title={t("context_title")}>
-          <span style={{ fontSize:10, color:"#555" }}>±</span>
+          <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
           <input
             type="number" min={0} max={50}
             value={context}
             onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
-            style={{ width:40, background:"#181818", border:"0.5px solid #2e2e2e",
-                     borderRadius:6, color:"#bbb", fontFamily:"inherit", fontSize:11,
+            style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                     borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
                      padding:"3px 4px", textAlign:"center" }}
           />
         </div>
@@ -1767,18 +2071,18 @@ function RemoteTab({ config }) {
             style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11,
                      padding:"3px 7px", borderRadius:6, fontWeight:600,
                      cursor:"pointer", userSelect:"none",
-                     background: lvl[key] ? bg : "#181818",
-                     color:      lvl[key] ? fg : "#444",
-                     border:     `1.5px solid ${lvl[key] ? bg : "#222"}`,
+                     background: lvl[key] ? bg : "var(--pl-bg-input)",
+                     color:      lvl[key] ? fg : "var(--pl-text-6)",
+                     border:     `1.5px solid ${lvl[key] ? bg : "var(--pl-border-soft)"}`,
                      opacity:    lvl[key] ? 1 : 0.45 }}>
             {label}
-            {cnt > 0 && <span style={{ background:"rgba(255,255,255,.18)", borderRadius:4, padding:"0 4px", fontSize:10 }}>{fmtNum(cnt)}</span>}
+            {cnt > 0 && <span style={{ background:"var(--pl-badge-overlay)", borderRadius:4, padding:"0 4px", fontSize:10 }}>{fmtNum(cnt)}</span>}
           </span>
         ))}
         <Sep />
         <Btn onClick={() => jumpBookmark("prev")} disabled={!sortedBookmarks.length} title={t("bm_prev_title")}>◆ ↑</Btn>
         <Btn onClick={() => jumpBookmark("next")} disabled={!sortedBookmarks.length} title={t("bm_next_title")}>◆ ↓</Btn>
-        {bookmarks.size > 0 && <span style={{ fontSize:10, color:"#c0a030", padding:"0 2px" }}>{t("bm_count", bookmarks.size)}</span>}
+        {bookmarks.size > 0 && <span style={{ fontSize:10, color:"var(--pl-bookmark)", padding:"0 2px" }}>{t("bm_count", bookmarks.size)}</span>}
         {bookmarks.size > 0 && <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }} title={t("bm_clear_title")}>{t("bm_clear_btn")}</Btn>}
         <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
         <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
@@ -1790,47 +2094,56 @@ function RemoteTab({ config }) {
       </div>
 
       {error && (
-        <div style={{ padding:"6px 14px", background:"#2a1010", borderBottom:"1px solid #883030",
-                      color:"#ff8888", fontSize:12, flexShrink:0, fontFamily:"inherit" }}>
+        <div style={{ padding:"6px 14px", background:"var(--pl-error-bg)", borderBottom:"1px solid var(--pl-error-border)",
+                      color:"var(--pl-error-text)", fontSize:12, flexShrink:0, fontFamily:"inherit" }}>
           ⚠ {error}
         </div>
       )}
 
-      {rawLines.length === 0 && !error ? (
+      {classified.length === 0 && !error ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
-                      flexDirection:"column", gap:10, color:"#333", fontSize:13 }}>
-          <span style={{ fontSize:28, color:"#7a7aaa", animation:"spin 1s linear infinite" }}>↻</span>
+                      flexDirection:"column", gap:10, color:"var(--pl-text-7)", fontSize:13 }}>
+          <span style={{ fontSize:28, color:"var(--pl-cat-remote)", animation:"spin 1s linear infinite" }}>↻</span>
           {spawned ? t("remote_waiting") : t("docker_starting")}
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         </div>
       ) : filtered.length === 0 ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
-                      color:"#333", fontSize:13 }}>
+                      color:"var(--pl-text-7)", fontSize:13 }}>
           {regexError
-            ? <><span style={{ color:"#ff6060" }}>⚠</span> {t("regex_invalid")}</>
+            ? <><span style={{ color:"var(--pl-error-text)" }}>⚠</span> {t("regex_invalid")}</>
             : filter ? t("no_results", filter) : t("no_lines")}
         </div>
       ) : (
         <VirtualList
           items={filtered}
+          sourceItems={classified}
           showNums={showNums}
           bookmarks={bookmarks}
           onToggleBookmark={toggleBookmark}
+          selection={selection}
+          setSelection={setSelection}
           listRef={listRef}
+          stateKey={tabKey}
+          selectionSource={selectionSource}
+          onFilterText={setFilter}
         />
       )}
 
-      <div style={{ display:"flex", gap:14, padding:"4px 10px", background:"#0d0d0d",
-                    borderTop:"0.5px solid #1a1a1a", fontSize:10, flexShrink:0, alignItems:"center" }}>
-        {[["#883030",stats.error,"err"],["#806010",stats.warn,"warn"],
-          ["#1a5070",stats.info,"info"],["#284028",stats.debug,"dbg"]].map(([c,n,l])=>(
-          <span key={l} style={{ color:c }}>{fmtNum(n)} <span style={{color:"#252525"}}>{l}</span></span>
+      <div style={{ display:"flex", gap:14, padding:"4px 10px", background:"var(--pl-bg-footer)",
+                    borderTop:"0.5px solid var(--pl-border-soft)", fontSize:10, flexShrink:0, alignItems:"center" }}>
+        {[["var(--pl-error-border)",stats.error,"err"],["var(--pl-stat-warn)",stats.warn,"warn"],
+          ["var(--pl-stat-info)",stats.info,"info"],["var(--pl-stat-debug)",stats.debug,"dbg"]].map(([c,n,l])=>(
+          <span key={l} style={{ color:c }}>{fmtNum(n)} <span style={{color:"var(--pl-text-8)"}}>{l}</span></span>
         ))}
-        {connected  && <span style={{ color:"#2a9a4a" }}>{t("live")}</span>}
-        {!connected && rawLines.length > 0 && <span style={{ color:"#555" }}>{t("stopped")}</span>}
-        {bookmarks.size > 0 && <span style={{ color:"#c0a030" }}>◆ {bookmarks.size}</span>}
-        <span style={{ marginLeft:"auto", color:"#444" }}>
-          {t("lines", shownCount, rawLines.length)}
+        {connected  && <span style={{ color:"var(--pl-status-live)" }}>{t("live")}</span>}
+        {!connected && classified.length > 0 && <span style={{ color:"var(--pl-status-stopped)" }}>{t("stopped")}</span>}
+        {droppedCount > 0 && <span style={{ color:"var(--pl-status-warn)" }}>{t("lines_discarded", droppedCount)}</span>}
+        {bookmarks.size > 0 && <span style={{ color:"var(--pl-bookmark)" }}>◆ {bookmarks.size}</span>}
+        <SelectedLineStatus selection={selection} visibleItems={filtered}
+          onClear={() => setSelection({ lines:new Set(), active:null, anchor:null })} />
+        <span style={{ marginLeft:"auto", color:"var(--pl-text-6)" }}>
+          {t("lines", shownCount, classified.length)}
         </span>
       </div>
     </div>
@@ -2038,9 +2351,10 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
 
   useEffect(() => {
     if (!IS_ELECTRON) return;
-    const cleanOpenFile = window.electronAPI.onMenuOpenFile(() => { if (isFocusedRef.current) openFile(); });
-    const cleanNewTab   = window.electronAPI.onMenuNewTab(()   => { if (isFocusedRef.current) openFile(); });
-    return () => { cleanOpenFile?.(); cleanNewTab?.(); };
+    const cleanOpenFile   = window.electronAPI.onMenuOpenFile(() => { if (isFocusedRef.current) openFile(); });
+    const cleanOpenRecent = window.electronAPI.onMenuOpenRecent(fp => { if (isFocusedRef.current) openFileByPath(fp); });
+    const cleanNewTab     = window.electronAPI.onMenuNewTab(() => { if (isFocusedRef.current) openFile(); });
+    return () => { cleanOpenFile?.(); cleanOpenRecent?.(); cleanNewTab?.(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -2096,12 +2410,12 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
          style={{ display:"flex", flexDirection:"column", flex:1, minWidth:0, minHeight:0, overflow:"hidden" }}>
 
       {/* tab bar */}
-      <div style={{ display:"flex", alignItems:"stretch", background:"#0f0f0f",
-                    borderBottom:"0.5px solid #1e1e1e", flexShrink:0, overflowX:"auto" }}>
+      <div style={{ display:"flex", alignItems:"stretch", background:"var(--pl-bg-tabbar)",
+                    borderBottom:"0.5px solid var(--pl-border-soft)", flexShrink:0, overflowX:"auto" }}>
         {tabs.map((tab, idx) => (
           <div key={tab.id} style={{ display:"flex", alignItems:"stretch" }}>
             {tab.groupStart && idx > 0 && (
-              <div style={{ width:2, alignSelf:"stretch", background:"#3a3a3a", flexShrink:0 }} />
+              <div style={{ width:2, alignSelf:"stretch", background:"var(--pl-text-7)", flexShrink:0 }} />
             )}
             <div
               draggable={renamingTabId !== tab.id}
@@ -2138,12 +2452,12 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
                                t("hint_electron")
               }
               style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 14px",
-                       borderRight:"0.5px solid #1e1e1e", cursor:"pointer", flexShrink:0,
+                       borderRight:"0.5px solid var(--pl-border-soft)", cursor:"pointer", flexShrink:0,
                        fontSize:12, maxWidth:200, overflow:"hidden",
                        WebkitUserDrag:"element", userSelect:"none",
-                       background: tab.id===active ? "#111":"transparent",
-                       color:      tab.id===active ? "#ccc":"#555",
-                       borderBottom: tab.id===active ? "1.5px solid #2a7faa":"1.5px solid transparent" }}>
+                       background: tab.id===active ? "var(--pl-bg-panel)":"transparent",
+                       color:      tab.id===active ? "var(--pl-text-1)":"var(--pl-text-5)",
+                       borderBottom: tab.id===active ? "1.5px solid var(--pl-accent)":"1.5px solid transparent" }}>
               {renamingTabId === tab.id ? (
                 <input
                   autoFocus
@@ -2154,8 +2468,8 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
                     if (e.key === "Enter") e.target.blur();
                     else if (e.key === "Escape") setRenamingTabId(null);
                   }}
-                  style={{ background:"#181818", border:"0.5px solid #2a7faa", borderRadius:3,
-                           color:"#ccc", fontSize:12, fontFamily:"inherit", width:120, padding:"1px 4px" }}
+                  style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-accent)", borderRadius:3,
+                           color:"var(--pl-text-1)", fontSize:12, fontFamily:"inherit", width:120, padding:"1px 4px" }}
                 />
               ) : (
                 <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
@@ -2163,7 +2477,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
                 </span>
               )}
               {tabs.length > 1 && (
-                <span style={{ fontSize:10, color:"#444", padding:"0 2px", cursor:"pointer",
+                <span style={{ fontSize:10, color:"var(--pl-text-6)", padding:"0 2px", cursor:"pointer",
                                flexShrink:0, borderRadius:3 }}
                   onClick={e => { e.stopPropagation(); closeTab(tab.id); }}>✕</span>
               )}
@@ -2172,17 +2486,17 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
         ))}
 
         <button onClick={openFile}
-          style={{ background:"transparent", border:"none", color:"#444",
+          style={{ background:"transparent", border:"none", color:"var(--pl-text-6)",
                    padding:"0 14px", cursor:"pointer", fontSize:18,
-                   borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+                   borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
           title={t("open_file_title")}>+</button>
 
         {IS_ELECTRON && (
           <button onClick={() => dockerEnabled && setDockerPicker(true)}
             disabled={!dockerEnabled}
-            style={{ background:"transparent", border:"none", color: dockerEnabled ? "#2a6a2a" : "#333",
+            style={{ background:"transparent", border:"none", color: dockerEnabled ? "var(--pl-cat-docker)" : "var(--pl-text-7)",
                      padding:"0 14px", cursor: dockerEnabled ? "pointer" : "not-allowed", fontSize:14,
-                     borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+                     borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
             title={dockerEnabled ? t("docker_btn_title") : (dockerCap?.reason || t("capability_checking"))}>
             🐳
           </button>
@@ -2191,9 +2505,9 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
         {IS_ELECTRON && (
           <button onClick={() => remoteEnabled && setRemotePicker(true)}
             disabled={!remoteEnabled}
-            style={{ background:"transparent", border:"none", color: remoteEnabled ? "#6a6aaa" : "#333",
+            style={{ background:"transparent", border:"none", color: remoteEnabled ? "var(--pl-cat-remote)" : "var(--pl-text-7)",
                      padding:"0 14px", cursor: remoteEnabled ? "pointer" : "not-allowed", fontSize:12,
-                     borderRight:"0.5px solid #1e1e1e", flexShrink:0,
+                     borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0,
                      fontFamily:"inherit", fontWeight:700 }}
             title={remoteEnabled ? t("remote_btn_title") : (sshCap?.reason || wslCap?.reason || t("capability_checking"))}>
             SSH
@@ -2213,12 +2527,17 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
 
       {activeTab.docker
         ? <DockerTab key={`docker-${activeTab.id}-${activeTab.reloadNonce || 0}`}
+                     tabKey={String(activeTab.id)}
+                     maxLiveLines={settings.maxLiveLines}
                      containerId={activeTab.docker.containerId}
                      containerName={activeTab.docker.name} />
         : activeTab.remote
-          ? <RemoteTab key={`remote-${activeTab.id}-${activeTab.reloadNonce || 0}`} config={activeTab.remote} />
+          ? <RemoteTab key={`remote-${activeTab.id}-${activeTab.reloadNonce || 0}`}
+                       tabKey={String(activeTab.id)} maxLiveLines={settings.maxLiveLines}
+                       config={activeTab.remote} />
           : activeTab.filePath
           ? <LogTab key={`${activeTab.id}-${activeTab.filePath}-${activeTab.reloadNonce || 0}`}
+                    tabKey={String(activeTab.id)}
                     filePath={activeTab.filePath}
                     fileName={activeTab.label}
                     fileSize={activeTab.fileSize}
@@ -2241,7 +2560,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen]= useState(false);
   const [capabilities, setCapabilities]= useState(null);
   const [settings,     setSettings]    = useState({
-    recentFiles:[], autoScrollDefault:false, showNumsDefault:true, language:"es"
+    recentFiles:[], autoScrollDefault:false, showNumsDefault:true, maxLiveLines:500000, language:"es", theme:"classic"
   });
   const [splitDirection, setSplitDirection] = useState(null); // null | "row" | "column"
   const [splitRatio,     setSplitRatio]     = useState(0.5);
@@ -2251,6 +2570,16 @@ export default function App() {
   const paneA = usePaneTabs(setSettings);
   const paneB = usePaneTabs(setSettings);
 
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      reportMetric("renderer-first-frame", performance.now() - RENDERER_STARTED_AT, "App mounted");
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = settings.theme || "classic";
+  }, [settings.theme]);
   // Safety net: without this, dropping a file anywhere it isn't explicitly
   // handled (e.g. the chrome bar) makes Chromium navigate the window to
   // that file:// path instead of doing nothing.
@@ -2409,40 +2738,40 @@ export default function App() {
   return (
     <LangCtx.Provider value={t}>
       <div style={{ display:"flex", flexDirection:"column", height:"100vh",
-                    background:"#0a0a0a", color:"#ccc", overflow:"hidden",
+                    background:"var(--pl-bg-app)", color:"var(--pl-text-1)", overflow:"hidden",
                     fontFamily:"'JetBrains Mono','Fira Code','Cascadia Code',monospace" }}>
 
         {/* chrome bar */}
-        <div style={{ display:"flex", alignItems:"stretch", background:"#0f0f0f",
-                      borderBottom:"0.5px solid #1e1e1e", flexShrink:0 }}>
+        <div style={{ display:"flex", alignItems:"stretch", background:"var(--pl-bg-tabbar)",
+                      borderBottom:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}>
           <button onClick={() => setSplitDirection("row")}
-            style={{ background: splitDirection==="row" ? "#141a24" : "transparent",
-                     border:"none", color: splitDirection==="row" ? "#4a8ac0" : "#444",
+            style={{ background: splitDirection==="row" ? "var(--pl-split-active-bg)" : "transparent",
+                     border:"none", color: splitDirection==="row" ? "var(--pl-accent-alt)" : "var(--pl-text-6)",
                      padding:"0 14px", cursor:"pointer", fontSize:13,
-                     borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+                     borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
             title={t("split_right_title")}>⬓</button>
 
           <button onClick={() => setSplitDirection("column")}
-            style={{ background: splitDirection==="column" ? "#141a24" : "transparent",
-                     border:"none", color: splitDirection==="column" ? "#4a8ac0" : "#444",
+            style={{ background: splitDirection==="column" ? "var(--pl-split-active-bg)" : "transparent",
+                     border:"none", color: splitDirection==="column" ? "var(--pl-accent-alt)" : "var(--pl-text-6)",
                      padding:"0 14px", cursor:"pointer", fontSize:13,
-                     borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+                     borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
             title={t("split_down_title")}>▤</button>
 
           {splitDirection && (
             <button onClick={closeSplit}
-              style={{ background:"transparent", border:"none", color:"#a05050",
+              style={{ background:"transparent", border:"none", color:"var(--pl-icon-close)",
                        padding:"0 14px", cursor:"pointer", fontSize:13,
-                       borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+                       borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
               title={t("split_close_title")}>✕</button>
           )}
 
           {IS_ELECTRON && (
             <button onClick={() => setDiagOpen(p => !p)}
-              style={{ background: diagOpen ? "#141a14" : "transparent",
-                       border:"none", color: diagOpen ? "#4a8a4a" : "#444",
+              style={{ background: diagOpen ? "var(--pl-diag-active-bg)" : "transparent",
+                       border:"none", color: diagOpen ? "var(--pl-icon-diag)" : "var(--pl-text-6)",
                        padding:"0 14px", cursor:"pointer", fontSize:13,
-                       borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+                       borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
               title={t("diag_btn_title")}>
               📋
             </button>
@@ -2450,17 +2779,17 @@ export default function App() {
 
           {IS_ELECTRON && (
             <button onClick={() => setSettingsOpen(p => !p)}
-              style={{ background: settingsOpen ? "#1a1a24" : "transparent",
-                       border:"none", color: settingsOpen ? "#7a7aaa" : "#444",
+              style={{ background: settingsOpen ? "var(--pl-settings-active-bg)" : "transparent",
+                       border:"none", color: settingsOpen ? "var(--pl-cat-remote)" : "var(--pl-text-6)",
                        padding:"0 14px", cursor:"pointer", fontSize:14,
-                       borderRight:"0.5px solid #1e1e1e", flexShrink:0 }}
+                       borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
               title={t("settings_title")}>
               ⚙
             </button>
           )}
 
           <button onClick={() => setAbout(true)}
-            style={{ background:"transparent", border:"none", color:"#333",
+            style={{ background:"transparent", border:"none", color:"var(--pl-text-7)",
                      padding:"0 14px", cursor:"pointer", fontSize:11,
                      marginLeft:"auto", flexShrink:0, fontFamily:"inherit" }}
             title={t("about_title")}>
@@ -2482,7 +2811,7 @@ export default function App() {
               <div onMouseDown={startDividerDrag}
                    style={{ [splitDirection==="column" ? "height" : "width"]: 6, flexShrink:0,
                             cursor: splitDirection==="column" ? "row-resize" : "col-resize",
-                            background:"#1a1a1a" }} />
+                            background:"var(--pl-border-soft)" }} />
               <div style={{ flexBasis: `${(1-splitRatio)*100}%`,
                             minWidth:0, minHeight:0, display:"flex", overflow:"hidden" }}>
                 <Pane paneId="B" focused={focusedPane==="B"} onFocus={() => setFocusedPane("B")}
@@ -2514,35 +2843,35 @@ function Welcome({ onOpen, isElectron, recentFiles, onOpenRecent }) {
   const t = useLang();
   return (
     <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
-                  flexDirection:"column", gap:16, color:"#333" }}>
+                  flexDirection:"column", gap:16, color:"var(--pl-text-7)" }}>
       <div style={{ fontSize:44 }}>📋</div>
-      <p style={{ fontSize:18, color:"#555", margin:0 }}>PulpLog</p>
+      <p style={{ fontSize:18, color:"var(--pl-text-5)", margin:0 }}>PulpLog</p>
       <button onClick={onOpen}
-        style={{ background:"#181818", border:"1px solid #333", borderRadius:8,
-                 color:"#aaa", fontFamily:"inherit", fontSize:13,
+        style={{ background:"var(--pl-bg-input)", border:"1px solid var(--pl-text-7)", borderRadius:8,
+                 color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:13,
                  padding:"10px 24px", cursor:"pointer" }}>
         {t("open_file_btn")}
       </button>
 
       {recentFiles?.length > 0 && (
         <div style={{ marginTop:8, width:440 }}>
-          <div style={{ fontSize:10, color:"#252525", fontWeight:700, letterSpacing:1,
+          <div style={{ fontSize:10, color:"var(--pl-text-8)", fontWeight:700, letterSpacing:1,
                          marginBottom:6, textAlign:"center" }}>{t("recent_h")}</div>
-          <div style={{ border:"0.5px solid #1a1a1a", borderRadius:6, overflow:"hidden" }}>
+          <div style={{ border:"0.5px solid var(--pl-border-soft)", borderRadius:6, overflow:"hidden" }}>
             {recentFiles.map((fp, i) => {
               const name = fp.split(/[\\/]/).pop();
               return (
                 <div key={fp} onClick={() => onOpenRecent(fp)}
                      style={{ padding:"7px 14px", fontSize:12, cursor:"pointer",
                                borderBottom: i < recentFiles.length - 1
-                                 ? "0.5px solid #161616" : "none",
-                               background:"#0d0d0d",
+                                 ? "0.5px solid var(--pl-border-soft)" : "none",
+                               background:"var(--pl-bg-footer)",
                                display:"flex", gap:8, alignItems:"center", overflow:"hidden" }}
-                     onMouseEnter={e => e.currentTarget.style.background = "#131313"}
-                     onMouseLeave={e => e.currentTarget.style.background = "#0d0d0d"}>
-                  <span style={{ color:"#2a2a2a" }}>📄</span>
-                  <span style={{ color:"#777", flexShrink:0 }}>{name}</span>
-                  <span style={{ color:"#1e1e1e", fontSize:10, overflow:"hidden",
+                     onMouseEnter={e => e.currentTarget.style.background = "var(--pl-bg-hover)"}
+                     onMouseLeave={e => e.currentTarget.style.background = "var(--pl-bg-footer)"}>
+                  <span style={{ color:"var(--pl-text-8)" }}>📄</span>
+                  <span style={{ color:"var(--pl-text-3)", flexShrink:0 }}>{name}</span>
+                  <span style={{ color:"var(--pl-border-soft)", fontSize:10, overflow:"hidden",
                                   textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{fp}</span>
                 </div>
               );
@@ -2551,7 +2880,7 @@ function Welcome({ onOpen, isElectron, recentFiles, onOpenRecent }) {
         </div>
       )}
 
-      <div style={{ fontSize:11, color:"#1e1e1e", marginTop:4 }}>
+      <div style={{ fontSize:11, color:"var(--pl-border-soft)", marginTop:4 }}>
         {isElectron ? t("hint_electron") : t("hint_web")}
       </div>
     </div>

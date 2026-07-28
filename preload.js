@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
         if (Number.isFinite(b)) onProgress?.(b);
       }
     };
-    const dn = (_e, id)    => { if (id === readId) { cleanup(); onDone?.(); } };
+    const dn = (_e, id, b) => { if (id === readId) { cleanup(); onDone?.(b); } };
     const er = (_e, id, m) => { if (id === readId) { cleanup(); onError?.(m); } };
     ipcRenderer.on("file:chunk", ch);
     ipcRenderer.on("file:done",  dn);
@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   onMenuOpenFile: (cb) => { ipcRenderer.on("menu:open-file", cb); return () => ipcRenderer.removeListener("menu:open-file", cb); },
+  onMenuOpenRecent: (cb) => { const h = (_e, fp) => cb(fp); ipcRenderer.on("menu:open-recent", h); return () => ipcRenderer.removeListener("menu:open-recent", h); },
   onMenuNewTab:   (cb) => { ipcRenderer.on("menu:new-tab",   cb); return () => ipcRenderer.removeListener("menu:new-tab",   cb); },
   onMenuAbout:    (cb) => { ipcRenderer.on("menu:about",     cb); return () => ipcRenderer.removeListener("menu:about",     cb); },
   onMenuSplitRight: (cb) => { ipcRenderer.on("menu:split-right", cb); return () => ipcRenderer.removeListener("menu:split-right", cb); },
@@ -120,6 +121,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   getAppLog:   () => ipcRenderer.invoke("applog:get"),
   clearAppLog: () => ipcRenderer.invoke("applog:clear"),
+  recordMetric: (data) => ipcRenderer.invoke("diagnostics:metric", data),
   onAppLogNew: (cb) => {
     const h = (_e, entry) => cb(entry);
     ipcRenderer.on("applog:new", h);
