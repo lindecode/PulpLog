@@ -67,6 +67,13 @@ const T = {
     regex_btn_title: "Activar filtro por expresión regular",
     context_title:   "Líneas de contexto antes/después de cada resultado",
     context_gap:     n => `${n} ${n === 1 ? "línea omitida" : "líneas omitidas"}`,
+    filter_mode_btn: "Filtrar",
+    filter_mode_title:"Ocultar las líneas que no coinciden",
+    search_mode_btn: "Buscar",
+    search_mode_title:"Resaltar las líneas que coinciden sin ocultar el resto",
+    match_prev_title:"Resultado anterior",
+    match_next_title:"Resultado siguiente",
+    match_count:     (cur, total) => `${cur}/${total}`,
     bm_prev_title:   "Marcador anterior (Shift+F2)",
     bm_next_title:   "Marcador siguiente (F2)",
     bm_clear_title:  "Limpiar todos los marcadores",
@@ -180,6 +187,13 @@ const T = {
     regex_btn_title: "Enable regular expression filter",
     context_title:   "Context lines before/after each match",
     context_gap:     n => `${n} line${n === 1 ? "" : "s"} skipped`,
+    filter_mode_btn: "Filter",
+    filter_mode_title:"Hide lines that don't match",
+    search_mode_btn: "Search",
+    search_mode_title:"Highlight matching lines without hiding the rest",
+    match_prev_title:"Previous match",
+    match_next_title:"Next match",
+    match_count:     (cur, total) => `${cur}/${total}`,
     bm_prev_title:   "Previous bookmark (Shift+F2)",
     bm_next_title:   "Next bookmark (F2)",
     bm_clear_title:  "Clear all bookmarks",
@@ -384,11 +398,13 @@ const LogRow = memo(({ item, showNums, isBookmarked, isSelected, isActive, onTog
       style={{
         display:"flex", alignItems:"stretch", height:ROW_H,
         background: isSelected ? "color-mix(in srgb, var(--pl-accent) 24%, var(--pl-bg-panel))"
-          : isBookmarked ? "rgba(255,200,50,.07)" : s.bg,
+          : isBookmarked ? "rgba(255,200,50,.07)"
+          : item.matched ? "var(--pl-search-hit-bg)" : s.bg,
         borderBottom:"0.5px solid var(--pl-hairline)",
         outline: isActive ? "1px solid var(--pl-accent)"
           : isSelected ? "1px solid color-mix(in srgb, var(--pl-accent) 55%, transparent)"
-          : isBookmarked ? "0.5px solid rgba(255,200,50,.25)" : "none",
+          : isBookmarked ? "0.5px solid rgba(255,200,50,.25)"
+          : item.matched ? "0.5px solid var(--pl-search-hit-border)" : "none",
         outlineOffset:-1,
         opacity: item.contextOnly && !isSelected ? 0.55 : 1,
         cursor:"default",
@@ -661,7 +677,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
   const t = useLang();
   const selectionSource = fileName || filePath || "pulplog";
   const [classified,  setClassified] = useState([]);
-  const [stats,       setStats]      = useState({ error:0, warn:0, info:0, debug:0 });
+  const [stats,       setStats]      = useState({ error:0, warn:0, info:0, debug:0, trace:0 });
   const [loading,     setLoading]     = useState(true);
   const [progress,    setProgress]    = useState(0);
   const [tailing,     setTailing]     = useRememberedState(tabKey, "tailing", true);
@@ -671,6 +687,8 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
   const [useRegex,    setUseRegex]    = useRememberedState(tabKey, "useRegex", false);
   const searchFilter = useDebouncedValue(filter);
   const [context,     setContext]     = useRememberedState(tabKey, "context", 0);
+  const [searchMode,  setSearchMode]  = useRememberedState(tabKey, "searchMode", false);
+  const [matchCursor, setMatchCursor] = useRememberedState(tabKey, "matchCursor", -1);
   const [regexError,  setRegexError]  = useState(false);
   const [bookmarks,   setBookmarks]   = useRememberedState(tabKey, "bookmarks", () => new Set());
   const [bmCursor,    setBmCursor]    = useRememberedState(tabKey, "bmCursor", -1);
@@ -685,7 +703,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
   const listRef       = useRef(null);
   const itemsRef      = useRef([]);
   const carryRef      = useRef("");
-  const statsRef      = useRef({ error:0, warn:0, info:0, debug:0 });
+  const statsRef      = useRef({ error:0, warn:0, info:0, debug:0, trace:0 });
   const progressRef   = useRef(0);
   const loadedRef     = useRef(false);
   const workerRef     = useRef(null);
@@ -708,7 +726,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
             return { items, stats:countLevels(items) };
           })();
       itemsRef.current.push(...result.items);
-      for (const key of ["error", "warn", "info", "debug"]) {
+      for (const key of ["error", "warn", "info", "debug", "trace"]) {
         statsRef.current[key] += result.stats[key] || 0;
       }
     });
@@ -751,7 +769,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
     const resetBuffers = () => {
       itemsRef.current = [];
       carryRef.current = "";
-      statsRef.current = { error:0, warn:0, info:0, debug:0 };
+      statsRef.current = { error:0, warn:0, info:0, debug:0, trace:0 };
       progressRef.current = 0;
       processingRef.current = Promise.resolve();
       nextParsedRef.current = 1;
@@ -878,7 +896,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
     return () => unwatch?.();
   }, [tailing, loading, filePath]); // eslint-disable-line
 
-  const { filtered, regexValid } = useFilteredLogs("file", classified, searchFilter, useRegex, lvl, context, reportMetric);
+  const { filtered, regexValid, matchOrigLines } = useFilteredLogs("file", classified, searchFilter, useRegex, lvl, context, searchMode, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
 
@@ -907,6 +925,17 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
     if (idx >= 0) listRef.current?.scrollToIndex(idx);
   }, [sortedBookmarks, bmCursor, filtered]);
 
+  const jumpMatch = useCallback((direction) => {
+    if (matchOrigLines.length === 0) return;
+    const next = direction === "next"
+      ? (matchCursor >= matchOrigLines.length - 1 ? 0 : matchCursor + 1)
+      : (matchCursor <= 0 ? matchOrigLines.length - 1 : matchCursor - 1);
+    setMatchCursor(next);
+    const origLine = matchOrigLines[next];
+    const idx = filtered.findIndex(x => x.origLine >= origLine);
+    if (idx >= 0) listRef.current?.scrollToIndex(idx);
+  }, [matchOrigLines, matchCursor, filtered]);
+
   const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
 
   const BADGES = [
@@ -914,6 +943,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
     { key:"warn",  label:"WARN",  bg:"var(--pl-chip-warn-bg)",  fg:"var(--pl-chip-warn-fg)",  cnt:stats.warn  },
     { key:"info",  label:"INFO",  bg:"var(--pl-chip-info-bg)",  fg:"var(--pl-chip-info-fg)",  cnt:stats.info  },
     { key:"debug", label:"DEBUG", bg:"var(--pl-chip-debug-bg)", fg:"var(--pl-chip-debug-fg)", cnt:stats.debug },
+    { key:"trace", label:"TRACE", bg:"var(--pl-chip-trace-bg)", fg:"var(--pl-chip-trace-fg)", cnt:stats.trace },
     { key:"stack", label:"STACK", bg:"var(--pl-chip-stack-bg)", fg:"var(--pl-chip-stack-fg)", cnt:null        },
     { key:"plain", label:"PLAIN", bg:"var(--pl-chip-plain-bg)", fg:"var(--pl-chip-plain-fg)", cnt:null        },
   ];
@@ -937,7 +967,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
                     background:"var(--pl-bg-panel)", borderBottom:"0.5px solid var(--pl-border-soft)",
                     flexWrap:"wrap", flexShrink:0 }}>
 
-        <div style={{ display:"flex", flex:1, minWidth:140, position:"relative" }}>
+        <div style={{ display:"flex", flex:1, minWidth:60, position:"relative" }}>
           <input
             style={{ flex:1, background:"var(--pl-bg-input)",
                      border:`0.5px solid ${regexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
@@ -960,10 +990,21 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
           </button>
         </div>
 
-        <div style={{ display:"flex", alignItems:"center", gap:4 }} title={t("context_title")}>
+        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
+          <Btn active={!searchMode} onClick={() => setSearchMode(false)} title={t("filter_mode_title")}>
+            {t("filter_mode_btn")}
+          </Btn>
+          <Btn active={searchMode} onClick={() => setSearchMode(true)} title={t("search_mode_title")}>
+            {t("search_mode_btn")}
+          </Btn>
+        </div>
+
+        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap",
+                      opacity: searchMode ? 0.4 : 1 }}
+             title={searchMode ? t("search_mode_title") : t("context_title")}>
           <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
           <input
-            type="number" min={0} max={50}
+            type="number" min={0} max={50} disabled={searchMode}
             value={context}
             onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
             style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
@@ -971,6 +1012,16 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
                      padding:"3px 4px", textAlign:"center" }}
           />
         </div>
+
+        {filter && matchOrigLines.length > 0 && (
+          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
+            <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
+            <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
+            <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
+              {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
+            </span>
+          </div>
+        )}
 
         <Sep />
 
@@ -1499,6 +1550,8 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
   const [useRegex,   setUseRegex]  = useRememberedState(tabKey, "useRegex", false);
   const searchFilter = useDebouncedValue(filter);
   const [context,    setContext]  = useRememberedState(tabKey, "context", 0);
+  const [searchMode, setSearchMode] = useRememberedState(tabKey, "searchMode", false);
+  const [matchCursor,setMatchCursor]= useRememberedState(tabKey, "matchCursor", -1);
   const [regexError, setRegexError]= useState(false);
   const [bookmarks,  setBookmarks] = useRememberedState(tabKey, "bookmarks", () => new Set());
   const [bmCursor,   setBmCursor]  = useRememberedState(tabKey, "bmCursor", -1);
@@ -1536,7 +1589,7 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
 
   const stats = useMemo(() => countLevels(classified), [classified]);
 
-  const { filtered, regexValid } = useFilteredLogs("docker", classified, searchFilter, useRegex, lvl, context, reportMetric);
+  const { filtered, regexValid, matchOrigLines } = useFilteredLogs("docker", classified, searchFilter, useRegex, lvl, context, searchMode, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
 
@@ -1564,6 +1617,16 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
     if (idx >= 0) listRef.current?.scrollToIndex(idx);
   }, [sortedBookmarks, bmCursor, filtered]);
 
+  const jumpMatch = useCallback((direction) => {
+    if (!matchOrigLines.length) return;
+    const next = direction === "next"
+      ? (matchCursor >= matchOrigLines.length - 1 ? 0 : matchCursor + 1)
+      : (matchCursor <= 0 ? matchOrigLines.length - 1 : matchCursor - 1);
+    setMatchCursor(next);
+    const idx = filtered.findIndex(x => x.origLine >= matchOrigLines[next]);
+    if (idx >= 0) listRef.current?.scrollToIndex(idx);
+  }, [matchOrigLines, matchCursor, filtered]);
+
   const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
 
   const BADGES = [
@@ -1571,6 +1634,7 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
     { key:"warn",  label:"WARN",  bg:"var(--pl-chip-warn-bg)",  fg:"var(--pl-chip-warn-fg)",  cnt:stats.warn  },
     { key:"info",  label:"INFO",  bg:"var(--pl-chip-info-bg)",  fg:"var(--pl-chip-info-fg)",  cnt:stats.info  },
     { key:"debug", label:"DEBUG", bg:"var(--pl-chip-debug-bg)", fg:"var(--pl-chip-debug-fg)", cnt:stats.debug },
+    { key:"trace", label:"TRACE", bg:"var(--pl-chip-trace-bg)", fg:"var(--pl-chip-trace-fg)", cnt:stats.trace },
     { key:"stack", label:"STACK", bg:"var(--pl-chip-stack-bg)", fg:"var(--pl-chip-stack-fg)", cnt:null        },
     { key:"plain", label:"PLAIN", bg:"var(--pl-chip-plain-bg)", fg:"var(--pl-chip-plain-fg)", cnt:null        },
   ];
@@ -1602,7 +1666,7 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
 
         <Sep />
 
-        <div style={{ display:"flex", flex:1, minWidth:140 }}>
+        <div style={{ display:"flex", flex:1, minWidth:60 }}>
           <input
             style={{ flex:1, background:"var(--pl-bg-input)",
                      border:`0.5px solid ${regexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
@@ -1624,10 +1688,21 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
           </button>
         </div>
 
-        <div style={{ display:"flex", alignItems:"center", gap:4 }} title={t("context_title")}>
+        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
+          <Btn active={!searchMode} onClick={() => setSearchMode(false)} title={t("filter_mode_title")}>
+            {t("filter_mode_btn")}
+          </Btn>
+          <Btn active={searchMode} onClick={() => setSearchMode(true)} title={t("search_mode_title")}>
+            {t("search_mode_btn")}
+          </Btn>
+        </div>
+
+        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap",
+                      opacity: searchMode ? 0.4 : 1 }}
+             title={searchMode ? t("search_mode_title") : t("context_title")}>
           <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
           <input
-            type="number" min={0} max={50}
+            type="number" min={0} max={50} disabled={searchMode}
             value={context}
             onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
             style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
@@ -1635,6 +1710,16 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
                      padding:"3px 4px", textAlign:"center" }}
           />
         </div>
+
+        {filter && matchOrigLines.length > 0 && (
+          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
+            <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
+            <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
+            <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
+              {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
+            </span>
+          </div>
+        )}
 
         <Sep />
 
@@ -1929,6 +2014,8 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
   const [useRegex,   setUseRegex]  = useRememberedState(tabKey, "useRegex", false);
   const searchFilter = useDebouncedValue(filter);
   const [context,    setContext]  = useRememberedState(tabKey, "context", 0);
+  const [searchMode, setSearchMode] = useRememberedState(tabKey, "searchMode", false);
+  const [matchCursor,setMatchCursor]= useRememberedState(tabKey, "matchCursor", -1);
   const [regexError, setRegexError]= useState(false);
   const [bookmarks,  setBookmarks] = useRememberedState(tabKey, "bookmarks", () => new Set());
   const [bmCursor,   setBmCursor]  = useRememberedState(tabKey, "bmCursor", -1);
@@ -1966,7 +2053,7 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
 
   const stats = useMemo(() => countLevels(classified), [classified]);
 
-  const { filtered, regexValid } = useFilteredLogs("remote", classified, searchFilter, useRegex, lvl, context, reportMetric);
+  const { filtered, regexValid, matchOrigLines } = useFilteredLogs("remote", classified, searchFilter, useRegex, lvl, context, searchMode, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
 
@@ -1994,6 +2081,16 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
     if (idx >= 0) listRef.current?.scrollToIndex(idx);
   }, [sortedBookmarks, bmCursor, filtered]);
 
+  const jumpMatch = useCallback((direction) => {
+    if (!matchOrigLines.length) return;
+    const next = direction === "next"
+      ? (matchCursor >= matchOrigLines.length - 1 ? 0 : matchCursor + 1)
+      : (matchCursor <= 0 ? matchOrigLines.length - 1 : matchCursor - 1);
+    setMatchCursor(next);
+    const idx = filtered.findIndex(x => x.origLine >= matchOrigLines[next]);
+    if (idx >= 0) listRef.current?.scrollToIndex(idx);
+  }, [matchOrigLines, matchCursor, filtered]);
+
   const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
   const modeLabel = config.mode === "wsl"
     ? t("remote_mode_wsl")
@@ -2012,6 +2109,7 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
     { key:"warn",  label:"WARN",  bg:"var(--pl-chip-warn-bg)",  fg:"var(--pl-chip-warn-fg)",  cnt:stats.warn  },
     { key:"info",  label:"INFO",  bg:"var(--pl-chip-info-bg)",  fg:"var(--pl-chip-info-fg)",  cnt:stats.info  },
     { key:"debug", label:"DEBUG", bg:"var(--pl-chip-debug-bg)", fg:"var(--pl-chip-debug-fg)", cnt:stats.debug },
+    { key:"trace", label:"TRACE", bg:"var(--pl-chip-trace-bg)", fg:"var(--pl-chip-trace-fg)", cnt:stats.trace },
     { key:"stack", label:"STACK", bg:"var(--pl-chip-stack-bg)", fg:"var(--pl-chip-stack-fg)", cnt:null        },
     { key:"plain", label:"PLAIN", bg:"var(--pl-chip-plain-bg)", fg:"var(--pl-chip-plain-fg)", cnt:null        },
   ];
@@ -2038,7 +2136,7 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
           {modeLabel} {targetLabel}
         </span>
         <Sep />
-        <div style={{ display:"flex", flex:1, minWidth:140 }}>
+        <div style={{ display:"flex", flex:1, minWidth:60 }}>
           <input
             style={{ flex:1, background:"var(--pl-bg-input)",
                      border:`0.5px solid ${regexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
@@ -2060,10 +2158,21 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
           </button>
         </div>
 
-        <div style={{ display:"flex", alignItems:"center", gap:4 }} title={t("context_title")}>
+        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
+          <Btn active={!searchMode} onClick={() => setSearchMode(false)} title={t("filter_mode_title")}>
+            {t("filter_mode_btn")}
+          </Btn>
+          <Btn active={searchMode} onClick={() => setSearchMode(true)} title={t("search_mode_title")}>
+            {t("search_mode_btn")}
+          </Btn>
+        </div>
+
+        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap",
+                      opacity: searchMode ? 0.4 : 1 }}
+             title={searchMode ? t("search_mode_title") : t("context_title")}>
           <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
           <input
-            type="number" min={0} max={50}
+            type="number" min={0} max={50} disabled={searchMode}
             value={context}
             onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
             style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
@@ -2071,6 +2180,16 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
                      padding:"3px 4px", textAlign:"center" }}
           />
         </div>
+
+        {filter && matchOrigLines.length > 0 && (
+          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
+            <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
+            <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
+            <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
+              {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
+            </span>
+          </div>
+        )}
         <Sep />
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
           <span key={key} onClick={() => toggle(key)}

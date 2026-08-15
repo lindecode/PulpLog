@@ -17,12 +17,13 @@ export function classifyLines(lines, startLine = 1) {
 }
 
 export function countLevels(items) {
-  const counts = { error:0, warn:0, info:0, debug:0 };
+  const counts = { error:0, warn:0, info:0, debug:0, trace:0 };
   for (const item of items) {
     if (item.type === "error" || item.type === "exception") counts.error++;
     else if (item.type === "warn") counts.warn++;
     else if (item.type === "info") counts.info++;
     else if (item.type === "debug") counts.debug++;
+    else if (item.type === "trace") counts.trace++;
   }
   return counts;
 }
@@ -88,32 +89,35 @@ export function applyContext(classified, isMatch, context) {
   }
   return out;
 }
-export function filterLogs(classified, searchFilter, useRegex, levels, context) {
+export function filterLogs(classified, searchFilter, useRegex, levels, context, searchMode) {
   const hidden = new Set();
   if (!levels.error) { hidden.add("error"); hidden.add("exception"); }
   if (!levels.stack) { hidden.add("stack"); hidden.add("causedby"); }
   for (const key of ["warn", "info", "debug", "trace", "plain"]) {
     if (!levels[key]) hidden.add(key);
   }
+  const visible = hidden.size ? classified.filter(item => !hidden.has(item.type)) : classified;
+
   if (!searchFilter) {
-    return {
-      filtered:hidden.size ? classified.filter(item => !hidden.has(item.type)) : classified,
-      regexValid:true,
-    };
+    return { filtered:visible, regexValid:true, matchOrigLines:[] };
   }
+
+  let isMatch;
   if (useRegex) {
     let regex;
     try { regex = new RegExp(searchFilter, "i"); }
-    catch { return { filtered:[], regexValid:false }; }
-    return {
-      filtered:applyContext(classified, item => !hidden.has(item.type) && regex.test(item.raw), context),
-      regexValid:true,
-    };
+    catch { return { filtered: searchMode ? visible : [], regexValid:false, matchOrigLines:[] }; }
+    isMatch = item => regex.test(item.raw);
+  } else {
+    const lowerFilter = searchFilter.toLowerCase();
+    isMatch = item => item.raw.toLowerCase().includes(lowerFilter);
   }
-  const lowerFilter = searchFilter.toLowerCase();
-  return {
-    filtered:applyContext(classified,
-      item => !hidden.has(item.type) && item.raw.toLowerCase().includes(lowerFilter), context),
-    regexValid:true,
-  };
+
+  if (searchMode) {
+    const filtered = visible.map(item => isMatch(item) ? { ...item, matched:true } : item);
+    return { filtered, regexValid:true, matchOrigLines: filtered.filter(x => x.matched).map(x => x.origLine) };
+  }
+
+  const filtered = applyContext(visible, isMatch, context);
+  return { filtered, regexValid:true, matchOrigLines: filtered.filter(x => !x.contextOnly).map(x => x.origLine) };
 }

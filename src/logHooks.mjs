@@ -63,14 +63,14 @@ export function useBatchedLines(onBatch, delay = 75) {
 
   return enqueue;
 }
-export function useFilteredLogs(kind, classified, searchFilter, useRegex, levels, context, reportMetric) {
+export function useFilteredLogs(kind, classified, searchFilter, useRegex, levels, context, searchMode, reportMetric) {
   return useMemo(() => {
     const started = performance.now();
-    const result = filterLogs(classified, searchFilter, useRegex, levels, context);
+    const result = filterLogs(classified, searchFilter, useRegex, levels, context, searchMode);
     const duration = performance.now() - started;
     if (duration >= 4) {
       queueMicrotask(() => reportMetric("search", duration, `${kind}: ${classified.length} lines`));
     }
     return result;
-  }, [kind, classified, searchFilter, useRegex, levels, context, reportMetric]);
+  }, [kind, classified, searchFilter, useRegex, levels, context, searchMode, reportMetric]);
 }
