@@ -65,12 +65,12 @@ const T = {
     filter_ph:       "🔍  filtrar…",
     regex_ph:        "regex…",
     regex_btn_title: "Activar filtro por expresión regular",
-    context_title:   "Líneas de contexto antes/después de cada resultado",
+    search_ph:       "✨  resaltar…",
+    search_regex_ph: "regex…",
+    search_regex_btn_title:"Activar búsqueda por expresión regular",
+    search_regex_invalid_title:"Regex de búsqueda inválida",
+    context_title:   "Líneas de contexto antes/después de cada resultado del filtro",
     context_gap:     n => `${n} ${n === 1 ? "línea omitida" : "líneas omitidas"}`,
-    filter_mode_btn: "Filtrar",
-    filter_mode_title:"Ocultar las líneas que no coinciden",
-    search_mode_btn: "Buscar",
-    search_mode_title:"Resaltar las líneas que coinciden sin ocultar el resto",
     match_prev_title:"Resultado anterior",
     match_next_title:"Resultado siguiente",
     match_count:     (cur, total) => `${cur}/${total}`,
@@ -185,12 +185,12 @@ const T = {
     filter_ph:       "🔍  filter…",
     regex_ph:        "regex…",
     regex_btn_title: "Enable regular expression filter",
-    context_title:   "Context lines before/after each match",
+    search_ph:       "✨  highlight…",
+    search_regex_ph: "regex…",
+    search_regex_btn_title:"Enable regular expression search",
+    search_regex_invalid_title:"Invalid search regex",
+    context_title:   "Context lines before/after each filter match",
     context_gap:     n => `${n} line${n === 1 ? "" : "s"} skipped`,
-    filter_mode_btn: "Filter",
-    filter_mode_title:"Hide lines that don't match",
-    search_mode_btn: "Search",
-    search_mode_title:"Highlight matching lines without hiding the rest",
     match_prev_title:"Previous match",
     match_next_title:"Next match",
     match_count:     (cur, total) => `${cur}/${total}`,
@@ -539,8 +539,12 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
     });
   };
 
-  const navigateSelection = (direction, extending) => {
-    const index = findAdjacentLineIndex(items, selection.active, direction);
+  const navigateSelection = (direction, extending, toBoundary = false) => {
+    const index = findAdjacentLineIndex(
+      items,
+      toBoundary ? null : selection.active,
+      toBoundary ? -direction : direction,
+    );
     if (index < 0) return;
     selectLine(items[index].origLine, { shiftKey:extending }, true);
     listRef.current?.scrollToIndex(index);
@@ -600,7 +604,11 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
              setSelection({ lines, active, anchor:active });
            } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
              event.preventDefault();
-             navigateSelection(event.key === "ArrowUp" ? -1 : 1, event.shiftKey);
+             navigateSelection(
+               event.key === "ArrowUp" ? -1 : 1,
+               event.shiftKey,
+               event.ctrlKey || event.metaKey,
+             );
            } else if (event.key === "Escape" && selection.lines.size) {
              event.preventDefault();
              setSelection({ lines:new Set(), active:null, anchor:null });
@@ -683,13 +691,16 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
   const [tailing,     setTailing]     = useRememberedState(tabKey, "tailing", true);
   const [autoScroll,  setAutoScroll]  = useRememberedState(tabKey, "autoScroll", autoScrollDefault);
   const [showNums,    setShowNums]    = useRememberedState(tabKey, "showNums", showNumsDefault);
-  const [filter,      setFilter]      = useRememberedState(tabKey, "filter", "");
-  const [useRegex,    setUseRegex]    = useRememberedState(tabKey, "useRegex", false);
-  const searchFilter = useDebouncedValue(filter);
-  const [context,     setContext]     = useRememberedState(tabKey, "context", 0);
-  const [searchMode,  setSearchMode]  = useRememberedState(tabKey, "searchMode", false);
-  const [matchCursor, setMatchCursor] = useRememberedState(tabKey, "matchCursor", -1);
-  const [regexError,  setRegexError]  = useState(false);
+  const [filter,       setFilter]       = useRememberedState(tabKey, "filter", "");
+  const [filterUseRegex, setFilterUseRegex] = useRememberedState(tabKey, "useRegex", false);
+  const filterDebounced = useDebouncedValue(filter);
+  const [context,      setContext]      = useRememberedState(tabKey, "context", 0);
+  const [search,       setSearch]       = useRememberedState(tabKey, "search", "");
+  const [searchUseRegex, setSearchUseRegex] = useRememberedState(tabKey, "searchUseRegex", false);
+  const searchDebounced = useDebouncedValue(search);
+  const [matchCursor,  setMatchCursor]  = useRememberedState(tabKey, "matchCursor", -1);
+  const [filterRegexError, setFilterRegexError] = useState(false);
+  const [searchRegexError, setSearchRegexError] = useState(false);
   const [bookmarks,   setBookmarks]   = useRememberedState(tabKey, "bookmarks", () => new Set());
   const [bmCursor,    setBmCursor]    = useRememberedState(tabKey, "bmCursor", -1);
 
@@ -896,12 +907,14 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
     return () => unwatch?.();
   }, [tailing, loading, filePath]); // eslint-disable-line
 
-  const { filtered, regexValid, matchOrigLines } = useFilteredLogs("file", classified, searchFilter, useRegex, lvl, context, searchMode, reportMetric);
+  const { filtered, filterRegexValid, searchRegexValid, matchOrigLines } =
+    useFilteredLogs("file", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
 
 
-  useEffect(() => setRegexError(!regexValid), [regexValid]);
+  useEffect(() => setFilterRegexError(!filterRegexValid), [filterRegexValid]);
+  useEffect(() => setSearchRegexError(!searchRegexValid), [searchRegexValid]);
 
   const toggleBookmark = useCallback((origLine) => {
     setBookmarks(prev => {
@@ -933,8 +946,12 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
     setMatchCursor(next);
     const origLine = matchOrigLines[next];
     const idx = filtered.findIndex(x => x.origLine >= origLine);
-    if (idx >= 0) listRef.current?.scrollToIndex(idx);
-  }, [matchOrigLines, matchCursor, filtered]);
+    if (idx >= 0) {
+      listRef.current?.scrollToIndex(idx);
+      const hitLine = filtered[idx].origLine;
+      setSelection({ lines:new Set([hitLine]), active:hitLine, anchor:hitLine });
+    }
+  }, [matchOrigLines, matchCursor, filtered, setSelection]);
 
   const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
 
@@ -963,67 +980,90 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
 
       {/* toolbar */}
-      <div style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px",
+      <div style={{ display:"flex", flexDirection:"column", gap:6, padding:"7px 10px",
                     background:"var(--pl-bg-panel)", borderBottom:"0.5px solid var(--pl-border-soft)",
-                    flexWrap:"wrap", flexShrink:0 }}>
+                    flexShrink:0 }}>
 
-        <div style={{ display:"flex", flex:1, minWidth:60, position:"relative" }}>
-          <input
-            style={{ flex:1, background:"var(--pl-bg-input)",
-                     border:`0.5px solid ${regexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
-                     borderRadius:"6px 0 0 6px", color: regexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
-                     fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
-            placeholder={useRegex ? t("regex_ph") : t("filter_ph")}
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-          />
-          <button
-            onClick={() => setUseRegex(p => !p)}
-            title={t("regex_btn_title")}
-            style={{ background: useRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
-                     border:`0.5px solid ${useRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
-                     borderLeft:"none", borderRadius:"0 6px 6px 0",
-                     color: useRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
-                     fontFamily:"monospace", fontSize:11, padding:"4px 10px",
-                     cursor:"pointer", fontWeight: useRegex ? 700 : 400 }}>
-            .*
-          </button>
-        </div>
-
-        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
-          <Btn active={!searchMode} onClick={() => setSearchMode(false)} title={t("filter_mode_title")}>
-            {t("filter_mode_btn")}
-          </Btn>
-          <Btn active={searchMode} onClick={() => setSearchMode(true)} title={t("search_mode_title")}>
-            {t("search_mode_btn")}
-          </Btn>
-        </div>
-
-        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap",
-                      opacity: searchMode ? 0.4 : 1 }}
-             title={searchMode ? t("search_mode_title") : t("context_title")}>
-          <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
-          <input
-            type="number" min={0} max={50} disabled={searchMode}
-            value={context}
-            onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
-            style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
-                     borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
-                     padding:"3px 4px", textAlign:"center" }}
-          />
-        </div>
-
-        {filter && matchOrigLines.length > 0 && (
-          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
-            <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
-            <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
-            <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
-              {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
-            </span>
+        {/* row 1: filter + search + context + match nav */}
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+          <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
+            <input
+              style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
+                       border:`0.5px solid ${filterRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+                       borderRadius:"6px 0 0 6px", color: filterRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
+                       fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
+              placeholder={filterUseRegex ? t("regex_ph") : t("filter_ph")}
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+            />
+            <button
+              onClick={() => setFilterUseRegex(p => !p)}
+              title={t("regex_btn_title")}
+              style={{ background: filterUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                       border:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderLeft:"none", borderRadius:"0 6px 6px 0",
+                       color: filterUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
+                       fontFamily:"monospace", fontSize:11, padding:"4px 10px",
+                       cursor:"pointer", fontWeight: filterUseRegex ? 700 : 400 }}>
+              .*
+            </button>
           </div>
-        )}
 
-        <Sep />
+          <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
+            <input
+              style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
+                       border:`0.5px solid ${searchRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+                       borderRadius:"6px 0 0 6px", color: searchRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
+                       fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
+              placeholder={searchUseRegex ? t("search_regex_ph") : t("search_ph")}
+              title={searchRegexError ? t("search_regex_invalid_title") : undefined}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                jumpMatch(e.shiftKey ? "prev" : "next");
+              }}
+            />
+            <button
+              onClick={() => setSearchUseRegex(p => !p)}
+              title={t("search_regex_btn_title")}
+              style={{ background: searchUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                       border:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderLeft:"none", borderRadius:"0 6px 6px 0",
+                       color: searchUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
+                       fontFamily:"monospace", fontSize:11, padding:"4px 10px",
+                       cursor:"pointer", fontWeight: searchUseRegex ? 700 : 400 }}>
+              .*
+            </button>
+          </div>
+
+          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}
+               title={t("context_title")}>
+            <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
+            <input
+              type="number" min={0} max={50}
+              value={context}
+              onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
+              style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                       borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
+                       padding:"3px 4px", textAlign:"center" }}
+            />
+          </div>
+
+          {(filter || search) && matchOrigLines.length > 0 && (
+            <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
+              <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
+              <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
+              <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
+                {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* row 2: level chips + bookmarks + actions */}
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
 
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
           <span key={key} onClick={() => toggle(key)}
@@ -1085,6 +1125,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
         </Btn>
         <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
+        </div>
       </div>
 
       {/* progress */}
@@ -1112,7 +1153,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
       ) : filtered.length === 0 ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
                       flexDirection:"column", gap:8, color:"var(--pl-text-7)", fontSize:13 }}>
-          {regexError
+          {filterRegexError
             ? <><span style={{ color:"var(--pl-error-text)", fontSize:14 }}>⚠</span> {t("regex_invalid")}</>
             : filter ? t("no_results", filter) : t("no_lines")}
         </div>
@@ -1546,13 +1587,16 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
   const [spawned,    setSpawned]   = useState(false);
   const [connected,  setConnected] = useState(false);
   const [error,      setError]     = useState(null);
-  const [filter,     setFilter]    = useRememberedState(tabKey, "filter", "");
-  const [useRegex,   setUseRegex]  = useRememberedState(tabKey, "useRegex", false);
-  const searchFilter = useDebouncedValue(filter);
-  const [context,    setContext]  = useRememberedState(tabKey, "context", 0);
-  const [searchMode, setSearchMode] = useRememberedState(tabKey, "searchMode", false);
-  const [matchCursor,setMatchCursor]= useRememberedState(tabKey, "matchCursor", -1);
-  const [regexError, setRegexError]= useState(false);
+  const [filter,       setFilter]       = useRememberedState(tabKey, "filter", "");
+  const [filterUseRegex, setFilterUseRegex] = useRememberedState(tabKey, "useRegex", false);
+  const filterDebounced = useDebouncedValue(filter);
+  const [context,      setContext]      = useRememberedState(tabKey, "context", 0);
+  const [search,       setSearch]       = useRememberedState(tabKey, "search", "");
+  const [searchUseRegex, setSearchUseRegex] = useRememberedState(tabKey, "searchUseRegex", false);
+  const searchDebounced = useDebouncedValue(search);
+  const [matchCursor,  setMatchCursor]  = useRememberedState(tabKey, "matchCursor", -1);
+  const [filterRegexError, setFilterRegexError] = useState(false);
+  const [searchRegexError, setSearchRegexError] = useState(false);
   const [bookmarks,  setBookmarks] = useRememberedState(tabKey, "bookmarks", () => new Set());
   const [bmCursor,   setBmCursor]  = useRememberedState(tabKey, "bmCursor", -1);
 
@@ -1589,13 +1633,15 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
 
   const stats = useMemo(() => countLevels(classified), [classified]);
 
-  const { filtered, regexValid, matchOrigLines } = useFilteredLogs("docker", classified, searchFilter, useRegex, lvl, context, searchMode, reportMetric);
+  const { filtered, filterRegexValid, searchRegexValid, matchOrigLines } =
+    useFilteredLogs("docker", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
 
   const droppedCount = Math.max(0, nextLineRef.current - 1 - classified.length);
 
-  useEffect(() => setRegexError(!regexValid), [regexValid]);
+  useEffect(() => setFilterRegexError(!filterRegexValid), [filterRegexValid]);
+  useEffect(() => setSearchRegexError(!searchRegexValid), [searchRegexValid]);
 
   const toggleBookmark = useCallback((origLine) => {
     setBookmarks(prev => {
@@ -1624,8 +1670,12 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
       : (matchCursor <= 0 ? matchOrigLines.length - 1 : matchCursor - 1);
     setMatchCursor(next);
     const idx = filtered.findIndex(x => x.origLine >= matchOrigLines[next]);
-    if (idx >= 0) listRef.current?.scrollToIndex(idx);
-  }, [matchOrigLines, matchCursor, filtered]);
+    if (idx >= 0) {
+      listRef.current?.scrollToIndex(idx);
+      const hitLine = filtered[idx].origLine;
+      setSelection({ lines:new Set([hitLine]), active:hitLine, anchor:hitLine });
+    }
+  }, [matchOrigLines, matchCursor, filtered, setSelection]);
 
   const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
 
@@ -1654,74 +1704,94 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
 
       {/* toolbar */}
-      <div style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px",
+      <div style={{ display:"flex", flexDirection:"column", gap:6, padding:"7px 10px",
                     background:"var(--pl-bg-panel)", borderBottom:"0.5px solid var(--pl-border-soft)",
-                    flexWrap:"wrap", flexShrink:0 }}>
+                    flexShrink:0 }}>
 
-        <span style={{ fontSize:11, color:"var(--pl-cat-docker)", background:"var(--pl-docker-badge-bg)",
-                       border:"0.5px solid var(--pl-docker-badge-border)", borderRadius:6, padding:"3px 8px",
-                       fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
-          🐳 {containerName}
-        </span>
+        {/* row 1: filter + search + context + match nav */}
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+          <span style={{ fontSize:11, color:"var(--pl-cat-docker)", background:"var(--pl-docker-badge-bg)",
+                         border:"0.5px solid var(--pl-docker-badge-border)", borderRadius:6, padding:"3px 8px",
+                         fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
+            🐳 {containerName}
+          </span>
 
-        <Sep />
-
-        <div style={{ display:"flex", flex:1, minWidth:60 }}>
-          <input
-            style={{ flex:1, background:"var(--pl-bg-input)",
-                     border:`0.5px solid ${regexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
-                     borderRadius:"6px 0 0 6px", color: regexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
-                     fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
-            placeholder={useRegex ? t("regex_ph") : t("filter_ph")}
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-          />
-          <button onClick={() => setUseRegex(p => !p)}
-            title={t("regex_btn_title")}
-            style={{ background: useRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
-                     border:`0.5px solid ${useRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
-                     borderLeft:"none", borderRadius:"0 6px 6px 0",
-                     color: useRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
-                     fontFamily:"monospace", fontSize:11, padding:"4px 10px",
-                     cursor:"pointer", fontWeight: useRegex ? 700 : 400 }}>
-            .*
-          </button>
-        </div>
-
-        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
-          <Btn active={!searchMode} onClick={() => setSearchMode(false)} title={t("filter_mode_title")}>
-            {t("filter_mode_btn")}
-          </Btn>
-          <Btn active={searchMode} onClick={() => setSearchMode(true)} title={t("search_mode_title")}>
-            {t("search_mode_btn")}
-          </Btn>
-        </div>
-
-        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap",
-                      opacity: searchMode ? 0.4 : 1 }}
-             title={searchMode ? t("search_mode_title") : t("context_title")}>
-          <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
-          <input
-            type="number" min={0} max={50} disabled={searchMode}
-            value={context}
-            onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
-            style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
-                     borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
-                     padding:"3px 4px", textAlign:"center" }}
-          />
-        </div>
-
-        {filter && matchOrigLines.length > 0 && (
-          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
-            <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
-            <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
-            <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
-              {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
-            </span>
+          <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
+            <input
+              style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
+                       border:`0.5px solid ${filterRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+                       borderRadius:"6px 0 0 6px", color: filterRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
+                       fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
+              placeholder={filterUseRegex ? t("regex_ph") : t("filter_ph")}
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+            />
+            <button onClick={() => setFilterUseRegex(p => !p)}
+              title={t("regex_btn_title")}
+              style={{ background: filterUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                       border:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderLeft:"none", borderRadius:"0 6px 6px 0",
+                       color: filterUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
+                       fontFamily:"monospace", fontSize:11, padding:"4px 10px",
+                       cursor:"pointer", fontWeight: filterUseRegex ? 700 : 400 }}>
+              .*
+            </button>
           </div>
-        )}
 
-        <Sep />
+          <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
+            <input
+              style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
+                       border:`0.5px solid ${searchRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+                       borderRadius:"6px 0 0 6px", color: searchRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
+                       fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
+              placeholder={searchUseRegex ? t("search_regex_ph") : t("search_ph")}
+              title={searchRegexError ? t("search_regex_invalid_title") : undefined}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                jumpMatch(e.shiftKey ? "prev" : "next");
+              }}
+            />
+            <button onClick={() => setSearchUseRegex(p => !p)}
+              title={t("search_regex_btn_title")}
+              style={{ background: searchUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                       border:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderLeft:"none", borderRadius:"0 6px 6px 0",
+                       color: searchUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
+                       fontFamily:"monospace", fontSize:11, padding:"4px 10px",
+                       cursor:"pointer", fontWeight: searchUseRegex ? 700 : 400 }}>
+              .*
+            </button>
+          </div>
+
+          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}
+               title={t("context_title")}>
+            <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
+            <input
+              type="number" min={0} max={50}
+              value={context}
+              onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
+              style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                       borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
+                       padding:"3px 4px", textAlign:"center" }}
+            />
+          </div>
+
+          {(filter || search) && matchOrigLines.length > 0 && (
+            <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
+              <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
+              <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
+              <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
+                {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* row 2: level chips + bookmarks + actions */}
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
 
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
           <span key={key} onClick={() => toggle(key)}
@@ -1752,6 +1822,7 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
         <Btn active={showNums}   onClick={() => setShowNums(p => !p)}   title={t("linenums_title")}>#</Btn>
         <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
+        </div>
       </div>
 
       {/* error banner */}
@@ -1774,7 +1845,7 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
       ) : filtered.length === 0 ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
                       color:"var(--pl-text-7)", fontSize:13 }}>
-          {regexError
+          {filterRegexError
             ? <><span style={{ color:"var(--pl-error-text)" }}>⚠</span> {t("regex_invalid")}</>
             : filter ? t("no_results", filter) : t("no_lines")}
         </div>
@@ -2010,13 +2081,16 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
   const [spawned,    setSpawned]   = useState(false);
   const [connected,  setConnected] = useState(false);
   const [error,      setError]     = useState(null);
-  const [filter,     setFilter]    = useRememberedState(tabKey, "filter", "");
-  const [useRegex,   setUseRegex]  = useRememberedState(tabKey, "useRegex", false);
-  const searchFilter = useDebouncedValue(filter);
-  const [context,    setContext]  = useRememberedState(tabKey, "context", 0);
-  const [searchMode, setSearchMode] = useRememberedState(tabKey, "searchMode", false);
-  const [matchCursor,setMatchCursor]= useRememberedState(tabKey, "matchCursor", -1);
-  const [regexError, setRegexError]= useState(false);
+  const [filter,       setFilter]       = useRememberedState(tabKey, "filter", "");
+  const [filterUseRegex, setFilterUseRegex] = useRememberedState(tabKey, "useRegex", false);
+  const filterDebounced = useDebouncedValue(filter);
+  const [context,      setContext]      = useRememberedState(tabKey, "context", 0);
+  const [search,       setSearch]       = useRememberedState(tabKey, "search", "");
+  const [searchUseRegex, setSearchUseRegex] = useRememberedState(tabKey, "searchUseRegex", false);
+  const searchDebounced = useDebouncedValue(search);
+  const [matchCursor,  setMatchCursor]  = useRememberedState(tabKey, "matchCursor", -1);
+  const [filterRegexError, setFilterRegexError] = useState(false);
+  const [searchRegexError, setSearchRegexError] = useState(false);
   const [bookmarks,  setBookmarks] = useRememberedState(tabKey, "bookmarks", () => new Set());
   const [bmCursor,   setBmCursor]  = useRememberedState(tabKey, "bmCursor", -1);
 
@@ -2053,13 +2127,15 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
 
   const stats = useMemo(() => countLevels(classified), [classified]);
 
-  const { filtered, regexValid, matchOrigLines } = useFilteredLogs("remote", classified, searchFilter, useRegex, lvl, context, searchMode, reportMetric);
+  const { filtered, filterRegexValid, searchRegexValid, matchOrigLines } =
+    useFilteredLogs("remote", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
 
   const droppedCount = Math.max(0, nextLineRef.current - 1 - classified.length);
 
-  useEffect(() => setRegexError(!regexValid), [regexValid]);
+  useEffect(() => setFilterRegexError(!filterRegexValid), [filterRegexValid]);
+  useEffect(() => setSearchRegexError(!searchRegexValid), [searchRegexValid]);
 
   const toggleBookmark = useCallback((origLine) => {
     setBookmarks(prev => {
@@ -2088,8 +2164,12 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
       : (matchCursor <= 0 ? matchOrigLines.length - 1 : matchCursor - 1);
     setMatchCursor(next);
     const idx = filtered.findIndex(x => x.origLine >= matchOrigLines[next]);
-    if (idx >= 0) listRef.current?.scrollToIndex(idx);
-  }, [matchOrigLines, matchCursor, filtered]);
+    if (idx >= 0) {
+      listRef.current?.scrollToIndex(idx);
+      const hitLine = filtered[idx].origLine;
+      setSelection({ lines:new Set([hitLine]), active:hitLine, anchor:hitLine });
+    }
+  }, [matchOrigLines, matchCursor, filtered, setSelection]);
 
   const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
   const modeLabel = config.mode === "wsl"
@@ -2127,70 +2207,94 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
 
   return (
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
-      <div style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 10px",
+      <div style={{ display:"flex", flexDirection:"column", gap:6, padding:"7px 10px",
                     background:"var(--pl-bg-panel)", borderBottom:"0.5px solid var(--pl-border-soft)",
-                    flexWrap:"wrap", flexShrink:0 }}>
-        <span style={{ fontSize:11, color:"var(--pl-cat-remote)", background:"var(--pl-remote-badge-bg)",
-                       border:"0.5px solid var(--pl-remote-badge-border)", borderRadius:6, padding:"3px 8px",
-                       fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
-          {modeLabel} {targetLabel}
-        </span>
-        <Sep />
-        <div style={{ display:"flex", flex:1, minWidth:60 }}>
-          <input
-            style={{ flex:1, background:"var(--pl-bg-input)",
-                     border:`0.5px solid ${regexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
-                     borderRadius:"6px 0 0 6px", color: regexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
-                     fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
-            placeholder={useRegex ? t("regex_ph") : t("filter_ph")}
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-          />
-          <button onClick={() => setUseRegex(p => !p)}
-            title={t("regex_btn_title")}
-            style={{ background: useRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
-                     border:`0.5px solid ${useRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
-                     borderLeft:"none", borderRadius:"0 6px 6px 0",
-                     color: useRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
-                     fontFamily:"monospace", fontSize:11, padding:"4px 10px",
-                     cursor:"pointer", fontWeight: useRegex ? 700 : 400 }}>
-            .*
-          </button>
-        </div>
+                    flexShrink:0 }}>
 
-        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
-          <Btn active={!searchMode} onClick={() => setSearchMode(false)} title={t("filter_mode_title")}>
-            {t("filter_mode_btn")}
-          </Btn>
-          <Btn active={searchMode} onClick={() => setSearchMode(true)} title={t("search_mode_title")}>
-            {t("search_mode_btn")}
-          </Btn>
-        </div>
+        {/* row 1: filter + search + context + match nav */}
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+          <span style={{ fontSize:11, color:"var(--pl-cat-remote)", background:"var(--pl-remote-badge-bg)",
+                         border:"0.5px solid var(--pl-remote-badge-border)", borderRadius:6, padding:"3px 8px",
+                         fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
+            {modeLabel} {targetLabel}
+          </span>
 
-        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap",
-                      opacity: searchMode ? 0.4 : 1 }}
-             title={searchMode ? t("search_mode_title") : t("context_title")}>
-          <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
-          <input
-            type="number" min={0} max={50} disabled={searchMode}
-            value={context}
-            onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
-            style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
-                     borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
-                     padding:"3px 4px", textAlign:"center" }}
-          />
-        </div>
-
-        {filter && matchOrigLines.length > 0 && (
-          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
-            <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
-            <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
-            <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
-              {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
-            </span>
+          <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
+            <input
+              style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
+                       border:`0.5px solid ${filterRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+                       borderRadius:"6px 0 0 6px", color: filterRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
+                       fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
+              placeholder={filterUseRegex ? t("regex_ph") : t("filter_ph")}
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+            />
+            <button onClick={() => setFilterUseRegex(p => !p)}
+              title={t("regex_btn_title")}
+              style={{ background: filterUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                       border:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderLeft:"none", borderRadius:"0 6px 6px 0",
+                       color: filterUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
+                       fontFamily:"monospace", fontSize:11, padding:"4px 10px",
+                       cursor:"pointer", fontWeight: filterUseRegex ? 700 : 400 }}>
+              .*
+            </button>
           </div>
-        )}
-        <Sep />
+
+          <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
+            <input
+              style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
+                       border:`0.5px solid ${searchRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+                       borderRadius:"6px 0 0 6px", color: searchRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
+                       fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
+              placeholder={searchUseRegex ? t("search_regex_ph") : t("search_ph")}
+              title={searchRegexError ? t("search_regex_invalid_title") : undefined}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                jumpMatch(e.shiftKey ? "prev" : "next");
+              }}
+            />
+            <button onClick={() => setSearchUseRegex(p => !p)}
+              title={t("search_regex_btn_title")}
+              style={{ background: searchUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                       border:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderLeft:"none", borderRadius:"0 6px 6px 0",
+                       color: searchUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
+                       fontFamily:"monospace", fontSize:11, padding:"4px 10px",
+                       cursor:"pointer", fontWeight: searchUseRegex ? 700 : 400 }}>
+              .*
+            </button>
+          </div>
+
+          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}
+               title={t("context_title")}>
+            <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
+            <input
+              type="number" min={0} max={50}
+              value={context}
+              onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
+              style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                       borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
+                       padding:"3px 4px", textAlign:"center" }}
+            />
+          </div>
+
+          {(filter || search) && matchOrigLines.length > 0 && (
+            <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
+              <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
+              <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
+              <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
+                {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* row 2: level chips + bookmarks + actions */}
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
           <span key={key} onClick={() => toggle(key)}
             style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11,
@@ -2216,6 +2320,7 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
         <Btn active={showNums}   onClick={() => setShowNums(p => !p)}   title={t("linenums_title")}>#</Btn>
         <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
+        </div>
       </div>
 
       {error && (
@@ -2235,7 +2340,7 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
       ) : filtered.length === 0 ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
                       color:"var(--pl-text-7)", fontSize:13 }}>
-          {regexError
+          {filterRegexError
             ? <><span style={{ color:"var(--pl-error-text)" }}>⚠</span> {t("regex_invalid")}</>
             : filter ? t("no_results", filter) : t("no_lines")}
         </div>

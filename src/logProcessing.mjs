@@ -89,7 +89,21 @@ export function applyContext(classified, isMatch, context) {
   }
   return out;
 }
-export function filterLogs(classified, searchFilter, useRegex, levels, context, searchMode) {
+function buildMatcher(text, useRegex) {
+  if (!text) return { match:null, valid:true };
+  if (useRegex) {
+    try {
+      const regex = new RegExp(text, "i");
+      return { match: item => regex.test(item.raw), valid:true };
+    } catch { return { match:null, valid:false }; }
+  }
+  const lower = text.toLowerCase();
+  return { match: item => item.raw.toLowerCase().includes(lower), valid:true };
+}
+
+// `filterText` hides non-matching lines (with ±context); `searchText` highlights
+// matches without hiding anything — both can be active at the same time.
+export function filterLogs(classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex) {
   const hidden = new Set();
   if (!levels.error) { hidden.add("error"); hidden.add("exception"); }
   if (!levels.stack) { hidden.add("stack"); hidden.add("causedby"); }
@@ -98,26 +112,23 @@ export function filterLogs(classified, searchFilter, useRegex, levels, context, 
   }
   const visible = hidden.size ? classified.filter(item => !hidden.has(item.type)) : classified;
 
-  if (!searchFilter) {
-    return { filtered:visible, regexValid:true, matchOrigLines:[] };
+  const { match: filterMatch, valid: filterRegexValid } = buildMatcher(filterText, filterUseRegex);
+  if (!filterRegexValid) {
+    return { filtered:[], filterRegexValid, searchRegexValid:true, matchOrigLines:[] };
+  }
+  const afterFilter = filterMatch ? applyContext(visible, filterMatch, context) : visible;
+
+  const { match: searchMatch, valid: searchRegexValid } = buildMatcher(searchText, searchUseRegex);
+  const filtered = searchMatch
+    ? afterFilter.map(item => searchMatch(item) ? { ...item, matched:true } : item)
+    : afterFilter;
+
+  let matchOrigLines = [];
+  if (searchMatch) {
+    matchOrigLines = filtered.filter(x => x.matched).map(x => x.origLine);
+  } else if (filterMatch) {
+    matchOrigLines = afterFilter.filter(x => !x.contextOnly).map(x => x.origLine);
   }
 
-  let isMatch;
-  if (useRegex) {
-    let regex;
-    try { regex = new RegExp(searchFilter, "i"); }
-    catch { return { filtered: searchMode ? visible : [], regexValid:false, matchOrigLines:[] }; }
-    isMatch = item => regex.test(item.raw);
-  } else {
-    const lowerFilter = searchFilter.toLowerCase();
-    isMatch = item => item.raw.toLowerCase().includes(lowerFilter);
-  }
-
-  if (searchMode) {
-    const filtered = visible.map(item => isMatch(item) ? { ...item, matched:true } : item);
-    return { filtered, regexValid:true, matchOrigLines: filtered.filter(x => x.matched).map(x => x.origLine) };
-  }
-
-  const filtered = applyContext(visible, isMatch, context);
-  return { filtered, regexValid:true, matchOrigLines: filtered.filter(x => !x.contextOnly).map(x => x.origLine) };
+  return { filtered, filterRegexValid, searchRegexValid, matchOrigLines };
 }
