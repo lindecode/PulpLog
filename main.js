@@ -473,6 +473,9 @@ ipcMain.handle("file:watch", async (event, payload) => {
   assertTrustedSender(event);
   const filePath = normalizeLocalPath(typeof payload === "string" ? payload : payload?.filePath);
   const watchId = typeof payload === "string" ? filePath : payload?.watchId;
+  const startOffset = Number.isFinite(payload?.startOffset) && payload.startOffset >= 0
+    ? payload.startOffset
+    : null;
   if (!filePath || !watchId) throw new Error("Invalid file watch request");
 
   stopWatch(watchId);
@@ -493,7 +496,7 @@ ipcMain.handle("file:watch", async (event, payload) => {
     try {
       const stat = await fs.promises.stat(filePath);
       if (entry.stopped) return;
-      entry.lastSize = stat.size;
+      entry.lastSize = startOffset === null ? stat.size : Math.min(startOffset, stat.size);
       entry.lastIno = stat.ino || null;
     } catch { /* the polling loop handles files that disappear during startup */ }
 

@@ -34,7 +34,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     };
   },
 
-  watchFile(filePath, { onNewLines, onRotated, onTruncated, onRecreated }) {
+  watchFile(filePath, { startOffset, onNewLines, onRotated, onTruncated, onRecreated }) {
     const watchId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const nl  = (_e, id, _fp, t) => { if (id === watchId) onNewLines?.(t); };
     const rot = (_e, id)         => { if (id === watchId) onRotated?.(); };
@@ -44,7 +44,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("file:rotated",   rot);
     ipcRenderer.on("file:truncated", trc);
     ipcRenderer.on("file:recreated", rec);
-    ipcRenderer.invoke("file:watch", { watchId, filePath });
+    ipcRenderer.invoke("file:watch", { watchId, filePath, startOffset });
     return () => {
       ipcRenderer.removeListener("file:newlines",  nl);
       ipcRenderer.removeListener("file:rotated",   rot);

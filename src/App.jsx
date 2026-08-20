@@ -681,7 +681,7 @@ function SelectedLineStatus({ selection, visibleItems, onClear }) {
 /* ═══════════════════════════════════════════
    LogTab
 ═══════════════════════════════════════════ */
-function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = false, showNumsDefault = true }) {
+function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, autoScrollDefault = false, showNumsDefault = true }) {
   const t = useLang();
   const selectionSource = fileName || filePath || "pulplog";
   const [classified,  setClassified] = useState([]);
@@ -722,6 +722,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
   const nextParsedRef = useRef(1);
   const readStartedRef= useRef(0);
   const timerRef      = useRef(null);
+  const watchOffsetRef= useRef(null);
   const autoScrollRef = useRef(autoScroll);
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
 
@@ -802,6 +803,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
           setClassified(cached.items);
           setStats({ ...cached.stats });
           setProgress(1);
+          watchOffsetRef.current = currentStat?.size ?? fileSize ?? null;
           setLoading(false);
           return;
         }
@@ -826,6 +828,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
             await publishLoadedData();
             if (disposed) return;
             loadedRef.current = true;
+            watchOffsetRef.current = bytesRead;
             setLoading(false);
             setProgress(1);
             const heap = performance.memory?.usedJSHeapSize;
@@ -841,7 +844,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
       }
 
       resetBuffers();
-      const file = window.__pendingFile;
+      const file = webFile;
       if (!file) { setLoading(false); return; }
       const reader = new FileReader();
       cancelRead = () => reader.abort();
@@ -870,7 +873,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
       workerRef.current?.terminate();
       workerRef.current = null;
     };
-  }, [filePath, fileSize, reloadKey]);
+  }, [filePath, webFile, fileSize, reloadKey]);
 
   /* ── Rotation countdown & reload ── */
   useEffect(() => {
@@ -893,6 +896,7 @@ function LogTab({ tabKey, filePath, fileName, fileSize, autoScrollDefault = fals
   useEffect(() => {
     if (!tailing || loading || !IS_ELECTRON || !filePath) return;
     const unwatch = window.electronAPI.watchFile(filePath, {
+      startOffset: watchOffsetRef.current,
       async onNewLines(text) {
         appendChunk(text);
         await processingRef.current;
@@ -2400,20 +2404,30 @@ function usePaneTabs(setSettings) {
   const fileRef       = useRef(null);
   const closedTabsRef = useRef([]);   // stack for reopen-last-tab
   const activeRef     = useRef(active);
+  const tabsRef       = useRef(tabs);
   useEffect(() => { activeRef.current = active; }, [active]);
+  useEffect(() => { tabsRef.current = tabs; }, [tabs]);
 
-  const addTab = (label, filePath, fileSize) => {
+  const addTab = (label, filePath, fileSize, extra = {}) => {
     const id = nextId++;
-    setTabs(p => [...p, { id, label, filePath, fileSize }]);
+    const tab = { id, label, filePath, fileSize, ...extra };
+    setTabs(p => p.length === 1 && !p[0].filePath && !p[0].docker && !p[0].remote ? [tab] : [...p, tab]);
     setActive(id);
   };
 
   const openFileByPath = useCallback(async (fp) => {
     const stat  = await window.electronAPI.statFile(fp);
+    if (!stat) {
+      const recent = await window.electronAPI.removeRecentFile(fp).catch(() => null);
+      if (recent) setSettings(prev => ({ ...prev, recentFiles: recent }));
+      console.error(`No se pudo abrir el archivo: ${fp}`);
+      return false;
+    }
     const label = fp.split(/[\\/]/).pop();
-    addTab(label, fp, stat?.size ?? null);
+    addTab(label, fp, stat.size);
     const recent = await window.electronAPI.addRecentFile(fp);
     setSettings(prev => ({ ...prev, recentFiles: recent }));
+    return true;
   }, [setSettings]);
 
   const openFile = useCallback(async () => {
@@ -2468,17 +2482,18 @@ function usePaneTabs(setSettings) {
   };
 
   const duplicateTab = (tabId) => {
-    let newId = null;
+    const idx = tabsRef.current.findIndex(t => t.id === tabId);
+    if (idx === -1) return;
+    const newId = nextId++;
     setTabs(prev => {
-      const idx = prev.findIndex(t => t.id === tabId);
-      if (idx === -1) return prev;
-      newId = nextId++;
-      const clone = { ...prev[idx], id: newId, reloadNonce: 0 };
+      const currentIdx = prev.findIndex(t => t.id === tabId);
+      if (currentIdx === -1) return prev;
+      const clone = { ...prev[currentIdx], id: newId, reloadNonce: 0 };
       const next = [...prev];
-      next.splice(idx + 1, 0, clone);
+      next.splice(currentIdx + 1, 0, clone);
       return next;
     });
-    if (newId !== null) setActive(newId);
+    setActive(newId);
   };
 
   const reloadTab = (tabId) => {
@@ -2505,7 +2520,9 @@ function usePaneTabs(setSettings) {
   };
 
   const closeTabsToRight = (tabId) => {
-    let activeWasRemoved = false;
+    const snapshot = tabsRef.current;
+    const snapshotIndex = snapshot.findIndex(t => t.id === tabId);
+    const activeWasRemoved = snapshotIndex >= 0 && snapshot.slice(snapshotIndex + 1).some(t => t.id === activeRef.current);
     setTabs(prev => {
       const idx = prev.findIndex(t => t.id === tabId);
       if (idx === -1) return prev;
@@ -2515,7 +2532,6 @@ function usePaneTabs(setSettings) {
         if (t.filePath && t.filePath !== "__web__")
           closedTabsRef.current.push({ label: t.label, filePath: t.filePath, fileSize: t.fileSize });
       });
-      activeWasRemoved = removed.some(t => t.id === activeRef.current);
       return prev.slice(0, idx + 1);
     });
     if (activeWasRemoved) setActive(tabId);
@@ -2551,7 +2567,7 @@ function usePaneTabs(setSettings) {
   return {
     tabs, setTabs, active, setActive,
     dockerPicker, setDockerPicker, remotePicker, setRemotePicker,
-    renamingTabId, setRenamingTabId, fileRef, closedTabsRef, activeRef,
+    renamingTabId, setRenamingTabId, fileRef, closedTabsRef, activeRef, tabsRef,
     addTab, openDockerTab, openRemoteTab, openFile, openFileByPath,
     closeTab, duplicateTab, reloadTab, renameTab,
     closeOtherTabs, closeTabsToRight, closeActiveTab, reopenLastClosedTab,
@@ -2628,8 +2644,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
       });
     } else {
       const file = files[0];
-      window.__pendingFile = file;
-      addTab(file.name, "__web__", file.size);
+      addTab(file.name, "__web__", file.size, { webFile:file });
     }
   };
 
@@ -2749,34 +2764,31 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
             onChange={e => {
               const f = e.target.files[0];
               if (!f) return;
-              window.__pendingFile = f;
-              addTab(f.name, "__web__", f.size);
+              addTab(f.name, "__web__", f.size, { webFile:f });
             }} />
         )}
       </div>
 
-      {activeTab.docker
-        ? <DockerTab key={`docker-${activeTab.id}-${activeTab.reloadNonce || 0}`}
-                     tabKey={String(activeTab.id)}
-                     maxLiveLines={settings.maxLiveLines}
-                     containerId={activeTab.docker.containerId}
-                     containerName={activeTab.docker.name} />
-        : activeTab.remote
-          ? <RemoteTab key={`remote-${activeTab.id}-${activeTab.reloadNonce || 0}`}
-                       tabKey={String(activeTab.id)} maxLiveLines={settings.maxLiveLines}
-                       config={activeTab.remote} />
-          : activeTab.filePath
-          ? <LogTab key={`${activeTab.id}-${activeTab.filePath}-${activeTab.reloadNonce || 0}`}
-                    tabKey={String(activeTab.id)}
-                    filePath={activeTab.filePath}
-                    fileName={activeTab.label}
-                    fileSize={activeTab.fileSize}
-                    autoScrollDefault={settings.autoScrollDefault}
-                    showNumsDefault={settings.showNumsDefault} />
-          : <Welcome onOpen={openFile} isElectron={IS_ELECTRON}
-                     recentFiles={settings.recentFiles}
-                     onOpenRecent={openFileByPath} />
-      }
+      {tabs.map(tab => (
+        <div key={tab.id} aria-hidden={tab.id !== activeTab.id}
+             style={{ display:tab.id === activeTab.id ? "flex" : "none", flex:1, minHeight:0, overflow:"hidden" }}>
+          {tab.docker
+            ? <DockerTab key={`docker-${tab.id}-${tab.reloadNonce || 0}`}
+                         tabKey={String(tab.id)} maxLiveLines={settings.maxLiveLines}
+                         containerId={tab.docker.containerId} containerName={tab.docker.name} />
+            : tab.remote
+              ? <RemoteTab key={`remote-${tab.id}-${tab.reloadNonce || 0}`}
+                           tabKey={String(tab.id)} maxLiveLines={settings.maxLiveLines} config={tab.remote} />
+              : tab.filePath
+                ? <LogTab key={`${tab.id}-${tab.filePath}-${tab.reloadNonce || 0}`}
+                          tabKey={String(tab.id)} filePath={tab.filePath} webFile={tab.webFile || null}
+                          fileName={tab.label} fileSize={tab.fileSize}
+                          autoScrollDefault={settings.autoScrollDefault}
+                          showNumsDefault={settings.showNumsDefault} />
+                : <Welcome onOpen={openFile} isElectron={IS_ELECTRON}
+                           recentFiles={settings.recentFiles} onOpenRecent={openFileByPath} />}
+        </div>
+      ))}
 
       {dockerPicker && <DockerPicker onSelect={openDockerTab} onClose={() => setDockerPicker(false)} />}
       {remotePicker && <RemotePicker onSelect={openRemoteTab} onClose={() => setRemotePicker(false)} capabilities={capabilities} />}
@@ -2795,6 +2807,7 @@ export default function App() {
   const [splitDirection, setSplitDirection] = useState(null); // null | "row" | "column"
   const [splitRatio,     setSplitRatio]     = useState(0.5);
   const [focusedPane,    setFocusedPane]    = useState("A");   // "A" | "B" — transient, not persisted
+  const [sessionReady,   setSessionReady]   = useState(!IS_ELECTRON);
   const containerRef = useRef(null);
 
   const paneA = usePaneTabs(setSettings);
@@ -2857,15 +2870,14 @@ export default function App() {
   }, []);
 
   const closeSplit = () => {
-    let contentTabs = [];
-    let newWelcomeId = null;
-    paneB.setTabs(prev => {
-      contentTabs = prev.filter(t => t.filePath || t.docker || t.remote);
-      newWelcomeId = nextId++;
-      return [{ id: newWelcomeId, label:"$welcome", filePath:null, fileSize:null }];
-    });
+    const contentTabs = paneB.tabs.filter(t => t.filePath || t.docker || t.remote);
+    const newWelcomeId = nextId++;
+    paneB.setTabs([{ id:newWelcomeId, label:"$welcome", filePath:null, fileSize:null }]);
     paneB.setActive(newWelcomeId);
-    if (contentTabs.length) paneA.setTabs(prev => [...prev, ...contentTabs]);
+    if (contentTabs.length) paneA.setTabs(prev => {
+      const withoutWelcome = prev.filter(t => t.filePath || t.docker || t.remote);
+      return [...withoutWelcome, ...contentTabs];
+    });
     setSplitDirection(null);
     setFocusedPane("A");
   };
@@ -2895,41 +2907,52 @@ export default function App() {
     if (!IS_ELECTRON) return;
     let alive = true;
     (async () => {
-      const s = await window.electronAPI.getSettings();
-      if (!alive) return;
-      setSettings(prev => ({ ...prev, ...s, recentFiles: s.recentFiles || [] }));
+      try {
+        const s = await window.electronAPI.getSettings();
+        if (!alive) return;
+        setSettings(prev => ({ ...prev, ...s, recentFiles: s.recentFiles || [] }));
 
-      const initialArg = await window.electronAPI.getInitialFileArg();
-      if (!alive) return;
+        const initialArg = await window.electronAPI.getInitialFileArg();
+        if (!alive) return;
 
-      if (initialArg) {
-        const stat  = await window.electronAPI.statFile(initialArg);
-        const label = initialArg.split(/[\\/]/).pop();
-        const id    = nextId++;
-        paneA.setTabs(prev => [...prev, { id, label, filePath: initialArg, fileSize: stat?.size ?? null }]);
-        paneA.setActive(id);
-        const recent = await window.electronAPI.addRecentFile(initialArg);
-        if (alive) setSettings(prev => ({ ...prev, recentFiles: recent }));
-      } else if (s.panes?.length) {
-        const restorePane = async (entries, setTabs, setActive) => {
-          const checked = await Promise.all((entries || []).map(async st => {
-            const stat = await window.electronAPI.statFile(st.filePath);
-            return stat ? { ...st, fileSize: st.fileSize ?? stat.size } : null;
-          }));
-          const valid = checked.filter(Boolean);
-          if (!valid.length || !alive) return;
-          const tabEntries = valid.map(st => ({
-            id: nextId++, label: st.label, filePath: st.filePath, fileSize: st.fileSize, groupStart: !!st.groupStart,
-          }));
-          setTabs(prev => [...prev, ...tabEntries]);
-          setActive(tabEntries[tabEntries.length - 1].id);
-        };
-        await restorePane(s.panes[0]?.tabs, paneA.setTabs, paneA.setActive);
-        if (s.splitDirection && s.panes[1]?.tabs?.length) {
-          await restorePane(s.panes[1].tabs, paneB.setTabs, paneB.setActive);
-          setSplitDirection(s.splitDirection);
-          setSplitRatio(s.splitRatio ?? 0.5);
+        if (initialArg) {
+          const stat = await window.electronAPI.statFile(initialArg);
+          if (stat) {
+            const label = initialArg.split(/[\\/]/).pop();
+            const id = nextId++;
+            paneA.setTabs([{ id, label, filePath:initialArg, fileSize:stat.size }]);
+            paneA.setActive(id);
+            const recent = await window.electronAPI.addRecentFile(initialArg);
+            if (alive) setSettings(prev => ({ ...prev, recentFiles:recent }));
+          }
+        } else if (s.panes?.length) {
+          const restorePane = async (entries, setTabs, setActive) => {
+            const checked = await Promise.all((entries || []).map(async st => {
+              const stat = await window.electronAPI.statFile(st.filePath);
+              return stat ? { ...st, fileSize:stat.size } : null;
+            }));
+            const valid = checked.filter(Boolean);
+            if (!valid.length || !alive) return false;
+            const tabEntries = valid.map(st => ({
+              id:nextId++, label:st.label, filePath:st.filePath, fileSize:st.fileSize, groupStart:!!st.groupStart,
+            }));
+            setTabs(tabEntries);
+            setActive(tabEntries[tabEntries.length - 1].id);
+            return true;
+          };
+          await restorePane(s.panes[0]?.tabs, paneA.setTabs, paneA.setActive);
+          if (s.splitDirection && s.panes[1]?.tabs?.length) {
+            const restoredSecondPane = await restorePane(s.panes[1].tabs, paneB.setTabs, paneB.setActive);
+            if (restoredSecondPane) {
+              setSplitDirection(s.splitDirection);
+              setSplitRatio(s.splitRatio ?? 0.5);
+            }
+          }
         }
+      } catch (error) {
+        console.error("No se pudo restaurar la sesión", error);
+      } finally {
+        if (alive) setSessionReady(true);
       }
     })();
     const unsub = window.electronAPI.onOpenFileArg(fp => paneA.openFileByPath(fp));
@@ -2938,7 +2961,7 @@ export default function App() {
 
   /* ── Persist both panes' tabs + split state on every change ── */
   useEffect(() => {
-    if (!IS_ELECTRON) return;
+    if (!IS_ELECTRON || !sessionReady) return;
     const timer = setTimeout(() => {
       const serialize = tabs => tabs
         .filter(tb => tb.filePath && tb.filePath !== "__web__")
@@ -2948,7 +2971,7 @@ export default function App() {
       window.electronAPI.setSettings({ panes, splitDirection, splitRatio });
     }, 600);
     return () => clearTimeout(timer);
-  }, [paneA.tabs, paneB.tabs, splitDirection, splitRatio]);
+  }, [sessionReady, paneA.tabs, paneB.tabs, splitDirection, splitRatio]);
 
   useEffect(() => {
     if (!IS_ELECTRON) return;
@@ -2963,7 +2986,7 @@ export default function App() {
     const cleanDown  = window.electronAPI.onMenuSplitDown(()  => setSplitDirection("column"));
     const cleanClose = window.electronAPI.onMenuSplitClose(() => closeSplit());
     return () => { cleanRight?.(); cleanDown?.(); cleanClose?.(); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [closeSplit]);
 
   return (
     <LangCtx.Provider value={t}>
