@@ -324,7 +324,7 @@ function recentFileMenuLabel(filePath) {
   // different folders — head + tail of the directory (and of the filename,
   // in case that alone is long) covers that without making the menu item
   // unreasonably wide.
-  const base = truncateMiddle(path.basename(filePath), 15, 5);
+  const base = truncateMiddle(path.basename(filePath), 35, 10);
   const dir = path.dirname(filePath).replace(/[\\/]+$/, "");
   if (!dir) return base;
   return `${truncateMiddle(dir)}${path.sep}${base}`;
