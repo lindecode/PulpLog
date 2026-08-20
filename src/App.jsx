@@ -93,6 +93,7 @@ const T = {
     scroll_top:      "↑ inicio",
     scroll_bottom:   "↓ fin",
     reading:         pct => `Leyendo… ${pct}%`,
+    file_open_error: m => `No se pudo abrir el archivo: ${m}`,
     regex_invalid:   "Regex inválida",
     no_results:      f => `Sin resultados para "${f}"`,
     no_lines:        "Sin líneas",
@@ -213,6 +214,7 @@ const T = {
     scroll_top:      "↑ top",
     scroll_bottom:   "↓ bottom",
     reading:         pct => `Reading… ${pct}%`,
+    file_open_error: m => `Could not open file: ${m}`,
     regex_invalid:   "Invalid regex",
     no_results:      f => `No results for "${f}"`,
     no_lines:        "No lines",
@@ -681,12 +683,14 @@ function SelectedLineStatus({ selection, visibleItems, onClear }) {
 /* ═══════════════════════════════════════════
    LogTab
 ═══════════════════════════════════════════ */
-function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, autoScrollDefault = false, showNumsDefault = true }) {
+function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadingChange,
+                  autoScrollDefault = false, showNumsDefault = true }) {
   const t = useLang();
   const selectionSource = fileName || filePath || "pulplog";
   const [classified,  setClassified] = useState([]);
   const [stats,       setStats]      = useState({ error:0, warn:0, info:0, debug:0, trace:0 });
   const [loading,     setLoading]     = useState(true);
+  const [loadError,   setLoadError]   = useState(null);
   const [progress,    setProgress]    = useState(0);
   const [tailing,     setTailing]     = useRememberedState(tabKey, "tailing", true);
   const [autoScroll,  setAutoScroll]  = useRememberedState(tabKey, "autoScroll", autoScrollDefault);
@@ -725,6 +729,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, autoScro
   const watchOffsetRef= useRef(null);
   const autoScrollRef = useRef(autoScroll);
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
+  useEffect(() => { onLoadingChange?.(Number(tabKey), loading); }, [tabKey, loading, onLoadingChange]);
 
   const appendCompleteLines = (lines) => {
     if (!lines.length) return processingRef.current;
@@ -774,7 +779,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, autoScro
     if (!filePath) return;
     let disposed = false;
     let cancelRead = null;
-    setLoading(true); setProgress(0); setClassified([]);
+    setLoading(true); setLoadError(null); setProgress(0); setClassified([]);
     loadedRef.current = false;
     readStartedRef.current = performance.now();
 
@@ -794,6 +799,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, autoScro
       if (IS_ELECTRON) {
         const currentStat = await window.electronAPI.statFile(filePath);
         if (disposed) return;
+        if (!currentStat) throw new Error("El archivo no existe o no se puede leer");
         const cached = getCachedFile(filePath, currentStat);
         if (cached) {
           reportMetric("file-cache-hit", performance.now() - readStartedRef.current, fileName);
@@ -837,7 +843,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, autoScro
             queueMicrotask(() => cacheCurrentFile(bytesRead));
           },
           onError(msg) {
-            if (!disposed) { console.error(msg); setLoading(false); }
+            if (!disposed) { console.error(msg); setLoadError(String(msg)); setLoading(false); }
           },
         });
         return;
@@ -865,7 +871,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, autoScro
     };
 
     start().catch(err => {
-      if (!disposed) { console.error(err); setLoading(false); }
+      if (!disposed) { console.error(err); setLoadError(err?.message ?? String(err)); setLoading(false); }
     });
     return () => {
       disposed = true;
@@ -1153,6 +1159,13 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, autoScro
             animation:"spin 1s linear infinite" }}>↻</span>
           {t("reading", Math.round(progress*100))}
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        </div>
+      ) : loadError ? (
+        <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
+                      flexDirection:"column", gap:8, padding:24, color:"var(--pl-error-text)",
+                      fontSize:13, textAlign:"center" }}>
+          <span style={{ fontSize:20 }}>⚠</span>
+          {t("file_open_error", loadError)}
         </div>
       ) : filtered.length === 0 ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
@@ -1475,7 +1488,7 @@ function AboutModal({ onClose }) {
         <img src={logoSrc} alt="LindeCode"
           style={{ width:96, height:96, borderRadius:12, objectFit:"cover", marginBottom:12 }} />
         <div style={{ fontSize:18, color:"var(--pl-text-1)", fontWeight:700, marginBottom:4 }}>PulpLog</div>
-        <div style={{ fontSize:11, color:"var(--pl-text-6)", marginBottom:20 }}>v2.0.0</div>
+        <div style={{ fontSize:11, color:"var(--pl-text-6)", marginBottom:20 }}>v2.1.0</div>
         <div style={{ width:40, height:"0.5px", background:"var(--pl-border-strong)", margin:"0 auto 20px" }} />
         <div style={{ fontSize:13, color:"var(--pl-text-3)", marginBottom:6 }}>{t("developed_by")}</div>
         <div style={{ fontSize:16, color:"var(--pl-accent)", fontWeight:700, letterSpacing:1 }}>LindeCode</div>
@@ -2595,7 +2608,23 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
   } = pane;
 
   const isFocusedRef = useRef(focused);
+  const [mountedTabIds, setMountedTabIds] = useState(() => new Set([active]));
+  const [loadingTabIds, setLoadingTabIds] = useState(() => new Set());
   useEffect(() => { isFocusedRef.current = focused; }, [focused]);
+  useEffect(() => {
+    if (active == null) return;
+    setMountedTabIds(previous => previous.has(active) ? previous : new Set([...previous, active]));
+  }, [active]);
+
+  const setTabLoading = useCallback((tabId, isLoading) => {
+    setLoadingTabIds(previous => {
+      const hasId = previous.has(tabId);
+      if (hasId === isLoading) return previous;
+      const next = new Set(previous);
+      isLoading ? next.add(tabId) : next.delete(tabId);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (!IS_ELECTRON) return;
@@ -2719,9 +2748,18 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
                            color:"var(--pl-text-1)", fontSize:12, fontFamily:"inherit", width:120, padding:"1px 4px" }}
                 />
               ) : (
-                <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                  {tab.label === "$welcome" ? t("welcome_tab") : tab.label}
-                </span>
+                <>
+                  {loadingTabIds.has(tab.id) && (
+                    <span aria-label={t("reading", 0)} style={{ display:"inline-block", flexShrink:0,
+                      color:"var(--pl-accent)", animation:"spin 1s linear infinite" }}>↻</span>
+                  )}
+                  {!mountedTabIds.has(tab.id) && tab.filePath && (
+                    <span title={t("reading", 0)} style={{ color:"var(--pl-text-7)", flexShrink:0 }}>○</span>
+                  )}
+                  <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {tab.label === "$welcome" ? t("welcome_tab") : tab.label}
+                  </span>
+                </>
               )}
               {tabs.length > 1 && (
                 <span style={{ fontSize:10, color:"var(--pl-text-6)", padding:"0 2px", cursor:"pointer",
@@ -2771,7 +2809,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
         )}
       </div>
 
-      {tabs.map(tab => (
+      {tabs.filter(tab => mountedTabIds.has(tab.id) || tab.id === activeTab.id).map(tab => (
         <div key={tab.id} aria-hidden={tab.id !== activeTab.id}
              style={{ display:tab.id === activeTab.id ? "flex" : "none", flex:1, minHeight:0, overflow:"hidden" }}>
           {tab.docker
@@ -2785,6 +2823,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
                 ? <LogTab key={`${tab.id}-${tab.filePath}-${tab.reloadNonce || 0}`}
                           tabKey={String(tab.id)} filePath={tab.filePath} webFile={tab.webFile || null}
                           fileName={tab.label} fileSize={tab.fileSize}
+                          onLoadingChange={setTabLoading}
                           autoScrollDefault={settings.autoScrollDefault}
                           showNumsDefault={settings.showNumsDefault} />
                 : <Welcome onOpen={openFile} isElectron={IS_ELECTRON}
@@ -2922,29 +2961,23 @@ export default function App() {
           if (stat) {
             const label = initialArg.split(/[\\/]/).pop();
             const id = nextId++;
-            paneA.setTabs([{ id, label, filePath:initialArg, fileSize:stat.size }]);
-            paneA.setActive(id);
+            paneA.setTabs(previous => [...previous, { id, label, filePath:initialArg, fileSize:stat.size }]);
             const recent = await window.electronAPI.addRecentFile(initialArg);
             if (alive) setSettings(prev => ({ ...prev, recentFiles:recent }));
           }
         } else if (s.panes?.length) {
-          const restorePane = async (entries, setTabs, setActive) => {
-            const checked = await Promise.all((entries || []).map(async st => {
-              const stat = await window.electronAPI.statFile(st.filePath);
-              return stat ? { ...st, fileSize:stat.size } : null;
-            }));
-            const valid = checked.filter(Boolean);
-            if (!valid.length || !alive) return false;
-            const tabEntries = valid.map(st => ({
+          const restorePane = (entries, setTabs) => {
+            if (!alive) return false;
+            const tabEntries = (entries || []).map(st => ({
               id:nextId++, label:st.label, filePath:st.filePath, fileSize:st.fileSize, groupStart:!!st.groupStart,
             }));
-            setTabs(tabEntries);
-            setActive(tabEntries[tabEntries.length - 1].id);
+            if (!tabEntries.length) return false;
+            setTabs(previous => [...previous, ...tabEntries]);
             return true;
           };
-          await restorePane(s.panes[0]?.tabs, paneA.setTabs, paneA.setActive);
+          restorePane(s.panes[0]?.tabs, paneA.setTabs);
           if (s.splitDirection && s.panes[1]?.tabs?.length) {
-            const restoredSecondPane = await restorePane(s.panes[1].tabs, paneB.setTabs, paneB.setActive);
+            const restoredSecondPane = restorePane(s.panes[1].tabs, paneB.setTabs);
             if (restoredSecondPane) {
               setSplitDirection(s.splitDirection);
               setSplitRatio(s.splitRatio ?? 0.5);

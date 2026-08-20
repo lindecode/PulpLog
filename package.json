@@ -1,6 +1,6 @@
 {
   "name": "pulplog",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "PulpLog — visor de logs de escritorio con coloreado de stack traces",
   "author": "LindeCode",
   "license": "MIT",
@@ -43,7 +43,7 @@
     "win": {
       "target": [
         "nsis",
-        "portable"
+        "zip"
       ],
       "icon": "assets/icon.png"
     },

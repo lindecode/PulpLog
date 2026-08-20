@@ -314,10 +314,26 @@ function createWindow(splash = null) {
   return win;
 }
 
+function truncateMiddle(str, headLen = 10, tailLen = 5) {
+  return str.length > headLen + tailLen ? `${str.slice(0, headLen)}.....${str.slice(-tailLen)}` : str;
+}
+
+function recentFileMenuLabel(filePath) {
+  // Windows menus don't render `toolTip` as a hover tooltip, so the label itself
+  // needs to carry enough of the path to disambiguate same-named files in
+  // different folders — head + tail of the directory (and of the filename,
+  // in case that alone is long) covers that without making the menu item
+  // unreasonably wide.
+  const base = truncateMiddle(path.basename(filePath), 15, 5);
+  const dir = path.dirname(filePath).replace(/[\\/]+$/, "");
+  if (!dir) return base;
+  return `${truncateMiddle(dir)}${path.sep}${base}`;
+}
+
 function buildMenu(win, recentFiles = []) {
   const recentSubmenu = recentFiles.length
     ? recentFiles.slice(0, 10).map(filePath => ({
-        label:path.basename(filePath),
+        label:recentFileMenuLabel(filePath),
         toolTip:filePath,
         click:async () => {
           try {
