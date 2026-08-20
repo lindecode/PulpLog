@@ -1399,10 +1399,12 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
                                 background:"var(--pl-bg-footer)" }}>
                     <span onClick={() => { onOpenFile(fp); onClose(); }}
                           title={fp}
-                          style={{ flex:1, fontSize:12, color:"var(--pl-text-3)", cursor:"pointer",
-                                   overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                      📄 <b style={{ color:"var(--pl-text-2)" }}>{name}</b>
-                      <span style={{ fontSize:10, color:"var(--pl-text-8)", marginLeft:8 }}>{fp}</span>
+                          style={{ flex:1, minWidth:0, display:"flex", alignItems:"center", gap:6,
+                                   fontSize:12, color:"var(--pl-text-3)", cursor:"pointer", overflow:"hidden" }}>
+                      <span style={{ flexShrink:0 }}>📄 <b style={{ color:"var(--pl-text-2)" }}>{name}</b></span>
+                      <span style={{ flex:1, minWidth:0, fontSize:10, color:"var(--pl-text-6)",
+                                     overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                                     direction:"rtl", textAlign:"left" }}>{fp}</span>
                     </span>
                     <button onClick={() => onRemoveRecent(fp)}
                       style={{ background:"none", border:"none", color:"var(--pl-text-7)",
@@ -3114,7 +3116,7 @@ function Welcome({ onOpen, isElectron, recentFiles, onOpenRecent }) {
             {recentFiles.map((fp, i) => {
               const name = fp.split(/[\\/]/).pop();
               return (
-                <div key={fp} onClick={() => onOpenRecent(fp)}
+                <div key={fp} onClick={() => onOpenRecent(fp)} title={fp}
                      style={{ padding:"7px 14px", fontSize:12, cursor:"pointer",
                                borderBottom: i < recentFiles.length - 1
                                  ? "0.5px solid var(--pl-border-soft)" : "none",
@@ -3124,8 +3126,9 @@ function Welcome({ onOpen, isElectron, recentFiles, onOpenRecent }) {
                      onMouseLeave={e => e.currentTarget.style.background = "var(--pl-bg-footer)"}>
                   <span style={{ color:"var(--pl-text-8)" }}>📄</span>
                   <span style={{ color:"var(--pl-text-3)", flexShrink:0 }}>{name}</span>
-                  <span style={{ color:"var(--pl-border-soft)", fontSize:10, overflow:"hidden",
-                                  textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{fp}</span>
+                  <span style={{ color:"var(--pl-text-6)", fontSize:10, overflow:"hidden",
+                                  textOverflow:"ellipsis", whiteSpace:"nowrap",
+                                  direction:"rtl", textAlign:"left", minWidth:0 }}>{fp}</span>
                 </div>
               );
             })}
@@ -3133,7 +3136,7 @@ function Welcome({ onOpen, isElectron, recentFiles, onOpenRecent }) {
         </div>
       )}
 
-      <div style={{ fontSize:11, color:"var(--pl-border-soft)", marginTop:4 }}>
+      <div style={{ fontSize:11, color:"var(--pl-text-6)", marginTop:4 }}>
         {isElectron ? t("hint_electron") : t("hint_web")}
       </div>
     </div>
