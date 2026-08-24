@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onMenuOpenRecent: (cb) => { const h = (_e, fp) => cb(fp); ipcRenderer.on("menu:open-recent", h); return () => ipcRenderer.removeListener("menu:open-recent", h); },
   onMenuNewTab:   (cb) => { ipcRenderer.on("menu:new-tab",   cb); return () => ipcRenderer.removeListener("menu:new-tab",   cb); },
   onMenuAbout:    (cb) => { ipcRenderer.on("menu:about",     cb); return () => ipcRenderer.removeListener("menu:about",     cb); },
+  onMenuUserGuide:(cb) => { ipcRenderer.on("menu:user-guide", cb); return () => ipcRenderer.removeListener("menu:user-guide", cb); },
   onMenuSplitRight: (cb) => { ipcRenderer.on("menu:split-right", cb); return () => ipcRenderer.removeListener("menu:split-right", cb); },
   onMenuSplitDown:  (cb) => { ipcRenderer.on("menu:split-down",  cb); return () => ipcRenderer.removeListener("menu:split-down",  cb); },
   onMenuSplitClose: (cb) => { ipcRenderer.on("menu:split-close", cb); return () => ipcRenderer.removeListener("menu:split-close", cb); },

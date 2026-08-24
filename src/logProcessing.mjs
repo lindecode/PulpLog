@@ -1,5 +1,18 @@
 export const MAX_LIVE_LINES = 500_000;
 
+// Loggers that don't shout their level in uppercase (pino/winston/bunyan-style
+// JSON, or a bracketed/tagged "level: value" prefix) still carry it — just
+// bounded by a delimiter (quote, bracket, colon/equals) rather than free in
+// the sentence, so this won't fire on prose that merely mentions "an error".
+const TAGGED_LEVEL = /"level"\s*:\s*"?(fatal|error|err|warn(?:ing)?|info|debug|trace)"?|[\[(<](fatal|error|err|warn(?:ing)?|info|debug|trace)[\])>]|\b(fatal|error|err|warn(?:ing)?|info|debug|trace)\b\s*[:=]/i;
+
+function normalizeTaggedLevel(raw) {
+  const lower = raw.toLowerCase();
+  if (lower === "warning") return "warn";
+  if (lower === "err" || lower === "fatal") return "error";
+  return lower;
+}
+
 export function classify(line) {
   if (/^\s*(at |\.{3}\s*\d+ more)/.test(line)) return "stack";
   if (/^Caused by:/i.test(line.trimStart())) return "causedby";
@@ -9,6 +22,8 @@ export function classify(line) {
   if (/\bDEBUG\b/.test(line)) return "debug";
   if (/\bTRACE\b/.test(line)) return "trace";
   if (/Exception|Error:/.test(line)) return "exception";
+  const tagged = line.match(TAGGED_LEVEL);
+  if (tagged) return normalizeTaggedLevel(tagged[1] || tagged[2] || tagged[3]);
   return "plain";
 }
 

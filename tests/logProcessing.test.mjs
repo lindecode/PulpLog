@@ -11,6 +11,14 @@ test("classifies supported log levels and stack traces", () => {
   assert.equal(classify("Caused by: IOException"), "causedby");
 });
 
+test("classifies lowercase and JSON-tagged levels without matching prose", () => {
+  assert.equal(classify('{"level":"error","msg":"boom"}'), "error");
+  assert.equal(classify('{"level":"warning","msg":"careful"}'), "warn");
+  assert.equal(classify("[info] service ready"), "info");
+  assert.equal(classify("debug: cache miss"), "debug");
+  assert.equal(classify("there was an error in the report"), "plain");
+});
+
 test("preserves lines split across text chunks and a final partial line", () => {
   let carry = "";
   const lines = [];

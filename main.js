@@ -77,28 +77,107 @@ function logEntry(level, category, msg) {
 
 const alertCooldowns = new Map();
 
+/* ── Native-UI i18n: menu, dialogs, and error alerts don't go through the
+   renderer's translation table, so they need their own — kept in sync with
+   the user's language preference via `currentLanguage` (see updateSettings). ── */
+let currentLanguage = "es";
+
+const MENU_STRINGS = {
+  es: {
+    file:"Archivo", open_file:"Abrir archivo…", open_recent:"Abrir reciente", no_recent:"Sin archivos recientes",
+    new_tab:"Nueva pestaña", close_tab:"Cerrar pestaña", reopen_tab:"Reabrir pestaña cerrada", quit:"Salir",
+    view:"Ver", reload:"Recargar", devtools:"DevTools", fullscreen:"Pantalla completa",
+    split_right:"Dividir a la derecha", split_down:"Dividir abajo", split_close:"Cerrar división",
+    help:"Ayuda", user_guide:"Manual de usuario", github:"GitHub", about:"Acerca de PulpLog…",
+    file_unavailable_title:"Archivo no disponible", file_unavailable_msg:"No se pudo abrir el archivo reciente",
+    open_location:"Abrir ubicación del archivo", copy_path:"Copiar ruta del archivo",
+    duplicate_tab:"Duplicar bitácora", reload_tab:"Recargar bitácora", rename_tab:"Renombrar pestaña",
+    group_start_off:"Quitar separador de grupo", group_start_on:"Iniciar grupo aquí",
+    close_others:"Cerrar otras pestañas", close_right:"Cerrar pestañas a la derecha",
+    open_log_dialog:"Abrir archivo de log", pick_ssh_key:"Seleccionar llave privada SSH",
+    export_dialog:"Exportar resultados", filter_logs:"Logs", filter_all:"Todos", filter_ssh_keys:"Llaves SSH",
+    ok:"Aceptar", tech_detail:"Detalle técnico",
+    err_docker:"Error de Docker", err_docker_logs:"Error en logs Docker",
+    err_remote:"Error remoto", err_ssh:"Error SSH",
+    shortcut_open_file:"Abrir archivo", shortcut_new_tab:"Nueva pestaña",
+    shortcut_close_tab:"Cerrar pestaña activa", shortcut_reopen_tab:"Reabrir última pestaña",
+    shortcut_bring_front:"Traer al frente", shortcut_registered:"registrado", shortcut_unavailable:"no disponible",
+    win_conflict_a:"Abre el Centro de acción (Win11)", win_conflict_t:"Cicla la barra de tareas (Win11)",
+    win_conflict_w:"Abre Widgets (Win11)",
+  },
+  en: {
+    file:"File", open_file:"Open file…", open_recent:"Open recent", no_recent:"No recent files",
+    new_tab:"New tab", close_tab:"Close tab", reopen_tab:"Reopen closed tab", quit:"Quit",
+    view:"View", reload:"Reload", devtools:"DevTools", fullscreen:"Toggle Full Screen",
+    split_right:"Split right", split_down:"Split down", split_close:"Close split",
+    help:"Help", user_guide:"User Guide", github:"GitHub", about:"About PulpLog…",
+    file_unavailable_title:"File unavailable", file_unavailable_msg:"Could not open the recent file",
+    open_location:"Show in folder", copy_path:"Copy file path",
+    duplicate_tab:"Duplicate tab", reload_tab:"Reload tab", rename_tab:"Rename tab",
+    group_start_off:"Remove group separator", group_start_on:"Start group here",
+    close_others:"Close other tabs", close_right:"Close tabs to the right",
+    open_log_dialog:"Open log file", pick_ssh_key:"Select SSH private key",
+    export_dialog:"Export results", filter_logs:"Logs", filter_all:"All files", filter_ssh_keys:"SSH keys",
+    ok:"OK", tech_detail:"Technical detail",
+    err_docker:"Docker error", err_docker_logs:"Docker logs error",
+    err_remote:"Remote error", err_ssh:"SSH error",
+    shortcut_open_file:"Open file", shortcut_new_tab:"New tab",
+    shortcut_close_tab:"Close active tab", shortcut_reopen_tab:"Reopen last tab",
+    shortcut_bring_front:"Bring to front", shortcut_registered:"registered", shortcut_unavailable:"unavailable",
+    win_conflict_a:"Opens Action Center (Win11)", win_conflict_t:"Cycles the taskbar (Win11)",
+    win_conflict_w:"Opens Widgets (Win11)",
+  },
+};
+function mt(key) {
+  return (MENU_STRINGS[currentLanguage] || MENU_STRINGS.es)[key] || key;
+}
+
+const ERROR_EXPLANATIONS = {
+  es: {
+    docker_enoent:"Docker no esta instalado o no esta en el PATH.",
+    docker_daemon:"Docker Desktop o el daemon de Docker no esta respondiendo.",
+    docker_permission:"No hay permisos para acceder a Docker.",
+    remote_fingerprint:"No se pudo validar la huella (fingerprint) del servidor. Comprueba la huella mostrada antes de continuar.",
+    remote_auth:"Autenticacion SSH rechazada. Revisa usuario, contrasena, llave o passphrase.",
+    remote_timeout:"No se pudo conectar al host remoto. Revisa host, puerto, VPN/firewall o red.",
+    remote_path:"No se pudo leer la ruta remota. Revisa que el archivo exista y que el usuario tenga permisos.",
+    generic:"Ocurrio un error inesperado.",
+  },
+  en: {
+    docker_enoent:"Docker is not installed or is not on PATH.",
+    docker_daemon:"Docker Desktop or the Docker daemon is not responding.",
+    docker_permission:"No permission to access Docker.",
+    remote_fingerprint:"Could not validate the server fingerprint. Check the fingerprint shown before continuing.",
+    remote_auth:"SSH authentication was rejected. Check the user, password, key, or passphrase.",
+    remote_timeout:"Could not connect to the remote host. Check host, port, VPN/firewall, or network.",
+    remote_path:"Could not read the remote path. Check that the file exists and the user has permission.",
+    generic:"An unexpected error occurred.",
+  },
+};
+
 function explainError(category, msg) {
   const text = String(msg || "");
   const lower = text.toLowerCase();
+  const E = ERROR_EXPLANATIONS[currentLanguage] || ERROR_EXPLANATIONS.es;
   if (category === "docker") {
     if (lower.includes("enoent") || lower.includes("not recognized") || lower.includes("no se reconoce"))
-      return "Docker no esta instalado o no esta en el PATH.";
+      return E.docker_enoent;
     if (lower.includes("connect") || lower.includes("pipe") || lower.includes("socket") || lower.includes("daemon"))
-      return "Docker Desktop o el daemon de Docker no esta respondiendo.";
+      return E.docker_daemon;
     if (lower.includes("permission") || lower.includes("access") || lower.includes("denied"))
-      return "No hay permisos para acceder a Docker.";
+      return E.docker_permission;
   }
   if (category === "remote") {
     if (lower.includes("host key") || lower.includes("fingerprint"))
-      return "No se pudo validar la huella (fingerprint) del servidor. Comprueba la huella mostrada antes de continuar.";
+      return E.remote_fingerprint;
     if (lower.includes("authentication") || lower.includes("auth") || lower.includes("permission denied"))
-      return "Autenticacion SSH rechazada. Revisa usuario, contrasena, llave o passphrase.";
+      return E.remote_auth;
     if (lower.includes("timed out") || lower.includes("timeout") || lower.includes("connect"))
-      return "No se pudo conectar al host remoto. Revisa host, puerto, VPN/firewall o red.";
+      return E.remote_timeout;
     if (lower.includes("no such file") || lower.includes("cannot open") || lower.includes("tail"))
-      return "No se pudo leer la ruta remota. Revisa que el archivo exista y que el usuario tenga permisos.";
+      return E.remote_path;
   }
-  return text || "Ocurrio un error inesperado.";
+  return text || E.generic;
 }
 
 function showErrorAlert(sender, category, title, msg) {
@@ -113,8 +192,8 @@ function showErrorAlert(sender, category, title, msg) {
     type: "error",
     title,
     message: title,
-    detail: detail === msg ? detail : `${detail}\n\nDetalle tecnico: ${msg}`,
-    buttons: ["Aceptar"],
+    detail: detail === msg ? detail : `${detail}\n\n${mt("tech_detail")}: ${msg}`,
+    buttons: [mt("ok")],
     noLink: true,
   }).catch(() => {});
 }
@@ -392,48 +471,49 @@ function buildMenu(win, recentFiles = []) {
           try {
             const normalized = normalizeLocalPath(filePath);
             const stat = await fs.promises.stat(normalized);
-            if (!stat.isFile()) throw new Error("No es un archivo");
+            if (!stat.isFile()) throw new Error("Not a file");
             if (!win.isDestroyed()) win.webContents.send("menu:open-recent", normalized);
           } catch {
             dialog.showMessageBox(win, {
-              type:"warning", title:"Archivo no disponible",
-              message:"No se pudo abrir el archivo reciente", detail:filePath,
+              type:"warning", title:mt("file_unavailable_title"),
+              message:mt("file_unavailable_msg"), detail:filePath,
             });
           }
         },
       }))
-    : [{ label:"Sin archivos recientes", enabled:false }];
+    : [{ label:mt("no_recent"), enabled:false }];
   const template = [
-    { label: "Archivo", submenu: [
-      { label:"Abrir archivo…", accelerator:"CmdOrCtrl+O",
+    { label: mt("file"), submenu: [
+      { label:mt("open_file"), accelerator:"CmdOrCtrl+O",
         click: () => win.webContents.send("menu:open-file") },
-      { id:"open-recent", label:"Abrir reciente", submenu:recentSubmenu },
-      { label:"Nueva pestaña",  accelerator:"CmdOrCtrl+T",
+      { id:"open-recent", label:mt("open_recent"), submenu:recentSubmenu },
+      { label:mt("new_tab"),  accelerator:"CmdOrCtrl+T",
         click: () => win.webContents.send("menu:new-tab") },
-      { label:"Cerrar pestaña", accelerator:"CmdOrCtrl+W",
+      { label:mt("close_tab"), accelerator:"CmdOrCtrl+W",
         click: () => win.webContents.send("global:close-tab") },
-      { label:"Reabrir pestaña cerrada", accelerator:"CmdOrCtrl+Shift+T",
+      { label:mt("reopen_tab"), accelerator:"CmdOrCtrl+Shift+T",
         click: () => win.webContents.send("global:reopen-tab") },
-      { type:"separator" }, { role:"quit", label:"Salir" },
+      { type:"separator" }, { role:"quit", label:mt("quit") },
     ]},
-    { label: "Ver", submenu: [
-      { role:"reload", label:"Recargar" },
-      { role:"toggleDevTools", label:"DevTools" },
+    { label: mt("view"), submenu: [
+      { role:"reload", label:mt("reload") },
+      { role:"toggleDevTools", label:mt("devtools") },
       { type:"separator" },
       { role:"resetZoom" }, { role:"zoomIn" }, { role:"zoomOut" },
-      { type:"separator" }, { role:"togglefullscreen", label:"Pantalla completa" },
+      { type:"separator" }, { role:"togglefullscreen", label:mt("fullscreen") },
       { type:"separator" },
-      { label:"Dividir a la derecha", accelerator:"CmdOrCtrl+\\",
+      { label:mt("split_right"), accelerator:"CmdOrCtrl+\\",
         click: () => win.webContents.send("menu:split-right") },
-      { label:"Dividir abajo", accelerator:"CmdOrCtrl+Shift+\\",
+      { label:mt("split_down"), accelerator:"CmdOrCtrl+Shift+\\",
         click: () => win.webContents.send("menu:split-down") },
-      { label:"Cerrar división", accelerator:"CmdOrCtrl+Alt+\\",
+      { label:mt("split_close"), accelerator:"CmdOrCtrl+Alt+\\",
         click: () => win.webContents.send("menu:split-close") },
     ]},
-    { label:"Ayuda", submenu:[
-      { label:"GitHub", click: () => shell.openExternal("https://github.com/lindecode/PulpLog") },
+    { label:mt("help"), submenu:[
+      { label:mt("user_guide"), accelerator:"F1", click: () => win.webContents.send("menu:user-guide") },
+      { label:mt("github"), click: () => shell.openExternal("https://github.com/lindecode/PulpLog") },
       { type:"separator" },
-      { label:"Acerca de PulpLog…", click: () => win.webContents.send("menu:about") },
+      { label:mt("about"), click: () => win.webContents.send("menu:about") },
     ]},
   ];
   if (process.platform === "darwin")
@@ -448,10 +528,10 @@ function refreshApplicationMenu(settings) {
 /* ─── IPC: open dialog ─── */
 ipcMain.handle("dialog:open", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
-    title: "Abrir archivo de log",
+    title: mt("open_log_dialog"),
     filters: [
-      { name:"Logs", extensions:["log","txt","out"] },
-      { name:"Todos", extensions:["*"] },
+      { name:mt("filter_logs"), extensions:["log","txt","out"] },
+      { name:mt("filter_all"), extensions:["*"] },
     ],
     properties: ["openFile"],
   });
@@ -460,10 +540,10 @@ ipcMain.handle("dialog:open", async () => {
 
 ipcMain.handle("dialog:ssh-key", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
-    title: "Seleccionar llave privada SSH",
+    title: mt("pick_ssh_key"),
     filters: [
-      { name:"SSH keys", extensions:["pem","key","*"] },
-      { name:"Todos", extensions:["*"] },
+      { name:mt("filter_ssh_keys"), extensions:["pem","key","*"] },
+      { name:mt("filter_all"), extensions:["*"] },
     ],
     properties: ["openFile"],
   });
@@ -692,12 +772,12 @@ ipcMain.handle("export:text", async (event, payload) => {
   const content = String(payload?.content ?? "");
   if (Buffer.byteLength(content, "utf8") > 512 * 1024 * 1024) throw new Error("Export exceeds 512 MB");
   const { canceled, filePath } = await dialog.showSaveDialog({
-    title: "Exportar resultados",
+    title: mt("export_dialog"),
     defaultPath,
     filters: [
       { name:"Log", extensions:["log"] },
       { name:"Text", extensions:["txt"] },
-      { name:"Todos", extensions:["*"] },
+      { name:mt("filter_all"), extensions:["*"] },
     ],
   });
   if (canceled || !filePath) return null;
@@ -716,23 +796,23 @@ ipcMain.handle("tabmenu:show", (event, payload) => {
 
   const template = [];
   if (filePath) {
-    template.push({ label: "Abrir ubicación del archivo", click: () => shell.showItemInFolder(filePath) });
-    template.push({ label: "Copiar ruta del archivo", click: () => clipboard.writeText(filePath) });
+    template.push({ label: mt("open_location"), click: () => shell.showItemInFolder(filePath) });
+    template.push({ label: mt("copy_path"), click: () => clipboard.writeText(filePath) });
     template.push({ type: "separator" });
   }
   if (hasContent) {
-    template.push({ label: "Duplicar bitácora", click: () => sendAction("duplicate") });
-    template.push({ label: "Recargar bitácora", click: () => sendAction("reload") });
+    template.push({ label: mt("duplicate_tab"), click: () => sendAction("duplicate") });
+    template.push({ label: mt("reload_tab"), click: () => sendAction("reload") });
     template.push({ type: "separator" });
   }
-  template.push({ label: "Renombrar pestaña", click: () => sendAction("rename") });
+  template.push({ label: mt("rename_tab"), click: () => sendAction("rename") });
   template.push({
-    label: groupStart ? "Quitar separador de grupo" : "Iniciar grupo aquí",
+    label: groupStart ? mt("group_start_off") : mt("group_start_on"),
     click: () => sendAction("toggle-group-start"),
   });
   template.push({ type: "separator" });
-  template.push({ label: "Cerrar otras pestañas", enabled: tabCount > 1, click: () => sendAction("close-others") });
-  template.push({ label: "Cerrar pestañas a la derecha", enabled: !!canCloseRight, click: () => sendAction("close-right") });
+  template.push({ label: mt("close_others"), enabled: tabCount > 1, click: () => sendAction("close-others") });
+  template.push({ label: mt("close_right"), enabled: !!canCloseRight, click: () => sendAction("close-right") });
 
   const win = BrowserWindow.fromWebContents(event.sender);
   Menu.buildFromTemplate(template).popup({ window: win || undefined, x, y });
@@ -769,7 +849,7 @@ ipcMain.handle("docker:list", async (event) => {
     return result;
   } catch (e) {
     logEntry("ERROR", "docker", `Error al listar contenedores: ${e.message}`);
-    showErrorAlert(event.sender, "docker", "Error de Docker", e.message);
+    showErrorAlert(event.sender, "docker", mt("err_docker"), e.message);
     return { error: e.message };
   }
 });
@@ -826,7 +906,7 @@ ipcMain.handle("docker:logs:start", (event, payload) => {
     if (isError && !hadLines) {
       logEntry("ERROR", "docker", `Stream ${shortId} terminó con código ${code}`);
       const msg = `docker logs terminó con código ${code}`;
-      showErrorAlert(event.sender, "docker", "Error en logs Docker", msg);
+      showErrorAlert(event.sender, "docker", mt("err_docker_logs"), msg);
       send("docker:error", streamId, msg);
     } else {
       logEntry("INFO", "docker", `Stream ${shortId} terminado (código ${code})`);
@@ -838,7 +918,7 @@ ipcMain.handle("docker:logs:start", (event, payload) => {
     dockerStreams.delete(streamId);
     if (stream.stopped) return;
     logEntry("ERROR", "docker", `Error proceso ${shortId}: ${e.message}`);
-    showErrorAlert(event.sender, "docker", "Error en logs Docker", e.message);
+    showErrorAlert(event.sender, "docker", mt("err_docker_logs"), e.message);
     send("docker:error", streamId, e.message);
   });
 
@@ -1104,7 +1184,7 @@ function startNativeSshStream(event, payload) {
     client.exec(`tail -n ${tailLines} -F -- ${quotePosixArg(filePath)}`, (err, channel) => {
       if (err) {
         remoteStreams.delete(streamId);
-        showErrorAlert(event.sender, "remote", "Error remoto", err.message);
+        showErrorAlert(event.sender, "remote", mt("err_remote"), err.message);
         send("remote:error", streamId, err.message);
         client.end();
         return;
@@ -1123,7 +1203,7 @@ function startNativeSshStream(event, payload) {
         if (code) {
           const msg = stderrBuf.trim() || `tail terminó con código ${code}`;
           logEntry("ERROR", "remote", `${label}: ${msg}`);
-          showErrorAlert(event.sender, "remote", "Error remoto", msg);
+          showErrorAlert(event.sender, "remote", mt("err_remote"), msg);
           send("remote:error", streamId, msg);
         } else {
           logEntry("INFO", "remote", `SSH nativo terminado: ${label}`);
@@ -1139,7 +1219,7 @@ function startNativeSshStream(event, payload) {
     const fingerprintHint = seenFingerprint ? ` Huella (fingerprint) del servidor: ${seenFingerprint}` : "";
     const msg = `${e.message}${fingerprintHint}`;
     logEntry("ERROR", "remote", `${label}: ${msg}`);
-    showErrorAlert(event.sender, "remote", "Error SSH", msg);
+    showErrorAlert(event.sender, "remote", mt("err_ssh"), msg);
     send("remote:error", streamId, msg);
   });
 
@@ -1167,7 +1247,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     try {
       startNativeSshStream(event, payload);
     } catch (e) {
-      showErrorAlert(event.sender, "remote", "Error SSH", e.message);
+      showErrorAlert(event.sender, "remote", mt("err_ssh"), e.message);
       event.sender.send("remote:error", streamId, e.message);
     }
     return;
@@ -1177,7 +1257,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
   try {
     spec = buildRemoteCommand(payload);
   } catch (e) {
-    showErrorAlert(event.sender, "remote", "Error remoto", e.message);
+    showErrorAlert(event.sender, "remote", mt("err_remote"), e.message);
     event.sender.send("remote:error", streamId, e.message);
     return;
   }
@@ -1229,7 +1309,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     if (isError) {
       const msg = stderrBuf.trim() || `${spec.command} terminó con código ${code}`;
       logEntry("ERROR", "remote", `${spec.label}: ${msg}`);
-      showErrorAlert(event.sender, "remote", "Error remoto", msg);
+      showErrorAlert(event.sender, "remote", mt("err_remote"), msg);
       send("remote:error", streamId, msg);
     } else {
       logEntry("INFO", "remote", `Stream remoto terminado: ${spec.label} (código ${code})`);
@@ -1241,7 +1321,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     remoteStreams.delete(streamId);
     if (stream.stopped) return;
     logEntry("ERROR", "remote", `${spec.label}: ${e.message}`);
-    showErrorAlert(event.sender, "remote", "Error remoto", e.message);
+    showErrorAlert(event.sender, "remote", mt("err_remote"), e.message);
     send("remote:error", streamId, e.message);
   });
 
@@ -1311,7 +1391,7 @@ function normalizeRemoteProfiles(value) {
 function normalizeSettings(value) {
   const s = value && typeof value === "object" ? value : {};
   const language = ["es", "en"].includes(s.language) ? s.language : "es";
-  const theme = ["classic", "light", "vscode"].includes(s.theme) ? s.theme : "classic";
+  const theme = ["classic", "light", "vscode", "ember"].includes(s.theme) ? s.theme : "classic";
 
   let panes;
   if (Array.isArray(s.panes)) {
@@ -1355,6 +1435,7 @@ function updateSettings(mutator) {
   const operation = settingsWriteQueue.then(async () => {
     const current = await loadSettings();
     const next = normalizeSettings(await mutator(current));
+    currentLanguage = next.language;
     const target = getSettingsPath();
     const temporary = `${target}.${process.pid}.tmp`;
     await fs.promises.mkdir(path.dirname(target), { recursive:true });
@@ -1428,35 +1509,35 @@ function registerShortcuts(win) {
   const isWin = process.platform === "win32";
 
   const WIN_CONFLICTS = {
-    "Super+A": "Abre el Centro de acción (Win11)",
-    "Super+T": "Cicla la barra de tareas (Win11)",
-    "Super+W": "Abre Widgets (Win11)",
+    "Super+A": mt("win_conflict_a"),
+    "Super+T": mt("win_conflict_t"),
+    "Super+W": mt("win_conflict_w"),
   };
 
   const shortcuts = [
     {
       key:   "Super+A",
-      label: "Abrir archivo",
+      label: mt("shortcut_open_file"),
       action: () => { bringToFront(win); win.webContents.send("menu:open-file"); },
     },
     {
       key:   "Super+T",
-      label: "Nueva pestaña",
+      label: mt("shortcut_new_tab"),
       action: () => { bringToFront(win); win.webContents.send("menu:new-tab"); },
     },
     {
       key:   "Super+W",
-      label: "Cerrar pestaña activa",
+      label: mt("shortcut_close_tab"),
       action: () => { bringToFront(win); win.webContents.send("global:close-tab"); },
     },
     {
       key:   "Super+Shift+T",
-      label: "Reabrir última pestaña",
+      label: mt("shortcut_reopen_tab"),
       action: () => { bringToFront(win); win.webContents.send("global:reopen-tab"); },
     },
     {
       key:   "Super+P",
-      label: "Traer al frente",
+      label: mt("shortcut_bring_front"),
       action: () => bringToFront(win),
     },
   ];
@@ -1464,16 +1545,17 @@ function registerShortcuts(win) {
   for (const { key, label, action } of shortcuts) {
     const ok = globalShortcut.register(key, action);
     if (ok) {
-      logEntry("INFO", "shortcuts", `${label} [${key}]: registrado`);
+      logEntry("INFO", "shortcuts", `${label} [${key}]: ${mt("shortcut_registered")}`);
     } else {
       const hint = isWin && WIN_CONFLICTS[key] ? ` — ${WIN_CONFLICTS[key]}` : "";
-      logEntry("WARN", "shortcuts", `${label} [${key}]: no disponible${hint}`);
+      logEntry("WARN", "shortcuts", `${label} [${key}]: ${mt("shortcut_unavailable")}${hint}`);
     }
   }
 }
 
 /* ─── lifecycle ─── */
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  currentLanguage = (await loadSettings().catch(() => null))?.language || "es";
   const splash = IS_SMOKE_TEST ? null : createSplashWindow();
   const win = createWindow(splash);
   if (!IS_SMOKE_TEST) registerShortcuts(win);

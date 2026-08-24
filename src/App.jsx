@@ -55,13 +55,24 @@ function useDebouncedValue(value, delay = 180) {
   }, [value, delay]);
   return debounced;
 }
+
+// Modals only close on backdrop click / an explicit button — keyboard-only
+// users had no way out. Every modal below wires its onClose through here.
+function useEscapeToClose(onClose) {
+  useEffect(() => {
+    const onKey = event => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+}
 /* ═══════════════════════════════════════════
    i18n
 ═══════════════════════════════════════════ */
 const T = {
   es: {
-    bm_add:          "Marcar línea",
-    bm_remove:       "Quitar marcador",
+    bm_add:          "Marcar línea (Ctrl+B)",
+    bm_remove:       "Quitar marcador (Ctrl+B)",
+    level_toggle_title: "Clic: mostrar/ocultar · Ctrl+clic: aislar este nivel (Ctrl+clic de nuevo para mostrar todos)",
     filter_ph:       "🔍  filtrar…",
     regex_ph:        "regex…",
     regex_btn_title: "Activar filtro por expresión regular",
@@ -203,6 +214,8 @@ const T = {
     recent_files_h:  "ARCHIVOS RECIENTES",
     no_recent:       "Sin archivos recientes",
     clear_recents:   "Limpiar recientes",
+    file_missing_toast: name => `No se pudo abrir "${name}": ya no existe o fue movido. Se quitó de recientes.`,
+    toast_dismiss:   "Cerrar aviso",
     prefs_h:         "PREFERENCIAS",
     pref_autoscroll: "Auto-scroll activado al abrir archivo",
     pref_linenums:   "Mostrar números de línea por defecto",
@@ -213,6 +226,7 @@ const T = {
     theme_classic:   "Clásica",
     theme_light:     "Blanca",
     theme_vscode:    "Oscura",
+    theme_ember:     "Brasa",
     open_file_btn:   "Abrir archivo…",
     recent_h:        "RECIENTES",
     hint_electron:   "Ctrl+O  ·  Ctrl+T nueva pestaña  ·  clic en ◇ para marcar líneas",
@@ -223,14 +237,16 @@ const T = {
     settings_title:  "Configuración",
     about_btn:       "Acerca de",
     about_title:     "Acerca de PulpLog",
+    help_guide_title:"Manual de usuario",
     welcome_tab:     "Bienvenida",
     split_right_title: "Dividir a la derecha",
     split_down_title:  "Dividir abajo",
     split_close_title: "Cerrar división",
   },
   en: {
-    bm_add:          "Bookmark line",
-    bm_remove:       "Remove bookmark",
+    bm_add:          "Bookmark line (Ctrl+B)",
+    bm_remove:       "Remove bookmark (Ctrl+B)",
+    level_toggle_title: "Click: show/hide · Ctrl+click: isolate this level (Ctrl+click again to show all)",
     filter_ph:       "🔍  filter…",
     regex_ph:        "regex…",
     regex_btn_title: "Enable regular expression filter",
@@ -372,6 +388,8 @@ const T = {
     recent_files_h:  "RECENT FILES",
     no_recent:       "No recent files",
     clear_recents:   "Clear recents",
+    file_missing_toast: name => `Could not open "${name}": it no longer exists or was moved. Removed from recents.`,
+    toast_dismiss:   "Dismiss",
     prefs_h:         "PREFERENCES",
     pref_autoscroll: "Auto-scroll enabled when opening file",
     pref_linenums:   "Show line numbers by default",
@@ -382,6 +400,7 @@ const T = {
     theme_classic:   "Classic",
     theme_light:     "Light",
     theme_vscode:    "Dark",
+    theme_ember:     "Ember",
     open_file_btn:   "Open file…",
     recent_h:        "RECENT",
     hint_electron:   "Ctrl+O  ·  Ctrl+T new tab  ·  click ◇ to bookmark lines",
@@ -392,11 +411,117 @@ const T = {
     settings_title:  "Settings",
     about_btn:       "About",
     about_title:     "About PulpLog",
+    help_guide_title:"User Guide",
     welcome_tab:     "Welcome",
     split_right_title: "Split right",
     split_down_title:  "Split down",
     split_close_title: "Close split",
   },
+};
+
+/* ═══════════════════════════════════════════
+   User guide content (Help → Manual de usuario)
+═══════════════════════════════════════════ */
+const GUIDE = {
+  es: [
+    { title:"Abrir archivos", items:[
+      "Ctrl+O abre un archivo. También podés arrastrar y soltar un .log, .txt o .out sobre la ventana.",
+      "Los últimos 10 archivos quedan en Configuración → Archivos recientes, y también aparecen en la pantalla de bienvenida.",
+      "Si el sistema tiene asociados los .log, .out o .txt a PulpLog, abrirlos desde el explorador los abre acá.",
+    ]},
+    { title:"Pestañas y paneles", items:[
+      "Ctrl+T abre una pestaña nueva · Ctrl+W cierra la activa · Ctrl+Shift+T reabre la última que cerraste.",
+      "Clic derecho sobre una pestaña: duplicar, recargar, renombrar, cerrar otras o cerrar las de la derecha. Arrastrá para reordenar.",
+      "Ctrl+\\ divide la vista a la derecha, Ctrl+Shift+\\ la divide abajo, Ctrl+Alt+\\ cierra la división.",
+    ]},
+    { title:"Filtrar y buscar", items:[
+      "El campo de filtro oculta las líneas que no coinciden; el botón .* activa expresiones regulares.",
+      "Contexto ± N muestra N líneas antes y después de cada coincidencia del filtro.",
+      "El campo de resaltar (✨) marca coincidencias sin ocultar el resto; usá ▲▼ o Enter para saltar entre ellas.",
+    ]},
+    { title:"Niveles de log", items:[
+      "Clic en un badge (ERROR, WARN, INFO…) lo muestra u oculta.",
+      "Ctrl+clic (Cmd+clic en macOS) aísla ese nivel apagando los demás; Ctrl+clic de nuevo restaura todos.",
+    ]},
+    { title:"Marcadores y selección", items:[
+      "Clic en ◇ junto al número de línea, o Ctrl+B con una línea activa, la marca o desmarca.",
+      "F2 salta al marcador siguiente, Shift+F2 al anterior.",
+      "Clic, Shift+clic o Ctrl+clic sobre las líneas selecciona un rango o varias líneas sueltas.",
+      "Clic derecho sobre la selección: copiar, copiar con números de línea, exportar o filtrar por ese texto.",
+    ]},
+    { title:"Seguir en vivo (tail -f)", items:[
+      "«seguir» sigue el archivo a medida que crece; «detener» lo pausa.",
+      "Si el archivo rota o se trunca, PulpLog avisa y recarga automáticamente.",
+      "«actualizar» fuerza una relectura inmediata del archivo.",
+    ]},
+    { title:"Docker y conexiones remotas", items:[
+      "El botón 🐳 lista los contenedores en ejecución y abre docker logs --follow en una pestaña.",
+      "El botón SSH / WSL abre una bitácora remota por SSH o dentro de una distro WSL2, con perfiles guardables y prueba de conexión.",
+    ]},
+    { title:"Configuración y diagnóstico", items:[
+      "Idioma, tema (incluye «Brasa» 🔥), archivos recientes y preferencias por defecto.",
+      "El botón 📋 abre la bitácora interna, útil para diagnosticar problemas de Docker, SSH o atajos globales.",
+    ]},
+  ],
+  en: [
+    { title:"Opening files", items:[
+      "Ctrl+O opens a file. You can also drag and drop a .log, .txt, or .out onto the window.",
+      "The last 10 files show up under Settings → Recent files, and on the welcome screen.",
+      "If .log, .out, or .txt files are associated with PulpLog, opening them from the OS opens them here.",
+    ]},
+    { title:"Tabs and panes", items:[
+      "Ctrl+T opens a new tab · Ctrl+W closes the active one · Ctrl+Shift+T reopens the last one you closed.",
+      "Right-click a tab for: duplicate, reload, rename, close others, or close to the right. Drag to reorder.",
+      "Ctrl+\\ splits the view right, Ctrl+Shift+\\ splits it down, Ctrl+Alt+\\ closes the split.",
+    ]},
+    { title:"Filtering and search", items:[
+      "The filter field hides non-matching lines; the .* button enables regular expressions.",
+      "Context ± N shows N lines before and after each filter match.",
+      "The highlight field (✨) marks matches without hiding the rest; use ▲▼ or Enter to jump between them.",
+    ]},
+    { title:"Log levels", items:[
+      "Clicking a badge (ERROR, WARN, INFO…) shows or hides it.",
+      "Ctrl+click (Cmd+click on macOS) isolates that level, turning off the rest; Ctrl+click again restores all.",
+    ]},
+    { title:"Bookmarks and selection", items:[
+      "Click ◇ next to the line number, or Ctrl+B with an active line, to bookmark or unbookmark it.",
+      "F2 jumps to the next bookmark, Shift+F2 to the previous one.",
+      "Click, Shift+click, or Ctrl+click on lines to select a range or several individual lines.",
+      "Right-click the selection for: copy, copy with line numbers, export, or filter by that text.",
+    ]},
+    { title:"Live tail (tail -f)", items:[
+      "“follow” tracks the file as it grows; “stop” pauses it.",
+      "If the file rotates or gets truncated, PulpLog warns you and reloads it automatically.",
+      "“refresh” forces an immediate reread of the file.",
+    ]},
+    { title:"Docker and remote connections", items:[
+      "The 🐳 button lists running containers and opens docker logs --follow in a tab.",
+      "The SSH / WSL button opens a remote log over SSH or inside a WSL2 distro, with savable profiles and a connection test.",
+    ]},
+    { title:"Settings and diagnostics", items:[
+      "Language, theme (including “Ember” 🔥), recent files, and default preferences.",
+      "The 📋 button opens the internal log, useful for diagnosing Docker, SSH, or global shortcut issues.",
+    ]},
+  ],
+};
+
+const GUIDE_SHORTCUTS = {
+  es: [
+    ["Ctrl+O", "Abrir archivo"], ["Ctrl+T", "Nueva pestaña"], ["Ctrl+W", "Cerrar pestaña"],
+    ["Ctrl+Shift+T", "Reabrir pestaña cerrada"], ["Ctrl+\\ / Ctrl+Shift+\\", "Dividir a la derecha / abajo"],
+    ["F2 / Shift+F2", "Marcador siguiente / anterior"], ["Ctrl+B", "Marcar/desmarcar línea seleccionada"],
+    ["Ctrl+clic en un nivel", "Aislar ese nivel (de nuevo: restaurar todos)"],
+    ["Ctrl+C", "Copiar líneas seleccionadas"], ["Ctrl+A", "Seleccionar todas las líneas visibles"],
+    ["Esc", "Quitar selección / cerrar ventana"], ["F1", "Abrir este manual"],
+  ],
+  en: [
+    ["Ctrl+O", "Open file"], ["Ctrl+T", "New tab"], ["Ctrl+W", "Close tab"],
+    ["Ctrl+Shift+T", "Reopen closed tab"], ["Ctrl+\\ / Ctrl+Shift+\\", "Split right / down"],
+    ["F2 / Shift+F2", "Next / previous bookmark"], ["Ctrl+B", "Bookmark/unbookmark selected line"],
+    ["Ctrl+click a level", "Isolate that level (again: restore all)"],
+    ["Ctrl+C", "Copy selected lines"], ["Ctrl+A", "Select all visible lines"],
+    ["Esc", "Clear selection / close window"], ["F1", "Open this guide"],
+  ],
 };
 
 const LangCtx = createContext(() => "");
@@ -569,7 +694,7 @@ function selectedLogText(sourceItems, lines, includeLineNumbers = false) {
 }
 
 function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark, selection, setSelection,
-                       listRef, stateKey, selectionSource, onFilterText }) {
+                       listRef, stateKey, selectionSource, onFilterText, onJumpBookmark }) {
   const t = useLang();
   const [scrollTop, setScrollTop] = useState(() => getRememberedScroll(stateKey));
   const [height,    setHeight]    = useState(500);
@@ -710,6 +835,11 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
            } else if (event.key === "Escape" && selection.lines.size) {
              event.preventDefault();
              setSelection({ lines:new Set(), active:null, anchor:null });
+           } else if (event.key === "F2") {
+             event.preventDefault();
+             onJumpBookmark?.(event.shiftKey ? "prev" : "next");
+           } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
+             if (selection.lines.size) { event.preventDefault(); toggleSelectionBookmarks(); }
            }
          }}
          onScroll={event => {
@@ -1059,7 +1189,13 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     }
   }, [matchOrigLines, matchCursor, filtered, setSelection]);
 
-  const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
+  const toggle = (key, event) => setLvl(p => {
+    if (!event?.ctrlKey && !event?.metaKey) return { ...p, [key]: !p[key] };
+    // Ctrl/Cmd+click "solos" this level; pressing it again while already
+    // isolated restores every level instead of leaving everything hidden.
+    const isolated = Object.keys(p).every(k => p[k] === (k === key));
+    return Object.fromEntries(Object.keys(p).map(k => [k, isolated || k === key]));
+  });
 
   const BADGES = [
     { key:"error", label:"ERROR", bg:"var(--pl-chip-error-bg)", fg:"var(--pl-chip-error-fg)", cnt:stats.error },
@@ -1161,7 +1297,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
 
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
-          <span key={key} onClick={() => toggle(key)}
+          <span key={key} onClick={event => toggle(key, event)} title={t("level_toggle_title")}
             style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11,
                      padding:"3px 7px", borderRadius:6, fontWeight:600,
                      cursor:"pointer", userSelect:"none",
@@ -1272,6 +1408,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           stateKey={tabKey}
           selectionSource={selectionSource}
           onFilterText={setFilter}
+          onJumpBookmark={jumpBookmark}
         />
       )}
 
@@ -1426,12 +1563,13 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
   const t = useLang();
   const lang = settings.language || "es";
   const theme = settings.theme || "classic";
+  useEscapeToClose(onClose);
 
   return (
     <div onClick={onClose}
          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                   display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
-      <div onClick={e => e.stopPropagation()}
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("settings_title")}
            style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                     padding:"28px 32px", minWidth:500, maxWidth:620,
                     boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
@@ -1465,7 +1603,7 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
           {t("theme_h")}
         </div>
         <div style={{ display:"flex", gap:8, marginBottom:24 }}>
-          {["classic","light","vscode"].map(th => (
+          {["classic","light","vscode","ember"].map(th => (
             <button key={th} onClick={() => onTogglePref("theme", th)}
               style={{ background: theme === th ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
                        border:`0.5px solid ${theme === th ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
@@ -1560,13 +1698,14 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
 function AboutModal({ onClose }) {
   const t = useLang();
   const logoSrc = `${import.meta.env.BASE_URL}lindecode-max.jpeg`;
+  useEscapeToClose(onClose);
   return (
     <div
       onClick={onClose}
       style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
       <div
-        onClick={e => e.stopPropagation()}
+        onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("about_title")}
         style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                  padding:"32px 40px", minWidth:300, textAlign:"center",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
@@ -1581,6 +1720,67 @@ function AboutModal({ onClose }) {
         <button
           onClick={onClose}
           style={{ marginTop:24, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                   borderRadius:6, color:"var(--pl-text-4)", fontFamily:"inherit",
+                   fontSize:11, padding:"6px 20px", cursor:"pointer" }}>
+          {t("close")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════
+   Help → user guide modal
+═══════════════════════════════════════════ */
+function HelpGuideModal({ lang, onClose }) {
+  const t = useLang();
+  const sections = GUIDE[lang] || GUIDE.es;
+  const shortcuts = GUIDE_SHORTCUTS[lang] || GUIDE_SHORTCUTS.es;
+  useEscapeToClose(onClose);
+  return (
+    <div onClick={onClose}
+         style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
+                  display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("help_guide_title")}
+           style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
+                    padding:"26px 30px", width:"min(640px, calc(100vw - 32px))", maxHeight:"85vh",
+                    overflowY:"auto", boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
+        <div style={{ display:"flex", alignItems:"center", marginBottom:18 }}>
+          <span style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700 }}>📋 {t("help_guide_title")}</span>
+          <button onClick={onClose}
+            style={{ marginLeft:"auto", background:"none", border:"none",
+                     color:"var(--pl-text-6)", cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>✕</button>
+        </div>
+
+        {sections.map(({ title, items }) => (
+          <div key={title} style={{ marginBottom:18 }}>
+            <div style={{ fontSize:11, color:"var(--pl-accent-hover)", fontWeight:700,
+                          letterSpacing:.5, marginBottom:6 }}>{title}</div>
+            <ul style={{ margin:0, paddingLeft:18, display:"flex", flexDirection:"column", gap:4 }}>
+              {items.map(item => (
+                <li key={item} style={{ fontSize:12, color:"var(--pl-text-3)", lineHeight:1.5 }}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ))}
+
+        <div style={{ fontSize:10, color:"var(--pl-text-6)", fontWeight:700, letterSpacing:1, marginBottom:10 }}>
+          {lang === "en" ? "KEYBOARD SHORTCUTS" : "ATAJOS DE TECLADO"}
+        </div>
+        <div style={{ border:"0.5px solid var(--pl-border-soft)", borderRadius:6, overflow:"hidden", marginBottom:20 }}>
+          {shortcuts.map(([key, desc], i) => (
+            <div key={key} style={{ display:"flex", gap:12, padding:"6px 10px", alignItems:"center",
+                          background: i % 2 ? "var(--pl-bg-footer)" : "transparent",
+                          borderBottom: i < shortcuts.length - 1 ? "0.5px solid var(--pl-border-soft)" : "none" }}>
+              <code style={{ flexShrink:0, minWidth:150, fontSize:11, color:"var(--pl-accent-hover)",
+                             fontFamily:"inherit" }}>{key}</code>
+              <span style={{ fontSize:11, color:"var(--pl-text-4)" }}>{desc}</span>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={onClose}
+          style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
                    borderRadius:6, color:"var(--pl-text-4)", fontFamily:"inherit",
                    fontSize:11, padding:"6px 20px", cursor:"pointer" }}>
           {t("close")}
@@ -1652,6 +1852,7 @@ function DockerPicker({ onSelect, onClose }) {
   const t = useLang();
   const [containers, setContainers] = useState(null);
   const [error,      setError]      = useState(null);
+  useEscapeToClose(onClose);
 
   useEffect(() => {
     window.electronAPI.listContainers()
@@ -1663,7 +1864,7 @@ function DockerPicker({ onSelect, onClose }) {
     <div onClick={onClose}
       style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
-      <div onClick={e => e.stopPropagation()}
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("docker_title")}
         style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                  padding:"24px", minWidth:440, maxWidth:580, fontFamily:"inherit",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
@@ -1815,7 +2016,13 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
     }
   }, [matchOrigLines, matchCursor, filtered, setSelection]);
 
-  const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
+  const toggle = (key, event) => setLvl(p => {
+    if (!event?.ctrlKey && !event?.metaKey) return { ...p, [key]: !p[key] };
+    // Ctrl/Cmd+click "solos" this level; pressing it again while already
+    // isolated restores every level instead of leaving everything hidden.
+    const isolated = Object.keys(p).every(k => p[k] === (k === key));
+    return Object.fromEntries(Object.keys(p).map(k => [k, isolated || k === key]));
+  });
 
   const BADGES = [
     { key:"error", label:"ERROR", bg:"var(--pl-chip-error-bg)", fg:"var(--pl-chip-error-fg)", cnt:stats.error },
@@ -1921,7 +2128,7 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
 
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
-          <span key={key} onClick={() => toggle(key)}
+          <span key={key} onClick={event => toggle(key, event)} title={t("level_toggle_title")}
             style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11,
                      padding:"3px 7px", borderRadius:6, fontWeight:600,
                      cursor:"pointer", userSelect:"none",
@@ -1989,6 +2196,7 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
           stateKey={tabKey}
           selectionSource={selectionSource}
           onFilterText={setFilter}
+          onJumpBookmark={jumpBookmark}
         />
       )}
 
@@ -2141,12 +2349,13 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:12, padding:"7px 9px",
     outline:"none", width:"100%",
   };
+  useEscapeToClose(onClose);
 
   return (
     <div onClick={onClose}
       style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
-      <form onSubmit={submit} onClick={e => e.stopPropagation()}
+      <form onSubmit={submit} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("remote_title")}
         style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                  padding:"24px", width:"min(620px, calc(100vw - 32px))", maxHeight:"90vh", overflowY:"auto", fontFamily:"inherit",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
@@ -2550,7 +2759,13 @@ function RemoteTab({ tabKey, config, maxLiveLines, onConfigureConnection }) {
     }
   }, [matchOrigLines, matchCursor, filtered, setSelection]);
 
-  const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
+  const toggle = (key, event) => setLvl(p => {
+    if (!event?.ctrlKey && !event?.metaKey) return { ...p, [key]: !p[key] };
+    // Ctrl/Cmd+click "solos" this level; pressing it again while already
+    // isolated restores every level instead of leaving everything hidden.
+    const isolated = Object.keys(p).every(k => p[k] === (k === key));
+    return Object.fromEntries(Object.keys(p).map(k => [k, isolated || k === key]));
+  });
   const modeLabel = config.mode === "wsl"
     ? t("remote_mode_wsl")
     : config.mode === "ssh-wsl"
@@ -2668,7 +2883,7 @@ function RemoteTab({ tabKey, config, maxLiveLines, onConfigureConnection }) {
         {/* row 2: level chips + bookmarks + actions */}
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
-          <span key={key} onClick={() => toggle(key)}
+          <span key={key} onClick={event => toggle(key, event)} title={t("level_toggle_title")}
             style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11,
                      padding:"3px 7px", borderRadius:6, fontWeight:600,
                      cursor:"pointer", userSelect:"none",
@@ -2738,6 +2953,7 @@ function RemoteTab({ tabKey, config, maxLiveLines, onConfigureConnection }) {
           stateKey={tabKey}
           selectionSource={selectionSource}
           onFilterText={setFilter}
+          onJumpBookmark={jumpBookmark}
         />
       )}
 
@@ -2772,7 +2988,7 @@ let nextId = 1;
    A / pane B) from App() so each pane owns its
    own tabs/active/reopen-stack.
 ═══════════════════════════════════════════ */
-function usePaneTabs(setSettings) {
+function usePaneTabs(setSettings, notifyFileMissing) {
   const [tabs,          setTabs]         = useState(() => [{ id: nextId++, label:"$welcome", filePath:null, fileSize:null }]);
   const [active,        setActive]       = useState(() => tabs[0].id);
   const [dockerPicker,  setDockerPicker] = useState(false);
@@ -2797,7 +3013,7 @@ function usePaneTabs(setSettings) {
     if (!stat) {
       const recent = await window.electronAPI.removeRecentFile(fp).catch(() => null);
       if (recent) setSettings(prev => ({ ...prev, recentFiles: recent }));
-      console.error(`No se pudo abrir el archivo: ${fp}`);
+      notifyFileMissing?.(fp);
       return false;
     }
     const label = fp.split(/[\\/]/).pop();
@@ -2805,7 +3021,7 @@ function usePaneTabs(setSettings) {
     const recent = await window.electronAPI.addRecentFile(fp);
     setSettings(prev => ({ ...prev, recentFiles: recent }));
     return true;
-  }, [setSettings]);
+  }, [setSettings, notifyFileMissing]);
 
   const openFile = useCallback(async () => {
     if (IS_ELECTRON) {
@@ -3220,6 +3436,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
 
 export default function App() {
   const [about,        setAbout]       = useState(false);
+  const [helpGuideOpen,setHelpGuideOpen]= useState(false);
   const [diagOpen,     setDiagOpen]    = useState(false);
   const [settingsOpen, setSettingsOpen]= useState(false);
   const [capabilities, setCapabilities]= useState(null);
@@ -3230,10 +3447,27 @@ export default function App() {
   const [splitRatio,     setSplitRatio]     = useState(0.5);
   const [focusedPane,    setFocusedPane]    = useState("A");   // "A" | "B" — transient, not persisted
   const [sessionReady,   setSessionReady]   = useState(!IS_ELECTRON);
+  const [toast,          setToast]          = useState(null);
   const containerRef = useRef(null);
+  const toastTimerRef = useRef(null);
 
-  const paneA = usePaneTabs(setSettings);
-  const paneB = usePaneTabs(setSettings);
+  /* ── Translation function ── */
+  const t = useCallback((key, ...args) => {
+    const lang = settings.language || "es";
+    const entry = (T[lang] ?? T.es)[key] ?? T.es[key] ?? key;
+    return typeof entry === "function" ? entry(...args) : entry;
+  }, [settings.language]);
+
+  const notifyFileMissing = useCallback((fp) => {
+    clearTimeout(toastTimerRef.current);
+    const name = fp.split(/[\\/]/).pop();
+    setToast(t("file_missing_toast", name));
+    toastTimerRef.current = setTimeout(() => setToast(null), 6000);
+  }, [t]);
+  useEffect(() => () => clearTimeout(toastTimerRef.current), []);
+
+  const paneA = usePaneTabs(setSettings, notifyFileMissing);
+  const paneB = usePaneTabs(setSettings, notifyFileMissing);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -3268,13 +3502,6 @@ export default function App() {
     }, 600);
     return () => { alive = false; clearTimeout(timer); };
   }, []);
-
-  /* ── Translation function ── */
-  const t = useCallback((key, ...args) => {
-    const lang = settings.language || "es";
-    const entry = (T[lang] ?? T.es)[key] ?? T.es[key] ?? key;
-    return typeof entry === "function" ? entry(...args) : entry;
-  }, [settings.language]);
 
   const savePref = useCallback((key, val) => {
     setSettings(prev => ({ ...prev, [key]: val }));
@@ -3397,7 +3624,8 @@ export default function App() {
   useEffect(() => {
     if (!IS_ELECTRON) return;
     const cleanAbout = window.electronAPI.onMenuAbout(() => setAbout(true));
-    return () => { cleanAbout?.(); };
+    const cleanHelpGuide = window.electronAPI.onMenuUserGuide(() => setHelpGuideOpen(true));
+    return () => { cleanAbout?.(); cleanHelpGuide?.(); };
   }, []);
 
   /* ── Split-view menu commands ── */
@@ -3510,6 +3738,20 @@ export default function App() {
           />
         )}
         {about && <AboutModal onClose={() => setAbout(false)} />}
+        {helpGuideOpen && <HelpGuideModal lang={settings.language || "es"} onClose={() => setHelpGuideOpen(false)} />}
+        {toast && (
+          <div role="alert" style={{ position:"fixed", left:"50%", bottom:20, transform:"translateX(-50%)",
+                        zIndex:2000, display:"flex", alignItems:"center", gap:10, maxWidth:"min(560px, calc(100vw - 32px))",
+                        padding:"10px 12px", borderRadius:8, background:"var(--pl-error-bg)",
+                        border:"1px solid var(--pl-error-border)", color:"var(--pl-error-text)",
+                        fontSize:12, boxShadow:"0 8px 28px rgba(0,0,0,.4)" }}>
+            <span style={{ flexShrink:0 }}>⚠</span>
+            <span style={{ flex:1, minWidth:0 }}>{toast}</span>
+            <button onClick={() => setToast(null)} title={t("toast_dismiss")}
+              style={{ flexShrink:0, background:"none", border:"none", color:"inherit",
+                       cursor:"pointer", fontSize:13, padding:"0 2px", fontFamily:"inherit" }}>✕</button>
+          </div>
+        )}
       </div>
     </LangCtx.Provider>
   );
