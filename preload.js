@@ -118,6 +118,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     }
     return () => { cleanup(); ipcRenderer.invoke("remote:logs:stop", streamId); };
   },
+  testRemoteConnection: (config) => ipcRenderer.invoke("remote:test", config),
 
   getAppLog:   () => ipcRenderer.invoke("applog:get"),
   clearAppLog: () => ipcRenderer.invoke("applog:clear"),

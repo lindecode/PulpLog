@@ -70,6 +70,7 @@ const T = {
     search_regex_btn_title:"Activar búsqueda por expresión regular",
     search_regex_invalid_title:"Regex de búsqueda inválida",
     context_title:   "Líneas de contexto antes/después de cada resultado del filtro",
+    context_label:   "Contexto",
     context_gap:     n => `${n} ${n === 1 ? "línea omitida" : "líneas omitidas"}`,
     match_prev_title:"Resultado anterior",
     match_next_title:"Resultado siguiente",
@@ -127,22 +128,69 @@ const T = {
     docker_no_logs:  "El contenedor no ha emitido logs aún",
     bm_clear_docker: "Limpiar marcadores",
     remote_title:    "Bitacora remota",
-    remote_mode_ssh: "SSH sistema",
-    remote_mode_native:"SSH credenciales",
-    remote_mode_wsl: "WSL2",
+    remote_mode_ssh: "SSH del sistema",
+    remote_mode_ssh_wsl:"SSH desde WSL2",
+    remote_mode_native:"SSH con credenciales",
+    remote_mode_wsl: "WSL2 local",
+    remote_mode_ssh_help:"Recomendado si el comando ssh ya funciona en tu equipo. PulpLog reutiliza la configuración de OpenSSH, aliases, llaves y SSH Agent existentes.",
+    remote_mode_ssh_wsl_help:"Conecta desde una distribución WSL2. Reutiliza su ~/.ssh/config, aliases, llaves y SSH Agent; es ideal si tu acceso ya funciona dentro de Linux.",
+    remote_mode_native_help:"Conexión SSH directa desde PulpLog. Permite ingresar usuario y contraseña o usar una llave privada; deberás confirmar el fingerprint del servidor.",
+    remote_mode_wsl_help:"Abre un log dentro de una distribución WSL2 instalada en este equipo. Ejecuta Linux localmente y no conecta a otro servidor.",
     remote_host:     "Host o alias SSH",
     remote_user:     "Usuario",
-    remote_key:      "Llave privada",
+    remote_key:      "Llave privada (archivo)",
     remote_key_pick: "Elegir",
     remote_password: "Contraseña",
-    remote_passphrase:"Passphrase",
-    remote_fingerprint:"Fingerprint esperado",
+    remote_passphrase:"Passphrase de la llave",
+    remote_fingerprint:"Huella (fingerprint) del servidor",
     remote_trust_host:"Confiar en host solo esta sesión",
     remote_port:     "Puerto",
+    remote_proxy_jump:"Servidor intermedio (ProxyJump)",
+    remote_available:"Disponible en este equipo",
+    remote_unavailable:"No disponible en este equipo",
+    remote_connection_type:"¿Cómo quieres conectarte?",
+    remote_auth_heading:"Autenticación",
+    remote_auth_system:"Usa tu configuración SSH y, si ya está activo, el SSH Agent del sistema. PulpLog no inicia ni modifica servicios.",
+    remote_auth_wsl:"Usa las llaves y SSH Agent de la distribución WSL2 seleccionada. La passphrase se solicita en un terminal Linux.",
+    remote_auth_native:"PulpLog puede usar una contraseña del servidor o una llave con passphrase. Los secretos se conservan solo durante esta conexión.",
+    remote_auth_local:"No requiere autenticación SSH porque el archivo se abre dentro de este ordenador.",
+    remote_config_alias:"Conexión de SSH config",
+    remote_config_manual:"Escribir host manualmente",
+    remote_agent_keys:n => `SSH Agent activo · ${n} llave${n === 1 ? "" : "s"} cargada${n === 1 ? "" : "s"}`,
+    remote_agent_empty:"SSH Agent activo · sin llaves cargadas",
+    remote_agent_off:"SSH Agent no detectado (informativo)",
+    remote_help:"Ayuda SSH",
+    remote_help_agents:"Agentes y llaves",
+    remote_help_config:"Archivo SSH config",
+    remote_help_access:"Contraseñas y seguridad",
+    remote_help_copy:"Copiar",
+    remote_help_config_text:"Guarda aliases en ~/.ssh/config. Al elegir un alias, OpenSSH aplica HostName, User, Port, IdentityFile y ProxyJump automáticamente.",
+    remote_help_access_text:"Usa SSH automático si el alias ya funciona en una terminal. Usa SSH con acceso manual para usuario/contraseña o llave/passphrase. Los secretos no se guardan en perfiles ni bitácoras.",
+    remote_cmd_start:"Inicia un agente SSH para mantener llaves desbloqueadas durante la sesión.",
+    remote_cmd_add:"Carga y desbloquea una llave privada; solicitará su passphrase si está protegida.",
+    remote_cmd_list:"Muestra las llaves que están cargadas actualmente en el agente.",
+    remote_cmd_remove:"Retira todas las llaves cargadas del agente sin borrar sus archivos.",
+    remote_cmd_stop:"Detiene el agente SSH de la sesión.",
+    remote_reconnect:"Reconectar",
+    remote_reconfigure:"Configurar y reconectar",
+    remote_disconnected:"La conexión remota se cerró.",
     remote_distro:   "Distro WSL",
     remote_path:     "Ruta del log",
     remote_tail:     "Lineas iniciales",
     remote_open:     "Conectar",
+    remote_test:     "Probar conexión",
+    remote_detect_identity:"Detectar servidor",
+    remote_identity_found:"Identidad detectada. Verifica la huella, confírmala y vuelve a probar para validar tu acceso.",
+    remote_testing:  "Probando…",
+    remote_test_ok:  "Conexión y archivo validados",
+    remote_advanced: "Opciones avanzadas",
+    remote_profile:  "Perfil de conexión",
+    remote_profile_name:"Nombre del perfil",
+    remote_profile_save:"Guardar perfil",
+    remote_profile_delete:"Eliminar",
+    remote_profile_new:"Nueva conexión",
+    remote_verify_host:"Verifiqué esta huella y confío en el servidor durante esta sesión",
+    remote_reconnecting:n => `Reconectando en ${n}s…`,
     remote_hint:     "Usa ssh/wsl del sistema; PulpLog no guarda llaves ni contrasenas.",
     remote_waiting:  "Esperando logs remotos…",
     remote_btn_title:"Conectar a bitacora remota por SSH o WSL",
@@ -191,6 +239,7 @@ const T = {
     search_regex_btn_title:"Enable regular expression search",
     search_regex_invalid_title:"Invalid search regex",
     context_title:   "Context lines before/after each filter match",
+    context_label:   "Context",
     context_gap:     n => `${n} line${n === 1 ? "" : "s"} skipped`,
     match_prev_title:"Previous match",
     match_next_title:"Next match",
@@ -249,21 +298,68 @@ const T = {
     bm_clear_docker: "Clear bookmarks",
     remote_title:    "Remote log",
     remote_mode_ssh: "System SSH",
-    remote_mode_native:"SSH credentials",
-    remote_mode_wsl: "WSL2",
+    remote_mode_ssh_wsl:"SSH from WSL2",
+    remote_mode_native:"SSH with credentials",
+    remote_mode_wsl: "Local WSL2",
+    remote_mode_ssh_help:"Recommended when the ssh command already works on your computer. PulpLog reuses your OpenSSH configuration, aliases, keys, and SSH Agent.",
+    remote_mode_ssh_wsl_help:"Connects from a WSL2 distribution. It reuses its ~/.ssh/config, aliases, keys, and SSH Agent; ideal when access already works inside Linux.",
+    remote_mode_native_help:"A direct SSH connection from PulpLog. Enter a username and password or use a private key; you will confirm the server fingerprint.",
+    remote_mode_wsl_help:"Opens a log inside a WSL2 distribution installed on this computer. Linux runs locally and no remote server is contacted.",
     remote_host:     "SSH host or alias",
     remote_user:     "User",
-    remote_key:      "Private key",
+    remote_key:      "Private key (file)",
     remote_key_pick: "Choose",
     remote_password: "Password",
-    remote_passphrase:"Passphrase",
-    remote_fingerprint:"Expected fingerprint",
+    remote_passphrase:"Key passphrase",
+    remote_fingerprint:"Server fingerprint",
     remote_trust_host:"Trust host for this session only",
     remote_port:     "Port",
+    remote_proxy_jump:"Intermediate server (ProxyJump)",
+    remote_available:"Available on this computer",
+    remote_unavailable:"Unavailable on this computer",
+    remote_connection_type:"How do you want to connect?",
+    remote_auth_heading:"Authentication",
+    remote_auth_system:"Uses your SSH configuration and the system SSH Agent when already active. PulpLog does not start or modify services.",
+    remote_auth_wsl:"Uses the keys and SSH Agent from the selected WSL2 distribution. The passphrase is requested in a Linux terminal.",
+    remote_auth_native:"PulpLog can use a server password or a passphrase-protected key. Secrets are kept only for this connection.",
+    remote_auth_local:"SSH authentication is not required because the file is opened on this computer.",
+    remote_config_alias:"SSH config connection",
+    remote_config_manual:"Enter host manually",
+    remote_agent_keys:n => `SSH Agent active · ${n} key${n === 1 ? "" : "s"} loaded`,
+    remote_agent_empty:"SSH Agent active · no keys loaded",
+    remote_agent_off:"SSH Agent not detected (informational)",
+    remote_help:"SSH help",
+    remote_help_agents:"Agents and keys",
+    remote_help_config:"SSH config file",
+    remote_help_access:"Passwords and security",
+    remote_help_copy:"Copy",
+    remote_help_config_text:"Store aliases in ~/.ssh/config. When an alias is selected, OpenSSH automatically applies HostName, User, Port, IdentityFile, and ProxyJump.",
+    remote_help_access_text:"Use automatic SSH when the alias already works in a terminal. Use manual SSH access for username/password or key/passphrase. Secrets are not saved in profiles or logs.",
+    remote_cmd_start:"Starts an SSH agent to keep keys unlocked during the session.",
+    remote_cmd_add:"Loads and unlocks a private key; its passphrase is requested when protected.",
+    remote_cmd_list:"Shows the keys currently loaded in the agent.",
+    remote_cmd_remove:"Removes all loaded keys from the agent without deleting their files.",
+    remote_cmd_stop:"Stops the SSH agent for this session.",
+    remote_reconnect:"Reconnect",
+    remote_reconfigure:"Configure and reconnect",
+    remote_disconnected:"The remote connection was closed.",
     remote_distro:   "WSL distro",
     remote_path:     "Log path",
     remote_tail:     "Initial lines",
     remote_open:     "Connect",
+    remote_test:     "Test connection",
+    remote_detect_identity:"Detect server",
+    remote_identity_found:"Server identity detected. Verify the fingerprint, confirm it, and test again to validate your access.",
+    remote_testing:  "Testing…",
+    remote_test_ok:  "Connection and file validated",
+    remote_advanced: "Advanced options",
+    remote_profile:  "Connection profile",
+    remote_profile_name:"Profile name",
+    remote_profile_save:"Save profile",
+    remote_profile_delete:"Delete",
+    remote_profile_new:"New connection",
+    remote_verify_host:"I verified this fingerprint and trust the server for this session",
+    remote_reconnecting:n => `Reconnecting in ${n}s…`,
     remote_hint:     "Uses system ssh/wsl; PulpLog does not store keys or passwords.",
     remote_waiting:  "Waiting for remote logs…",
     remote_btn_title:"Connect to remote log over SSH or WSL",
@@ -1019,6 +1115,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
             </button>
           </div>
 
+          <ContextInput value={context} onChange={setContext} />
+
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
               style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
@@ -1046,19 +1144,6 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
                        cursor:"pointer", fontWeight: searchUseRegex ? 700 : 400 }}>
               .*
             </button>
-          </div>
-
-          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}
-               title={t("context_title")}>
-            <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
-            <input
-              type="number" min={0} max={50}
-              value={context}
-              onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
-              style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
-                       borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
-                       padding:"3px 4px", textAlign:"center" }}
-            />
           </div>
 
           {(filter || search) && matchOrigLines.length > 0 && (
@@ -1488,7 +1573,7 @@ function AboutModal({ onClose }) {
         <img src={logoSrc} alt="LindeCode"
           style={{ width:96, height:96, borderRadius:12, objectFit:"cover", marginBottom:12 }} />
         <div style={{ fontSize:18, color:"var(--pl-text-1)", fontWeight:700, marginBottom:4 }}>PulpLog</div>
-        <div style={{ fontSize:11, color:"var(--pl-text-6)", marginBottom:20 }}>v2.1.0</div>
+        <div style={{ fontSize:11, color:"var(--pl-text-6)", marginBottom:20 }}>v3.0.0</div>
         <div style={{ width:40, height:"0.5px", background:"var(--pl-border-strong)", margin:"0 auto 20px" }} />
         <div style={{ fontSize:13, color:"var(--pl-text-3)", marginBottom:6 }}>{t("developed_by")}</div>
         <div style={{ fontSize:16, color:"var(--pl-accent)", fontWeight:700, letterSpacing:1 }}>LindeCode</div>
@@ -1508,6 +1593,40 @@ function AboutModal({ onClose }) {
 /* ═══════════════════════════════════════════
    Small helpers
 ═══════════════════════════════════════════ */
+function ContextInput({ value, onChange }) {
+  const t = useLang();
+  const inputRef = useRef(null);
+  const [draft, setDraft] = useState(String(value ?? 0));
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) setDraft(String(value ?? 0));
+  }, [value]);
+  const update = event => {
+    const next = event.target.value;
+    setDraft(next);
+    if (next === "") return;
+    const parsed = Number(next);
+    if (Number.isFinite(parsed)) onChange(Math.max(0, Math.min(50, parsed)));
+  };
+  const commit = () => {
+    if (draft === "") {
+      setDraft("0");
+      onChange(0);
+    } else {
+      setDraft(String(Math.max(0, Math.min(50, Number(draft) || 0))));
+    }
+  };
+  return <label title={t("context_title")}
+    style={{ display:"flex", alignItems:"center", gap:5, flex:"0 0 auto", minWidth:118, whiteSpace:"nowrap",
+      color:"var(--pl-text-5)", fontSize:10 }}>
+    <span>{t("context_label")} ±</span>
+    <input ref={inputRef} type="number" min={0} max={50} value={draft}
+      onChange={update} onBlur={commit}
+      style={{ width:48, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+        borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
+        padding:"3px 5px", textAlign:"center" }} />
+  </label>;
+}
+
 function Btn({ children, onClick, active, title, disabled }) {
   return (
     <button onClick={onClick} title={title} disabled={disabled}
@@ -1757,6 +1876,8 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
             </button>
           </div>
 
+          <ContextInput value={context} onChange={setContext} />
+
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
               style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
@@ -1783,19 +1904,6 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
                        cursor:"pointer", fontWeight: searchUseRegex ? 700 : 400 }}>
               .*
             </button>
-          </div>
-
-          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}
-               title={t("context_title")}>
-            <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
-            <input
-              type="number" min={0} max={50}
-              value={context}
-              onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
-              style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
-                       borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
-                       padding:"3px 4px", textAlign:"center" }}
-            />
           </div>
 
           {(filter || search) && matchOrigLines.length > 0 && (
@@ -1905,43 +2013,65 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
   );
 }
 
-function RemotePicker({ onSelect, onClose, capabilities }) {
+function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfilesChange, initialConfig = null }) {
   const t = useLang();
-  const [mode, setMode] = useState("ssh");
-  const [target, setTarget] = useState("");
-  const [user, setUser] = useState("");
-  const [port, setPort] = useState("");
-  const [identityFile, setIdentityFile] = useState("");
-  const [password, setPassword] = useState("");
-  const [passphrase, setPassphrase] = useState("");
-  const [fingerprint, setFingerprint] = useState("");
+  const [mode, setMode] = useState(() => initialConfig?.mode || (capabilities?.ssh?.available ? "ssh" : "ssh-native"));
+  const [target, setTarget] = useState(initialConfig?.target || "");
+  const [user, setUser] = useState(initialConfig?.user || "");
+  const [port, setPort] = useState(initialConfig?.port || "");
+  const [proxyJump, setProxyJump] = useState(initialConfig?.proxyJump || "");
+  const [identityFile, setIdentityFile] = useState(initialConfig?.identityFile || "");
+  const [password, setPassword] = useState(initialConfig?.password || "");
+  const [passphrase, setPassphrase] = useState(initialConfig?.passphrase || "");
+  const [fingerprint, setFingerprint] = useState(initialConfig?.fingerprint || "");
   const [trustHostForSession, setTrustHostForSession] = useState(false);
-  const [distro, setDistro] = useState("");
-  const [filePath, setFilePath] = useState("");
-  const [tailLines, setTailLines] = useState(500);
+  const [distro, setDistro] = useState(initialConfig?.distro || "");
+  const [filePath, setFilePath] = useState(initialConfig?.filePath || "");
+  const [tailLines, setTailLines] = useState(initialConfig?.tailLines || 500);
+  const [advanced, setAdvanced] = useState(initialConfig?.mode === "ssh-native");
+  const [selectedProfile, setSelectedProfile] = useState("");
+  const [profileName, setProfileName] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [showHelp, setShowHelp] = useState(false);
   const sshCap = capabilities?.ssh;
   const wslCap = capabilities?.wsl;
   const wslDistros = wslCap?.distros || [];
+  const isWindows = capabilities?.platform === "win32";
+  const isMac = capabilities?.platform === "darwin";
+  const selectedWslDistro = distro || wslDistros[0] || "";
+  const configuredHosts = mode === "ssh" ? (sshCap?.hosts || [])
+    : mode === "ssh-wsl" ? (wslCap?.sshHosts?.[selectedWslDistro] || []) : [];
   const wslDistrosKey = wslDistros.join("|");
-  const modeAvailable = mode === "wsl" ? wslCap?.available : mode === "ssh-native" ? true : sshCap?.available;
+  const modeAvailable = mode === "wsl" || mode === "ssh-wsl" ? wslCap?.available : mode === "ssh-native" ? true : sshCap?.available;
   const hasNativeAuth = mode !== "ssh-native" || (user.trim() && (password || identityFile.trim()));
-  const canSubmit = modeAvailable && filePath.trim() && (mode === "wsl" || target.trim()) && hasNativeAuth;
+  const hostAccepted = mode !== "ssh-native" || Boolean(fingerprint.trim() && trustHostForSession);
+  const discoveringHost = mode === "ssh-native" && !fingerprint.trim();
+  const canTest = modeAvailable && mode !== "wsl" && target.trim() && (discoveringHost || filePath.trim())
+    && (mode !== "ssh-native" || discoveringHost || hasNativeAuth);
+  const canSubmit = modeAvailable && filePath.trim() && (mode === "wsl" || target.trim()) && hasNativeAuth && hostAccepted;
+  const selectedModeHelp = mode === "ssh" ? t("remote_mode_ssh_help")
+    : mode === "ssh-wsl" ? t("remote_mode_ssh_wsl_help")
+    : mode === "ssh-native" ? t("remote_mode_native_help") : t("remote_mode_wsl_help");
+  const authenticationHelp = mode === "ssh" ? t("remote_auth_system")
+    : mode === "ssh-wsl" ? t("remote_auth_wsl")
+    : mode === "ssh-native" ? t("remote_auth_native") : t("remote_auth_local");
 
   useEffect(() => {
     if (!capabilities) return;
     if (mode === "ssh" && !sshCap?.available) setMode("ssh-native");
-    if (mode === "wsl" && !wslCap?.available && sshCap?.available) setMode("ssh");
+    if ((mode === "wsl" || mode === "ssh-wsl") && !wslCap?.available) setMode(sshCap?.available ? "ssh" : "ssh-native");
   }, [capabilities, mode, sshCap?.available, wslCap?.available]);
 
   useEffect(() => {
-    if (mode !== "wsl" || distro || wslDistros.length === 0) return;
+    if ((mode !== "wsl" && mode !== "ssh-wsl") || distro || wslDistros.length === 0) return;
     setDistro(wslDistros[0]);
   }, [mode, distro, wslDistrosKey]);
 
   const submit = (e) => {
     e.preventDefault();
     if (!canSubmit) return;
-    onSelect({ mode, target, user, port, identityFile, password, passphrase, fingerprint, trustHostForSession, distro, filePath, tailLines });
+    onSelect(connectionConfig());
     setPassword("");
     setPassphrase("");
   };
@@ -1950,6 +2080,60 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
     if (!IS_ELECTRON) return;
     const fp = await window.electronAPI.openSshKeyDialog();
     if (fp) setIdentityFile(fp);
+  };
+
+  const connectionConfig = () => ({ mode, target:target.trim(), user:user.trim(), port:String(port).trim(),
+    identityFile:identityFile.trim(), proxyJump:proxyJump.trim(), password, passphrase, fingerprint:fingerprint.trim(),
+    trustHostForSession, distro:distro.trim(), filePath:filePath.trim(), tailLines });
+
+  const loadProfile = (id) => {
+    setSelectedProfile(id);
+    setTestResult(null);
+    const profile = profiles.find(item => item.id === id);
+    if (!profile) return;
+    setMode(profile.mode || "ssh"); setTarget(profile.target || ""); setUser(profile.user || "");
+    setPort(profile.port || ""); setIdentityFile(profile.identityFile || "");
+    setProxyJump(profile.proxyJump || "");
+    setFingerprint(profile.fingerprint || ""); setDistro(profile.distro || "");
+    setFilePath(profile.filePath || ""); setTailLines(profile.tailLines || 500);
+    setProfileName(profile.name || ""); setTrustHostForSession(false);
+  };
+
+  const saveProfile = () => {
+    const name = profileName.trim() || target.trim() || distro.trim() || "SSH";
+    const id = selectedProfile || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const safe = { ...connectionConfig(), id, name };
+    delete safe.password; delete safe.passphrase; delete safe.trustHostForSession;
+    const next = [...profiles.filter(item => item.id !== id), safe];
+    setSelectedProfile(id); setProfileName(name); onProfilesChange?.(next);
+  };
+
+  const deleteProfile = () => {
+    if (!selectedProfile) return;
+    onProfilesChange?.(profiles.filter(item => item.id !== selectedProfile));
+    setSelectedProfile(""); setProfileName("");
+  };
+
+  const testConnection = async () => {
+    setTesting(true); setTestResult(null);
+    try {
+      const result = await window.electronAPI.testRemoteConnection(connectionConfig());
+      if (result?.ok) {
+        if (result.fingerprint) setFingerprint(result.fingerprint);
+        setTestResult({ ok:true, message:t("remote_test_ok") });
+      } else {
+        const message = result?.error || t("capability_unavailable");
+        const detected = message.match(/SHA256:[A-Za-z0-9+/=_-]+/)?.[0];
+        if (detected) {
+          setFingerprint(detected); setAdvanced(true);
+          setTestResult({ ok:true, message:t("remote_identity_found") });
+        } else {
+          setTestResult({ ok:false, message });
+        }
+      }
+    } catch (error) {
+      setTestResult({ ok:false, message:error?.message ?? String(error) });
+    } finally { setTesting(false); }
   };
 
   const inputStyle = {
@@ -1964,43 +2148,139 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
                display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
       <form onSubmit={submit} onClick={e => e.stopPropagation()}
         style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
-                 padding:"24px", minWidth:460, maxWidth:620, fontFamily:"inherit",
+                 padding:"24px", width:"min(620px, calc(100vw - 32px))", maxHeight:"90vh", overflowY:"auto", fontFamily:"inherit",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
         <div style={{ display:"flex", alignItems:"center", marginBottom:16 }}>
           <span style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700 }}>{t("remote_title")}</span>
+          <button type="button" onClick={() => setShowHelp(value => !value)}
+            aria-expanded={showHelp} title={t("remote_help")}
+            style={{ marginLeft:"auto", background:showHelp ? "var(--pl-bg-hover)" : "none",
+              border:"0.5px solid var(--pl-border)", borderRadius:6, color:"var(--pl-accent-hover)",
+              cursor:"pointer", fontSize:10, fontFamily:"inherit", padding:"4px 8px" }}>? {t("remote_help")}</button>
           <button type="button" onClick={onClose}
-            style={{ marginLeft:"auto", background:"none", border:"none",
+            style={{ marginLeft:8, background:"none", border:"none",
                      color:"var(--pl-text-6)", cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>x</button>
         </div>
 
-        <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+        {showHelp && <div style={{ marginBottom:14, padding:"10px 12px", border:"0.5px solid var(--pl-border-focus)",
+          borderRadius:8, background:"var(--pl-bg-input)", color:"var(--pl-text-4)", fontSize:10, lineHeight:1.5 }}>
+          <details open>
+            <summary style={{ cursor:"pointer", color:"var(--pl-text-2)", fontWeight:700 }}>{t("remote_help_agents")}</summary>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(240px, 1fr))", gap:10, marginTop:8 }}>
+              {[
+                ["Windows / PowerShell", [["Start-Service ssh-agent", t("remote_cmd_start")], ["ssh-add $env:USERPROFILE\\.ssh\\id_ed25519", t("remote_cmd_add")], ["ssh-add -l", t("remote_cmd_list")], ["ssh-add -D", t("remote_cmd_remove")], ["Stop-Service ssh-agent", t("remote_cmd_stop")]]],
+                [isWindows ? "Linux / WSL2" : isMac ? "macOS" : "Linux", isMac
+                  ? [["ssh-add --apple-use-keychain ~/.ssh/id_ed25519", t("remote_cmd_add")], ["ssh-add -l", t("remote_cmd_list")], ["ssh-add -D", t("remote_cmd_remove")]]
+                  : [['eval "$(ssh-agent -s)"', t("remote_cmd_start")], ["ssh-add ~/.ssh/id_ed25519", t("remote_cmd_add")], ["ssh-add -l", t("remote_cmd_list")], ["ssh-add -D", t("remote_cmd_remove")], ["ssh-agent -k", t("remote_cmd_stop")]]],
+              ].map(([heading, commands]) => <div key={heading}>
+                <div style={{ fontWeight:700, color:"var(--pl-text-3)", marginBottom:4 }}>{heading}</div>
+                {commands.map(([command, tip]) => <div key={command} title={tip} style={{ display:"flex", alignItems:"center", gap:5, marginTop:3 }}>
+                  <code style={{ flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                    background:"var(--pl-bg-app)", borderRadius:4, padding:"3px 5px", color:"var(--pl-text-3)" }}>{command}</code>
+                  <button type="button" onClick={() => copyResultText(command)} title={`${tip} ${t("remote_help_copy")}: ${command}`}
+                    style={{ border:"0.5px solid var(--pl-border)", borderRadius:4, background:"transparent",
+                      color:"var(--pl-text-5)", cursor:"pointer", fontSize:9, padding:"3px 5px" }}>{t("remote_help_copy")}</button>
+                </div>)}
+              </div>)}
+            </div>
+          </details>
+          <details style={{ marginTop:8 }}>
+            <summary style={{ cursor:"pointer", color:"var(--pl-text-2)", fontWeight:700 }}>{t("remote_help_config")}</summary>
+            <p style={{ margin:"6px 0" }}>{t("remote_help_config_text")}</p>
+            <pre style={{ margin:0, padding:7, overflowX:"auto", background:"var(--pl-bg-app)", borderRadius:5,
+              color:"var(--pl-text-3)" }}>{`Host produccion\n  HostName servidor.ejemplo.com\n  User usuario\n  IdentityFile ~/.ssh/id_ed25519`}</pre>
+          </details>
+          <details style={{ marginTop:8 }}>
+            <summary style={{ cursor:"pointer", color:"var(--pl-text-2)", fontWeight:700 }}>{t("remote_help_access")}</summary>
+            <p style={{ margin:"6px 0 0" }}>{t("remote_help_access_text")}</p>
+          </details>
+        </div>}
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr auto", gap:8, marginBottom:12 }}>
+          <select style={inputStyle} value={selectedProfile} onChange={e => loadProfile(e.target.value)}>
+            <option value="">{t("remote_profile_new")}</option>
+            {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+          </select>
+          <input style={inputStyle} value={profileName} onChange={e => setProfileName(e.target.value)}
+            placeholder={t("remote_profile_name")} />
+          <button type="button" onClick={saveProfile} disabled={!filePath.trim() || (mode !== "wsl" && !target.trim())}
+            style={{ ...inputStyle, width:"auto", cursor:"pointer" }}>{t("remote_profile_save")}</button>
+        </div>
+        {selectedProfile && (
+          <div style={{ textAlign:"right", marginTop:-8, marginBottom:8 }}>
+            <button type="button" onClick={deleteProfile} style={{ border:0, background:"none",
+              color:"var(--pl-error-text)", cursor:"pointer", fontSize:10 }}>{t("remote_profile_delete")}</button>
+          </div>
+        )}
+
+        <div style={{ color:"var(--pl-text-3)", fontSize:11, fontWeight:700, marginBottom:8 }}>
+          {t("remote_connection_type")}
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:8, marginBottom:14 }}>
           {[
-            ["ssh", t("remote_mode_ssh"), sshCap],
-            ["ssh-native", t("remote_mode_native"), { available:true }],
-            ["wsl", t("remote_mode_wsl"), wslCap],
-          ].map(([key, label, cap]) => (
+            ["ssh", t("remote_mode_ssh"), sshCap, t("remote_mode_ssh_help")],
+            ["ssh-wsl", t("remote_mode_ssh_wsl"), wslCap, t("remote_mode_ssh_wsl_help")],
+            ["ssh-native", t("remote_mode_native"), { available:true }, t("remote_mode_native_help")],
+            ["wsl", t("remote_mode_wsl"), wslCap, t("remote_mode_wsl_help")],
+          ].filter(([key]) => isWindows || (key !== "ssh-wsl" && key !== "wsl")).map(([key, label, cap, help]) => (
             <button key={key} type="button" onClick={() => cap?.available && setMode(key)}
               disabled={!cap?.available}
-              title={cap?.available ? label : (cap?.reason || t("capability_unavailable"))}
-              style={{ background: mode === key ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+              title={cap?.available ? help : `${help}\n\n${cap?.reason || t("capability_unavailable")}`}
+              aria-label={`${label}. ${help}`}
+              style={{ background: mode === key ? "var(--pl-bg-hover)" : "var(--pl-bg-input)", textAlign:"left",
                        border:`0.5px solid ${mode === key ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
                        borderRadius:6, color: mode === key ? "var(--pl-accent-hover)" : cap?.available ? "var(--pl-text-5)" : "var(--pl-text-7)",
-                       fontFamily:"inherit", fontSize:12, padding:"5px 18px",
+                       fontFamily:"inherit", fontSize:12, padding:"9px 11px",
                        cursor: cap?.available ? "pointer" : "not-allowed",
                        opacity: cap?.available ? 1 : 0.45,
                        fontWeight: mode === key ? 700 : 400 }}>
-              {label}
+              <span style={{ display:"block" }}>{label}</span>
+              <span style={{ display:"block", marginTop:3, fontSize:9, fontWeight:400,
+                color:cap?.available ? "var(--pl-status-live)" : "var(--pl-text-7)" }}>
+                {cap?.available ? `✓ ${t("remote_available")}` : `— ${t("remote_unavailable")}`}
+              </span>
             </button>
           ))}
         </div>
 
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 110px", gap:10, marginBottom:10 }}>
-          {mode === "ssh" || mode === "ssh-native" ? (
+        <div role="note" style={{ marginTop:-6, marginBottom:12, padding:"7px 9px",
+          borderLeft:"2px solid var(--pl-accent)", background:"var(--pl-bg-input)",
+          color:"var(--pl-text-4)", fontSize:10, lineHeight:1.5 }}>
+          {selectedModeHelp}
+        </div>
+
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, padding:"9px 10px",
+          border:"0.5px solid var(--pl-border)", borderRadius:6, background:"var(--pl-bg-input)" }}>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ color:"var(--pl-text-3)", fontSize:10, fontWeight:700, marginBottom:3 }}>{t("remote_auth_heading")}</div>
+            <div style={{ color:"var(--pl-text-5)", fontSize:10, lineHeight:1.45 }}>{authenticationHelp}</div>
+          </div>
+          {mode === "ssh" && <span style={{ flexShrink:0, borderRadius:10, padding:"4px 8px", fontSize:9,
+            color:sshCap?.agent?.keysLoaded ? "var(--pl-status-live)" : sshCap?.agent?.running ? "var(--pl-status-warn)" : "var(--pl-error-text)",
+            background:sshCap?.agent?.keysLoaded ? "var(--pl-bg-hover)" : sshCap?.agent?.running ? "var(--pl-diag-warn-bg)" : "var(--pl-error-bg)",
+            border:`0.5px solid ${sshCap?.agent?.keysLoaded ? "var(--pl-status-live)" : sshCap?.agent?.running ? "var(--pl-status-warn)" : "var(--pl-error-border)"}` }}>
+            {sshCap?.agent?.running
+              ? sshCap.agent.keysLoaded ? t("remote_agent_keys", sshCap.agent.keyCount) : t("remote_agent_empty")
+              : t("remote_agent_off")}
+          </span>}
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:advanced ? "1fr 110px" : "1fr", gap:10, marginBottom:10 }}>
+          {mode !== "wsl" ? (
             <>
+              {(mode === "ssh" || mode === "ssh-wsl") && configuredHosts.length > 0 && (
+                <select style={{ ...inputStyle, gridColumn:advanced ? "1 / -1" : undefined }}
+                  aria-label={t("remote_config_alias")}
+                  value={configuredHosts.includes(target) ? target : ""}
+                  onChange={e => setTarget(e.target.value)}>
+                  <option value="">{t("remote_config_manual")}</option>
+                  {configuredHosts.map(host => <option key={host} value={host}>{host}</option>)}
+                </select>
+              )}
               <input style={inputStyle} value={target} onChange={e => setTarget(e.target.value)}
                 placeholder={`${t("remote_host")} (prod-web, host)`} />
-              <input style={inputStyle} value={port} onChange={e => setPort(e.target.value)}
-                placeholder={t("remote_port")} />
+              {advanced && <input style={inputStyle} value={port} onChange={e => setPort(e.target.value)}
+                placeholder={t("remote_port")} />}
             </>
           ) : (
             <>
@@ -2019,22 +2299,52 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
           )}
         </div>
 
-        {(mode === "ssh" || mode === "ssh-native") && (
+        <button type="button" onClick={() => setAdvanced(value => !value)}
+          style={{ border:0, background:"none", color:"var(--pl-accent-hover)", cursor:"pointer",
+                   fontSize:11, padding:"2px 0", marginBottom:8 }}>
+          {advanced ? "▾" : "▸"} {t("remote_advanced")}
+        </button>
+
+        {advanced && mode !== "wsl" && (
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 78px", gap:10, marginBottom:10 }}>
             <input style={inputStyle} value={user} onChange={e => setUser(e.target.value)}
               placeholder={`${t("remote_user")} (opcional)`} />
-            <input style={inputStyle} value={identityFile} onChange={e => setIdentityFile(e.target.value)}
-              placeholder={`${t("remote_key")} (opcional)`} />
-            <button type="button" onClick={pickIdentityFile}
-              style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
-                       borderRadius:6, color:"var(--pl-text-3)", fontFamily:"inherit",
-                       fontSize:11, padding:"7px 8px", cursor:"pointer" }}>
-              {t("remote_key_pick")}
-            </button>
+            {mode !== "ssh-wsl" ? <>
+              <input style={inputStyle} value={identityFile} onChange={e => setIdentityFile(e.target.value)}
+                placeholder={`${t("remote_key")} (opcional)`} />
+              <button type="button" onClick={pickIdentityFile}
+                style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                         borderRadius:6, color:"var(--pl-text-3)", fontFamily:"inherit",
+                         fontSize:11, padding:"7px 8px", cursor:"pointer" }}>
+                {t("remote_key_pick")}
+              </button>
+            </> : <span style={{ gridColumn:"span 2", color:"var(--pl-text-5)", fontSize:10, alignSelf:"center" }}>
+              ~/.ssh/config · SSH Agent · llaves de WSL2
+            </span>}
           </div>
         )}
 
-        {mode === "ssh-native" && (
+        {advanced && (mode === "ssh" || mode === "ssh-wsl") && (
+          <input style={{ ...inputStyle, marginBottom:10 }} value={proxyJump}
+            onChange={e => setProxyJump(e.target.value)}
+            placeholder={`${t("remote_proxy_jump")} (bastion, usuario@host)`} />
+        )}
+
+        {mode === "ssh-wsl" && (
+          <div style={{ marginBottom:10 }}>
+            {wslDistros.length > 0 ? (
+              <select style={inputStyle} value={distro} onChange={e => setDistro(e.target.value)}>
+                <option value="">WSL2 predeterminado</option>
+                {wslDistros.map(name => <option key={name} value={name}>{name}</option>)}
+              </select>
+            ) : (
+              <input style={inputStyle} value={distro} onChange={e => setDistro(e.target.value)}
+                placeholder={`${t("remote_distro")} (Ubuntu)`} />
+            )}
+          </div>
+        )}
+
+        {advanced && mode === "ssh-native" && (
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
             <input style={inputStyle} type="password" value={password} onChange={e => setPassword(e.target.value)}
               placeholder={`${t("remote_password")} (opcional)`} />
@@ -2043,13 +2353,13 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
           </div>
         )}
 
-        {mode === "ssh-native" && (
+        {advanced && mode === "ssh-native" && (
           <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:10, alignItems:"center", marginBottom:10 }}>
             <input style={inputStyle} value={fingerprint} onChange={e => setFingerprint(e.target.value)}
               placeholder={`${t("remote_fingerprint")} SHA256:...`} />
             <label style={{ display:"flex", alignItems:"center", gap:6, color:"var(--pl-text-4)", fontSize:10, whiteSpace:"nowrap" }}>
               <input type="checkbox" checked={trustHostForSession} onChange={e => setTrustHostForSession(e.target.checked)} />
-              {t("remote_trust_host")}
+              {t("remote_verify_host")}
             </label>
           </div>
         )}
@@ -2057,7 +2367,7 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
         <div style={{ display:"grid", gridTemplateColumns:"1fr 110px", gap:10, marginBottom:12 }}>
           <input style={inputStyle} value={filePath} onChange={e => setFilePath(e.target.value)}
             placeholder={`${t("remote_path")} (/var/log/app.log)`} />
-          {mode === "ssh" ? (
+          {mode !== "wsl" ? (
             <input style={inputStyle} value={tailLines} onChange={e => setTailLines(e.target.value)}
               placeholder={t("remote_tail")} />
           ) : (
@@ -2069,11 +2379,27 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
           {t("remote_hint")}
           {!modeAvailable && (
             <div style={{ color:"var(--pl-error-border)", marginTop:6 }}>
-              {mode === "wsl" ? (wslCap?.reason || t("capability_unavailable")) : (sshCap?.reason || t("capability_unavailable"))}
+              {mode === "wsl" || mode === "ssh-wsl" ? (wslCap?.reason || t("capability_unavailable")) : (sshCap?.reason || t("capability_unavailable"))}
             </div>
           )}
         </div>
 
+        {testResult && (
+          <div style={{ padding:"7px 9px", marginBottom:10, borderRadius:6, fontSize:11,
+            color:testResult.ok ? "var(--pl-status-live)" : "var(--pl-error-text)",
+            background:testResult.ok ? "var(--pl-bg-hover)" : "var(--pl-error-bg)" }}>
+            {testResult.ok ? "✓ " : "⚠ "}{testResult.message}
+          </div>
+        )}
+
+        {mode !== "wsl" && (
+          <button type="button" onClick={testConnection} disabled={!canTest || testing}
+            style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                     borderRadius:6, color:"var(--pl-text-3)", fontFamily:"inherit", fontSize:11,
+                     padding:"7px 14px", cursor:canTest && !testing ? "pointer" : "not-allowed", marginRight:10 }}>
+            {testing ? t("remote_testing") : discoveringHost ? t("remote_detect_identity") : t("remote_test")}
+          </button>
+        )}
         <button type="submit" disabled={!canSubmit}
           style={{ background: canSubmit ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
                    border:`0.5px solid ${canSubmit ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
@@ -2093,13 +2419,15 @@ function RemotePicker({ onSelect, onClose, capabilities }) {
   );
 }
 
-function RemoteTab({ tabKey, config, maxLiveLines }) {
+function RemoteTab({ tabKey, config, maxLiveLines, onConfigureConnection }) {
   const t = useLang();
   const selectionSource = `${config.mode || "remote"}-${config.filePath || "logs"}`;
   const [classified, setClassified] = useState([]);
   const [spawned,    setSpawned]   = useState(false);
   const [connected,  setConnected] = useState(false);
   const [error,      setError]     = useState(null);
+  const [retryNonce, setRetryNonce]= useState(0);
+  const [reconnectIn,setReconnectIn]= useState(0);
   const [filter,       setFilter]       = useRememberedState(tabKey, "filter", "");
   const [filterUseRegex, setFilterUseRegex] = useRememberedState(tabKey, "useRegex", false);
   const filterDebounced = useDebouncedValue(filter);
@@ -2123,6 +2451,7 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
   const listRef       = useRef(null);
   const nextLineRef   = useRef(1);
   const autoScrollRef = useRef(true);
+  const reconnectAttemptRef = useRef(0);
   const enqueueLines = useBatchedLines(incoming => {
     const batch = classifyLines(incoming, nextLineRef.current);
     nextLineRef.current += incoming.length;
@@ -2133,18 +2462,49 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
 
   useEffect(() => {
+    let disposed = false;
+    let retryTimer = null;
+    let countdownTimer = null;
+    setReconnectIn(0);
+    const scheduleReconnect = (message) => {
+      if (disposed || !/(timed? ?out|timeout|reset|closed|econn|network|socket|disconnect|terminated|terminó)/i.test(message || "")) return;
+      const seconds = Math.min(30, 2 ** Math.min(reconnectAttemptRef.current++, 5));
+      setReconnectIn(seconds);
+      countdownTimer = setInterval(() => setReconnectIn(value => Math.max(0, value - 1)), 1000);
+      retryTimer = setTimeout(() => {
+        clearInterval(countdownTimer);
+        if (!disposed) setRetryNonce(value => value + 1);
+      }, seconds * 1000);
+    };
     const unwatch = window.electronAPI.streamRemoteLogs(config, {
-      onSpawned() { setSpawned(true); setConnected(true); },
+      onSpawned() { reconnectAttemptRef.current = 0; setReconnectIn(0); setError(null); setSpawned(true); setConnected(true); },
       onLines(text) {
         enqueueLines(text.split("\n").filter(Boolean));
       },
-      onEnd()      { setConnected(false); },
-      onError(msg) { setError(msg); setConnected(false); },
+      onEnd()      { setConnected(false); setError(t("remote_disconnected")); scheduleReconnect("connection terminated"); },
+      onError(msg) { setError(msg); setConnected(false); scheduleReconnect(msg); },
     });
-    return unwatch;
-  }, [config]);
+    return () => {
+      disposed = true;
+      clearTimeout(retryTimer);
+      clearInterval(countdownTimer);
+      unwatch?.();
+    };
+  }, [config, retryNonce]);
 
   const stats = useMemo(() => countLevels(classified), [classified]);
+  const reconnectNeedsConfig = Boolean(config.password || config.passphrase)
+    || /permission denied|authentication|password|passphrase|publickey/i.test(error || "");
+  const reconnectNow = () => {
+    if (reconnectNeedsConfig) {
+      onConfigureConnection?.();
+      return;
+    }
+    reconnectAttemptRef.current = 0;
+    setReconnectIn(0);
+    setError(null);
+    setRetryNonce(value => value + 1);
+  };
 
   const { filtered, filterRegexValid, searchRegexValid, matchOrigLines } =
     useFilteredLogs("remote", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, reportMetric);
@@ -2193,6 +2553,8 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
   const toggle = key => setLvl(p => ({ ...p, [key]: !p[key] }));
   const modeLabel = config.mode === "wsl"
     ? t("remote_mode_wsl")
+    : config.mode === "ssh-wsl"
+      ? t("remote_mode_ssh_wsl")
     : config.mode === "ssh-native"
       ? t("remote_mode_native")
       : t("remote_mode_ssh");
@@ -2201,7 +2563,9 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
     : config.target;
   const targetLabel = config.mode === "wsl"
     ? (config.distro ? `${config.distro}:${config.filePath}` : config.filePath)
-    : `${sshTarget}:${config.filePath}`;
+    : config.mode === "ssh-wsl" && config.distro
+      ? `${config.distro} → ${sshTarget}:${config.filePath}`
+      : `${sshTarget}:${config.filePath}`;
 
   const BADGES = [
     { key:"error", label:"ERROR", bg:"var(--pl-chip-error-bg)", fg:"var(--pl-chip-error-fg)", cnt:stats.error },
@@ -2260,6 +2624,8 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
             </button>
           </div>
 
+          <ContextInput value={context} onChange={setContext} />
+
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
               style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
@@ -2286,19 +2652,6 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
                        cursor:"pointer", fontWeight: searchUseRegex ? 700 : 400 }}>
               .*
             </button>
-          </div>
-
-          <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}
-               title={t("context_title")}>
-            <span style={{ fontSize:10, color:"var(--pl-text-5)" }}>±</span>
-            <input
-              type="number" min={0} max={50}
-              value={context}
-              onChange={e => setContext(Math.max(0, Math.min(50, Number(e.target.value) || 0)))}
-              style={{ width:40, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
-                       borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
-                       padding:"3px 4px", textAlign:"center" }}
-            />
           </div>
 
           {(filter || search) && matchOrigLines.length > 0 && (
@@ -2343,9 +2696,18 @@ function RemoteTab({ tabKey, config, maxLiveLines }) {
       </div>
 
       {error && (
-        <div style={{ padding:"6px 14px", background:"var(--pl-error-bg)", borderBottom:"1px solid var(--pl-error-border)",
+        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 14px", background:"var(--pl-error-bg)", borderBottom:"1px solid var(--pl-error-border)",
                       color:"var(--pl-error-text)", fontSize:12, flexShrink:0, fontFamily:"inherit" }}>
-          ⚠ {error}
+          <span style={{ flex:1, minWidth:0 }}>⚠ {error}
+            {reconnectIn > 0 && <span style={{ marginLeft:10 }}>{t("remote_reconnecting", reconnectIn)}</span>}
+          </span>
+          <button type="button" onClick={reconnectNow}
+            title={reconnectNeedsConfig ? t("remote_reconfigure") : t("remote_reconnect")}
+            style={{ flexShrink:0, border:"0.5px solid var(--pl-error-border)", borderRadius:5,
+              background:"var(--pl-bg-input)", color:"var(--pl-text-2)", cursor:"pointer", fontFamily:"inherit",
+              fontSize:10, padding:"4px 8px" }}>
+            {reconnectNeedsConfig ? t("remote_reconfigure") : t("remote_reconnect")}
+          </button>
         </div>
       )}
 
@@ -2466,8 +2828,10 @@ function usePaneTabs(setSettings) {
     const id = nextId++;
     const name = config.mode === "wsl"
       ? (config.distro ? `WSL ${config.distro}` : "WSL")
+      : config.mode === "ssh-wsl"
+        ? `${config.distro || "WSL"} → ${config.target}`
       : (config.user && !config.target.includes("@") ? `${config.user}@${config.target}` : config.target);
-    const prefix = config.mode === "wsl" ? "WSL" : config.mode === "ssh-native" ? "SSH*" : "SSH";
+    const prefix = config.mode === "wsl" ? "WSL2" : config.mode === "ssh-wsl" ? "SSH WSL2" : config.mode === "ssh-native" ? "SSH directo" : "SSH";
     setTabs(p => [...p, {
       id,
       label: `${prefix} ${name}`,
@@ -2499,6 +2863,7 @@ function usePaneTabs(setSettings) {
   const duplicateTab = (tabId) => {
     const idx = tabsRef.current.findIndex(t => t.id === tabId);
     if (idx === -1) return;
+    if (tabsRef.current[idx]?.remote) return;
     const newId = nextId++;
     setTabs(prev => {
       const currentIdx = prev.findIndex(t => t.id === tabId);
@@ -2595,7 +2960,7 @@ function usePaneTabs(setSettings) {
    these are rendered by App() (side by side or
    stacked) when split, one when not.
 ═══════════════════════════════════════════ */
-function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
+function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemoteProfilesChange }) {
   const t = useLang();
   const {
     tabs, active, setActive,
@@ -2677,6 +3042,17 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
       const file = files[0];
       addTab(file.name, "__web__", file.size, { webFile:file });
     }
+  };
+
+  const submitRemotePicker = (config) => {
+    if (remotePicker && typeof remotePicker === "object" && remotePicker.tabId) {
+      pane.setTabs(previous => previous.map(tab => tab.id === remotePicker.tabId
+        ? { ...tab, remote:config, reloadNonce:(tab.reloadNonce || 0) + 1 }
+        : tab));
+      setRemotePicker(false);
+      return;
+    }
+    openRemoteTab(config);
   };
 
   return (
@@ -2795,7 +3171,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
                      borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0,
                      fontFamily:"inherit", fontWeight:700 }}
             title={remoteEnabled ? t("remote_btn_title") : (sshCap?.reason || wslCap?.reason || t("capability_checking"))}>
-            SSH
+            SSH / WSL
           </button>
         )}
 
@@ -2818,7 +3194,9 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
                          containerId={tab.docker.containerId} containerName={tab.docker.name} />
             : tab.remote
               ? <RemoteTab key={`remote-${tab.id}-${tab.reloadNonce || 0}`}
-                           tabKey={String(tab.id)} maxLiveLines={settings.maxLiveLines} config={tab.remote} />
+                           tabKey={String(tab.id)} maxLiveLines={settings.maxLiveLines} config={tab.remote}
+                           onConfigureConnection={() => setRemotePicker({ tabId:tab.id,
+                             config:{ ...tab.remote, password:"", passphrase:"", trustHostForSession:false } })} />
               : tab.filePath
                 ? <LogTab key={`${tab.id}-${tab.filePath}-${tab.reloadNonce || 0}`}
                           tabKey={String(tab.id)} filePath={tab.filePath} webFile={tab.webFile || null}
@@ -2832,7 +3210,10 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings }) {
       ))}
 
       {dockerPicker && <DockerPicker onSelect={openDockerTab} onClose={() => setDockerPicker(false)} />}
-      {remotePicker && <RemotePicker onSelect={openRemoteTab} onClose={() => setRemotePicker(false)} capabilities={capabilities} />}
+      {remotePicker && <RemotePicker onSelect={submitRemotePicker} onClose={() => setRemotePicker(false)}
+        capabilities={capabilities} profiles={settings.remoteProfiles || []}
+        onProfilesChange={onRemoteProfilesChange}
+        initialConfig={typeof remotePicker === "object" ? remotePicker.config : null} />}
     </div>
   );
 }
@@ -2843,7 +3224,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen]= useState(false);
   const [capabilities, setCapabilities]= useState(null);
   const [settings,     setSettings]    = useState({
-    recentFiles:[], autoScrollDefault:false, showNumsDefault:true, maxLiveLines:500000, language:"es", theme:"classic"
+    recentFiles:[], remoteProfiles:[], autoScrollDefault:false, showNumsDefault:true, maxLiveLines:500000, language:"es", theme:"classic"
   });
   const [splitDirection, setSplitDirection] = useState(null); // null | "row" | "column"
   const [splitRatio,     setSplitRatio]     = useState(0.5);
@@ -2908,6 +3289,11 @@ export default function App() {
   const clearAllRecent = useCallback(async () => {
     await window.electronAPI.setSettings({ recentFiles: [] });
     setSettings(prev => ({ ...prev, recentFiles: [] }));
+  }, []);
+
+  const saveRemoteProfiles = useCallback((remoteProfiles) => {
+    setSettings(prev => ({ ...prev, remoteProfiles }));
+    if (IS_ELECTRON) window.electronAPI.setSettings({ remoteProfiles });
   }, []);
 
   const closeSplit = () => {
@@ -3091,7 +3477,8 @@ export default function App() {
           <div style={{ flexBasis: splitDirection ? `${splitRatio*100}%` : "100%",
                         minWidth:0, minHeight:0, display:"flex", overflow:"hidden" }}>
             <Pane paneId="A" focused={focusedPane==="A"} onFocus={() => setFocusedPane("A")}
-                  pane={paneA} capabilities={capabilities} settings={settings} />
+                  pane={paneA} capabilities={capabilities} settings={settings}
+                  onRemoteProfilesChange={saveRemoteProfiles} />
           </div>
 
           {splitDirection && (
@@ -3103,7 +3490,8 @@ export default function App() {
               <div style={{ flexBasis: `${(1-splitRatio)*100}%`,
                             minWidth:0, minHeight:0, display:"flex", overflow:"hidden" }}>
                 <Pane paneId="B" focused={focusedPane==="B"} onFocus={() => setFocusedPane("B")}
-                      pane={paneB} capabilities={capabilities} settings={settings} />
+                      pane={paneB} capabilities={capabilities} settings={settings}
+                      onRemoteProfilesChange={saveRemoteProfiles} />
               </div>
             </>
           )}

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut, clipboard } = require("electron");
 const path = require("path");
 const fs   = require("fs");
+const crypto = require("crypto");
 const { StringDecoder } = require("string_decoder");
 const http           = require("http");
 const { execFile, spawn } = require("child_process");
@@ -89,7 +90,7 @@ function explainError(category, msg) {
   }
   if (category === "remote") {
     if (lower.includes("host key") || lower.includes("fingerprint"))
-      return "No se pudo validar la identidad del host SSH. Revisa el fingerprint o marca confianza por sesion.";
+      return "No se pudo validar la huella (fingerprint) del servidor. Comprueba la huella mostrada antes de continuar.";
     if (lower.includes("authentication") || lower.includes("auth") || lower.includes("permission denied"))
       return "Autenticacion SSH rechazada. Revisa usuario, contrasena, llave o passphrase.";
     if (lower.includes("timed out") || lower.includes("timeout") || lower.includes("connect"))
@@ -143,6 +144,52 @@ function parseWslDistros(output) {
     .filter(name => !/^docker-desktop(?:-data)?$/i.test(name));
 }
 
+function parseSshConfigHosts(contents) {
+  const hosts = [];
+  const seen = new Set();
+  for (const rawLine of String(contents || "").split(/\r?\n/)) {
+    const line = rawLine.replace(/\s+#.*$/, "").trim();
+    const match = line.match(/^Host\s+(.+)$/i);
+    if (!match) continue;
+    for (const host of match[1].trim().split(/\s+/)) {
+      if (!host || host.startsWith("!") || /[*?]/.test(host) || seen.has(host)) continue;
+      seen.add(host);
+      hosts.push(host);
+    }
+  }
+  return hosts.slice(0, 250);
+}
+
+function readSystemSshHosts() {
+  try {
+    return parseSshConfigHosts(fs.readFileSync(path.join(app.getPath("home"), ".ssh", "config"), "utf8"));
+  } catch {
+    return [];
+  }
+}
+
+async function readWslSshHosts(distro) {
+  const result = await checkCommand("wsl.exe", ["-d", distro, "--", "sh", "-lc", "test -r ~/.ssh/config && cat ~/.ssh/config"], { timeout:5000 });
+  return result.available ? parseSshConfigHosts(result.detail) : [];
+}
+
+function checkSshAgent() {
+  return new Promise(resolve => {
+    execFile("ssh-add", ["-l"], { timeout:3000, windowsHide:true }, (error, stdout, stderr) => {
+      if (!error) {
+        const keyCount = String(stdout || "").split(/\r?\n/).filter(Boolean).length;
+        resolve({ running:true, keysLoaded:keyCount > 0, keyCount });
+        return;
+      }
+      const message = String(stderr || stdout || error.message || "").trim();
+      const runningWithoutKeys = error.code === 1 && /no identities/i.test(message);
+      resolve(runningWithoutKeys
+        ? { running:true, keysLoaded:false, keyCount:0 }
+        : { running:false, keysLoaded:false, keyCount:0 });
+    });
+  });
+}
+
 async function getSystemCapabilities() {
   const [docker, ssh, wsl] = await Promise.all([
     checkCommand("docker", ["version", "--format", "{{.Server.Version}}"]),
@@ -156,7 +203,13 @@ async function getSystemCapabilities() {
     const listed = await checkCommand("wsl.exe", ["-l", "-q"]);
     wsl.distros = listed.available ? parseWslDistros(listed.detail) : [];
     if (!listed.available) wsl.reason = listed.reason;
+    wsl.sshHosts = Object.fromEntries(await Promise.all(
+      wsl.distros.map(async distro => [distro, await readWslSshHosts(distro)])
+    ));
   }
+
+  ssh.hosts = ssh.available ? readSystemSshHosts() : [];
+  ssh.agent = ssh.available ? await checkSshAgent() : { running:false, keysLoaded:false, keyCount:0 };
 
   return {
     platform: process.platform,
@@ -357,6 +410,10 @@ function buildMenu(win, recentFiles = []) {
       { id:"open-recent", label:"Abrir reciente", submenu:recentSubmenu },
       { label:"Nueva pestaña",  accelerator:"CmdOrCtrl+T",
         click: () => win.webContents.send("menu:new-tab") },
+      { label:"Cerrar pestaña", accelerator:"CmdOrCtrl+W",
+        click: () => win.webContents.send("global:close-tab") },
+      { label:"Reabrir pestaña cerrada", accelerator:"CmdOrCtrl+Shift+T",
+        click: () => win.webContents.send("global:reopen-tab") },
       { type:"separator" }, { role:"quit", label:"Salir" },
     ]},
     { label: "Ver", submenu: [
@@ -405,7 +462,7 @@ ipcMain.handle("dialog:ssh-key", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
     title: "Seleccionar llave privada SSH",
     filters: [
-      { name:"SSH keys", extensions:["pem","key","ppk","*"] },
+      { name:"SSH keys", extensions:["pem","key","*"] },
       { name:"Todos", extensions:["*"] },
     ],
     properties: ["openFile"],
@@ -803,6 +860,7 @@ function stopDockerStream(streamId) {
 
 /* ─── Remote logs: SSH / WSL tail -F ─── */
 const remoteStreams = new Map(); // streamId → { proc, stopped, label }
+const REMOTE_READY_MARKER = "__PULPLOG_REMOTE_READY__";
 
 function quotePosixArg(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -818,8 +876,12 @@ function normalizeFingerprint(value) {
   return String(value || "")
     .trim()
     .replace(/^SHA256:/i, "")
-    .replace(/[\s:]/g, "")
-    .toLowerCase();
+    .replace(/\s/g, "")
+    .replace(/=+$/, "");
+}
+
+function formatHostFingerprint(key) {
+  return `SHA256:${crypto.createHash("sha256").update(key).digest("base64").replace(/=+$/, "")}`;
 }
 
 function validateSshTarget(config) {
@@ -844,7 +906,7 @@ function validateSshTarget(config) {
 }
 
 function buildRemoteCommand(config) {
-  const mode = config?.mode === "wsl" ? "wsl" : "ssh";
+  const mode = ["wsl", "ssh-wsl"].includes(config?.mode) ? config.mode : "ssh";
   const filePath = String(config?.filePath || "").trim();
   const tailLines = normalizeTailLines(config?.tailLines);
   if (!filePath) throw new Error("La ruta de la bitácora es obligatoria");
@@ -869,12 +931,115 @@ function buildRemoteCommand(config) {
     port: String(config?.port || "").trim(),
   };
 
-  const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"];
+  const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+    "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
   if (port) args.push("-p", port);
   if (identityFile) args.push("-i", identityFile, "-o", "IdentitiesOnly=yes");
+  const proxyJump = String(config?.proxyJump || "").trim();
+  if (proxyJump) {
+    if (proxyJump.startsWith("-") || /\s/.test(proxyJump)) throw new Error("Servidor intermedio inválido");
+    args.push("-J", proxyJump);
+  }
   const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
-  args.push(sshTarget, `tail -n ${tailLines} -F -- ${quotePosixArg(filePath)}`);
+  args.push(sshTarget, `printf '${REMOTE_READY_MARKER}\\n'; exec tail -n ${tailLines} -F -- ${quotePosixArg(filePath)}`);
+  if (mode === "ssh-wsl") {
+    if (process.platform !== "win32") throw new Error("SSH desde WSL2 solo está disponible en Windows");
+    const distro = String(config?.distro || "").trim();
+    if (distro.startsWith("-")) throw new Error("Nombre de distro WSL inválido");
+    const wslArgs = [];
+    if (distro) wslArgs.push("-d", distro);
+    wslArgs.push("--", "ssh", ...args);
+    return { command:"wsl.exe", args:wslArgs, label:`WSL SSH:${distro || "default"}:${sshTarget}:${filePath}` };
+  }
   return { command: "ssh", args, label: `${sshTarget}:${filePath}` };
+}
+
+function testSystemSsh(config) {
+  const filePath = String(config?.filePath || "").trim();
+  if (!filePath) return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
+  const { target, user, port, identityFile } = { ...validateSshTarget(config), user:String(config?.user || "").trim(), port:String(config?.port || "").trim() };
+  const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new"];
+  if (port) args.push("-p", port);
+  if (identityFile) args.push("-i", identityFile, "-o", "IdentitiesOnly=yes");
+  const proxyJump = String(config?.proxyJump || "").trim();
+  if (proxyJump) {
+    if (proxyJump.startsWith("-") || /\s/.test(proxyJump)) return Promise.reject(new Error("Servidor intermedio inválido"));
+    args.push("-J", proxyJump);
+  }
+  const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
+  args.push(sshTarget, `command -v tail >/dev/null && test -r ${quotePosixArg(filePath)}`);
+  let command = "ssh";
+  let commandArgs = args;
+  if (config?.mode === "ssh-wsl") {
+    if (process.platform !== "win32") return Promise.reject(new Error("SSH desde WSL2 solo está disponible en Windows"));
+    const distro = String(config?.distro || "").trim();
+    if (distro.startsWith("-")) return Promise.reject(new Error("Nombre de distro WSL inválido"));
+    command = "wsl.exe";
+    commandArgs = [...(distro ? ["-d", distro] : []), "--", "ssh", ...args];
+  }
+  return new Promise((resolve, reject) => {
+    execFile(command, commandArgs, { timeout:15000, windowsHide:true }, (error, _stdout, stderr) => {
+      if (error) return reject(new Error(String(stderr || error.message).trim()));
+      resolve({ ok:true, fingerprint:null });
+    });
+  });
+}
+
+function testNativeSsh(config) {
+  const filePath = String(config?.filePath || "").trim();
+  const { host, username:requestedUsername, port, identityFile } = validateSshTarget(config);
+  const expectedFingerprint = normalizeFingerprint(config?.fingerprint);
+  const trustHostForSession = Boolean(config?.trustHostForSession);
+  const discoveringHost = !expectedFingerprint && !trustHostForSession;
+  if (!discoveringHost && !filePath) return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
+  const username = requestedUsername || (discoveringHost ? (process.env.USERNAME || "pulplog") : "");
+  if (!username) return Promise.reject(new Error("El usuario SSH es obligatorio para validar el acceso"));
+  const password = String(config?.password || "");
+  const passphrase = String(config?.passphrase || "");
+  if (!discoveringHost && !password && !identityFile)
+    return Promise.reject(new Error("Ingresa contraseña o llave privada para validar el acceso"));
+  return new Promise((resolve, reject) => {
+    const client = new SshClient();
+    let settled = false;
+    let seenFingerprint = "";
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      try { client.end(); } catch {}
+      error ? reject(error) : resolve(result);
+    };
+    const connection = {
+      host, port, username, password:password || undefined,
+      readyTimeout:12000, keepaliveInterval:15000, keepaliveCountMax:3,
+      tryKeyboard:false,
+      hostVerifier(key) {
+        seenFingerprint = formatHostFingerprint(key);
+        if (expectedFingerprint) return normalizeFingerprint(seenFingerprint) === expectedFingerprint;
+        return trustHostForSession;
+      },
+    };
+    if (identityFile) {
+      connection.privateKey = fs.readFileSync(identityFile);
+      if (passphrase) connection.passphrase = passphrase;
+    }
+    client.once("ready", () => client.exec(
+      `command -v tail >/dev/null && test -r ${quotePosixArg(filePath)}`,
+      (error, channel) => {
+        if (error) return finish(error);
+        let stderr = "";
+        channel.stderr.on("data", data => { stderr += data.toString("utf8"); });
+        channel.on("close", code => code === 0
+          ? finish(null, { ok:true, fingerprint:seenFingerprint })
+          : finish(new Error(stderr.trim() || `Validación remota terminó con código ${code}`)));
+      }
+    ));
+    client.once("error", error => {
+      const hint = seenFingerprint && !expectedFingerprint
+        ? ` Huella (fingerprint) del servidor: ${seenFingerprint}` : "";
+      finish(new Error(`${error.message}${hint}`));
+    });
+    client.connect(connection);
+  });
 }
 
 function startNativeSshStream(event, payload) {
@@ -896,11 +1061,12 @@ function startNativeSshStream(event, payload) {
     port,
     username,
     readyTimeout: 12000,
+    keepaliveInterval: 15000,
+    keepaliveCountMax: 3,
     tryKeyboard: false,
-    hostHash: "sha256",
-    hostVerifier(hash) {
-      seenFingerprint = hash;
-      if (expectedFingerprint) return normalizeFingerprint(hash) === expectedFingerprint;
+    hostVerifier(key) {
+      seenFingerprint = formatHostFingerprint(key);
+      if (expectedFingerprint) return normalizeFingerprint(seenFingerprint) === expectedFingerprint;
       return trustHostForSession;
     },
   };
@@ -915,6 +1081,7 @@ function startNativeSshStream(event, payload) {
   const client = new SshClient();
   const stream = { client, channel: null, stopped: false, label };
   let lineBuf = "";
+  let stderrBuf = "";
   let hadLines = false;
 
   function send(ch, ...args) {
@@ -934,7 +1101,6 @@ function startNativeSshStream(event, payload) {
 
   client.on("ready", () => {
     logEntry("INFO", "remote", `SSH nativo conectado: ${label}`);
-    send("remote:spawned", streamId);
     client.exec(`tail -n ${tailLines} -F -- ${quotePosixArg(filePath)}`, (err, channel) => {
       if (err) {
         remoteStreams.delete(streamId);
@@ -944,8 +1110,9 @@ function startNativeSshStream(event, payload) {
         return;
       }
       stream.channel = channel;
+      send("remote:spawned", streamId);
       channel.on("data", flushLines);
-      channel.stderr.on("data", flushLines);
+      channel.stderr.on("data", data => { stderrBuf += data.toString("utf8"); });
       channel.on("close", (code) => {
         remoteStreams.delete(streamId);
         client.end();
@@ -953,8 +1120,8 @@ function startNativeSshStream(event, payload) {
           logEntry("INFO", "remote", `SSH nativo detenido: ${label}`);
           return;
         }
-        if (code && !hadLines) {
-          const msg = `tail terminó con código ${code}`;
+        if (code) {
+          const msg = stderrBuf.trim() || `tail terminó con código ${code}`;
           logEntry("ERROR", "remote", `${label}: ${msg}`);
           showErrorAlert(event.sender, "remote", "Error remoto", msg);
           send("remote:error", streamId, msg);
@@ -969,7 +1136,7 @@ function startNativeSshStream(event, payload) {
   client.on("error", (e) => {
     remoteStreams.delete(streamId);
     if (stream.stopped) return;
-    const fingerprintHint = seenFingerprint ? ` Fingerprint SHA256:${seenFingerprint}` : "";
+    const fingerprintHint = seenFingerprint ? ` Huella (fingerprint) del servidor: ${seenFingerprint}` : "";
     const msg = `${e.message}${fingerprintHint}`;
     logEntry("ERROR", "remote", `${label}: ${msg}`);
     showErrorAlert(event.sender, "remote", "Error SSH", msg);
@@ -1019,7 +1186,9 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
   const proc = spawn(spec.command, spec.args, { windowsHide: true });
   const stream = { proc, stopped: false, label: spec.label };
   let lineBuf = "";
+  let stderrBuf = "";
   let hadLines = false;
+  let remoteReady = false;
 
   function send(ch, ...args) {
     if (!event.sender.isDestroyed()) event.sender.send(ch, ...args);
@@ -1029,7 +1198,14 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     lineBuf += data.toString("utf8");
     const parts = lineBuf.split("\n");
     lineBuf = parts.pop();
-    const complete = parts.filter(Boolean);
+    const complete = parts.filter(Boolean).filter(line => {
+      if (line.trim() !== REMOTE_READY_MARKER) return true;
+      if (!remoteReady) {
+        remoteReady = true;
+        send("remote:spawned", streamId);
+      }
+      return false;
+    });
     if (complete.length) {
       hadLines = true;
       send("remote:lines", streamId, complete.join("\n"));
@@ -1037,11 +1213,10 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
   }
 
   proc.stdout.on("data", flushLines);
-  proc.stderr.on("data", flushLines);
+  proc.stderr.on("data", data => { stderrBuf += data.toString("utf8"); });
 
   proc.on("spawn", () => {
     logEntry("INFO", "remote", `Proceso iniciado: ${spec.label}`);
-    send("remote:spawned", streamId);
   });
 
   proc.on("close", (code) => {
@@ -1051,8 +1226,8 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
       return;
     }
     const isError = code !== null && code !== 0;
-    if (isError && !hadLines) {
-      const msg = `${spec.command} terminó con código ${code}`;
+    if (isError) {
+      const msg = stderrBuf.trim() || `${spec.command} terminó con código ${code}`;
       logEntry("ERROR", "remote", `${spec.label}: ${msg}`);
       showErrorAlert(event.sender, "remote", "Error remoto", msg);
       send("remote:error", streamId, msg);
@@ -1071,6 +1246,17 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
   });
 
   remoteStreams.set(streamId, stream);
+});
+
+ipcMain.handle("remote:test", async (event, payload) => {
+  assertTrustedSender(event);
+  try {
+    return payload?.mode === "ssh-native"
+      ? await testNativeSsh(payload)
+      : await testSystemSsh(payload);
+  } catch (error) {
+    return { ok:false, error:error?.message ?? String(error) };
+  }
 });
 
 ipcMain.handle("remote:logs:stop", (_e, streamId) => {
@@ -1104,6 +1290,24 @@ function normalizePaneTabs(tabsArr) {
     : [];
 }
 
+function normalizeRemoteProfiles(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 30).filter(profile => profile && typeof profile === "object").map((profile, index) => ({
+    id: typeof profile.id === "string" && profile.id ? profile.id.slice(0, 80) : `profile-${index}`,
+    name: typeof profile.name === "string" ? profile.name.slice(0, 80) : "SSH",
+    mode: ["ssh", "ssh-wsl", "ssh-native", "wsl"].includes(profile.mode) ? profile.mode : "ssh",
+    target: typeof profile.target === "string" ? profile.target.slice(0, 255) : "",
+    user: typeof profile.user === "string" ? profile.user.slice(0, 128) : "",
+    port: typeof profile.port === "string" ? profile.port.slice(0, 5) : "",
+    identityFile: typeof profile.identityFile === "string" ? profile.identityFile.slice(0, 32767) : "",
+    fingerprint: typeof profile.fingerprint === "string" ? profile.fingerprint.slice(0, 160) : "",
+    proxyJump: typeof profile.proxyJump === "string" ? profile.proxyJump.slice(0, 255) : "",
+    distro: typeof profile.distro === "string" ? profile.distro.slice(0, 160) : "",
+    filePath: typeof profile.filePath === "string" ? profile.filePath.slice(0, 4096) : "",
+    tailLines: normalizeTailLines(profile.tailLines),
+  }));
+}
+
 function normalizeSettings(value) {
   const s = value && typeof value === "object" ? value : {};
   const language = ["es", "en"].includes(s.language) ? s.language : "es";
@@ -1128,10 +1332,9 @@ function normalizeSettings(value) {
     ? Math.min(Math.max(Math.round(s.maxLiveLines), 50_000), 2_000_000)
     : 500_000;
 
-  const { sessionTabs, ...rest } = s;
   return {
-    ...rest,
     recentFiles: Array.isArray(s.recentFiles) ? s.recentFiles.filter(f => typeof f === "string") : [],
+    remoteProfiles: normalizeRemoteProfiles(s.remoteProfiles),
     panes,
     splitDirection,
     splitRatio,
