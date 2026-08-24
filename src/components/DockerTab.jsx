@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useLang } from "../i18n.jsx";
-import { useDebouncedValue, useRowSelection, useEscapeToClose } from "../hooks.mjs";
+import { useDebouncedValue, useRowSelection, useEscapeToClose, useSearchShortcuts } from "../hooks.mjs";
 import { useRememberedState, useBatchedLines, useFilteredLogs } from "../logHooks.mjs";
 import { classifyLines, countLevels, appendRecentItems } from "../logProcessing.mjs";
 import { reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtNum } from "../utils.mjs";
@@ -81,8 +81,12 @@ function DockerPicker({ onSelect, onClose }) {
 /* ═══════════════════════════════════════════
    Docker – log streaming tab
 ═══════════════════════════════════════════ */
-function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
+function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive = false }) {
   const t = useLang();
+  const searchInputRef = useRef(null);
+  const filterInputRef = useRef(null);
+  useSearchShortcuts(searchInputRef, filterInputRef, isActive);
+
   const selectionSource = `docker-${containerName}`;
   const [classified, setClassified] = useState([]);
   const [spawned,    setSpawned]   = useState(false);
@@ -225,30 +229,7 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
 
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
-              style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
-                       border:`0.5px solid ${filterRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
-                       borderRadius:"6px 0 0 6px", color: filterRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
-                       fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
-              placeholder={filterUseRegex ? t("regex_ph") : t("filter_ph")}
-              value={filter}
-              onChange={e => setFilter(e.target.value)}
-            />
-            <button onClick={() => setFilterUseRegex(p => !p)}
-              title={t("regex_btn_title")}
-              style={{ background: filterUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
-                       border:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
-                       borderLeft:"none", borderRadius:"0 6px 6px 0",
-                       color: filterUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
-                       fontFamily:"monospace", fontSize:11, padding:"4px 10px",
-                       cursor:"pointer", fontWeight: filterUseRegex ? 700 : 400 }}>
-              .*
-            </button>
-          </div>
-
-          <ContextInput value={context} onChange={setContext} />
-
-          <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
-            <input
+              ref={searchInputRef}
               style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
                        border:`0.5px solid ${searchRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
                        borderRadius:"6px 0 0 6px", color: searchRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
@@ -274,6 +255,31 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
               .*
             </button>
           </div>
+
+          <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
+            <input
+              ref={filterInputRef}
+              style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
+                       border:`0.5px solid ${filterRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+                       borderRadius:"6px 0 0 6px", color: filterRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
+                       fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
+              placeholder={filterUseRegex ? t("regex_ph") : t("filter_ph")}
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+            />
+            <button onClick={() => setFilterUseRegex(p => !p)}
+              title={t("regex_btn_title")}
+              style={{ background: filterUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                       border:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderLeft:"none", borderRadius:"0 6px 6px 0",
+                       color: filterUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
+                       fontFamily:"monospace", fontSize:11, padding:"4px 10px",
+                       cursor:"pointer", fontWeight: filterUseRegex ? 700 : 400 }}>
+              .*
+            </button>
+          </div>
+
+          <ContextInput value={context} onChange={setContext} />
 
           {(filter || search) && matchOrigLines.length > 0 && (
             <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>

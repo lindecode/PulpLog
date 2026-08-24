@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useLang } from "../i18n.jsx";
-import { useDebouncedValue, useRowSelection } from "../hooks.mjs";
+import { useDebouncedValue, useRowSelection, useSearchShortcuts } from "../hooks.mjs";
 import { useRememberedState, useFilteredLogs } from "../logHooks.mjs";
 import { classifyLines, countLevels, splitTextChunk } from "../logProcessing.mjs";
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
@@ -13,7 +13,7 @@ import { RotationBanner } from "./Modals.jsx";
    LogTab
 ═══════════════════════════════════════════ */
 function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadingChange,
-                  autoScrollDefault = false, showNumsDefault = true }) {
+                  autoScrollDefault = false, showNumsDefault = true, isActive = false }) {
   const t = useLang();
   const selectionSource = fileName || filePath || "pulplog";
   const [classified,  setClassified] = useState([]);
@@ -333,31 +333,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
-              style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
-                       border:`0.5px solid ${filterRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
-                       borderRadius:"6px 0 0 6px", color: filterRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
-                       fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
-              placeholder={filterUseRegex ? t("regex_ph") : t("filter_ph")}
-              value={filter}
-              onChange={e => setFilter(e.target.value)}
-            />
-            <button
-              onClick={() => setFilterUseRegex(p => !p)}
-              title={t("regex_btn_title")}
-              style={{ background: filterUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
-                       border:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
-                       borderLeft:"none", borderRadius:"0 6px 6px 0",
-                       color: filterUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
-                       fontFamily:"monospace", fontSize:11, padding:"4px 10px",
-                       cursor:"pointer", fontWeight: filterUseRegex ? 700 : 400 }}>
-              .*
-            </button>
-          </div>
-
-          <ContextInput value={context} onChange={setContext} />
-
-          <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
-            <input
+              ref={searchInputRef}
               style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
                        border:`0.5px solid ${searchRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
                        borderRadius:"6px 0 0 6px", color: searchRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
@@ -384,6 +360,32 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
               .*
             </button>
           </div>
+
+          <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
+            <input
+              ref={filterInputRef}
+              style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
+                       border:`0.5px solid ${filterRegexError ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+                       borderRadius:"6px 0 0 6px", color: filterRegexError ? "var(--pl-error-text)" : "var(--pl-text-2)",
+                       fontFamily:"inherit", fontSize:12, padding:"4px 10px", outline:"none" }}
+              placeholder={filterUseRegex ? t("regex_ph") : t("filter_ph")}
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+            />
+            <button
+              onClick={() => setFilterUseRegex(p => !p)}
+              title={t("regex_btn_title")}
+              style={{ background: filterUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                       border:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderLeft:"none", borderRadius:"0 6px 6px 0",
+                       color: filterUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
+                       fontFamily:"monospace", fontSize:11, padding:"4px 10px",
+                       cursor:"pointer", fontWeight: filterUseRegex ? 700 : 400 }}>
+              .*
+            </button>
+          </div>
+
+          <ContextInput value={context} onChange={setContext} />
 
           {(filter || search) && matchOrigLines.length > 0 && (
             <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>

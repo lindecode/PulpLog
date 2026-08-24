@@ -18,6 +18,25 @@ export function useEscapeToClose(onClose) {
   }, [onClose]);
 }
 
+export function useSearchShortcuts(searchInputRef, filterInputRef, isActive) {
+  useEffect(() => {
+    if (!isActive) return;
+    const onKey = event => {
+      const isCmdOrCtrl = event.metaKey || event.ctrlKey;
+      if (isCmdOrCtrl && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          filterInputRef.current?.focus();
+        } else {
+          searchInputRef.current?.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [isActive, searchInputRef, filterInputRef]);
+}
+
 export function useRowSelection(tabKey, classified) {
   const [selection, setStoredSelection] = useRememberedState(tabKey, "rowSelection", () => ({
     lines:new Set(), active:null, anchor:null,

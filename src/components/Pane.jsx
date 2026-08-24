@@ -436,19 +436,22 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
           {tab.docker
             ? <DockerTab key={`docker-${tab.id}-${tab.reloadNonce || 0}`}
                          tabKey={String(tab.id)} maxLiveLines={settings.maxLiveLines}
-                         containerId={tab.docker.containerId} containerName={tab.docker.name} />
+                         containerId={tab.docker.containerId} containerName={tab.docker.name}
+                         isActive={tab.id === activeTab.id && focused} />
             : tab.remote
               ? <RemoteTab key={`remote-${tab.id}-${tab.reloadNonce || 0}`}
                            tabKey={String(tab.id)} maxLiveLines={settings.maxLiveLines} config={tab.remote}
                            onConfigureConnection={() => setRemotePicker({ tabId:tab.id,
-                             config:{ ...tab.remote, password:"", passphrase:"", trustHostForSession:false } })} />
+                             config:{ ...tab.remote, password:"", passphrase:"", trustHostForSession:false } })}
+                           isActive={tab.id === activeTab.id && focused} />
               : tab.filePath
                 ? <LogTab key={`${tab.id}-${tab.filePath}-${tab.reloadNonce || 0}`}
                           tabKey={String(tab.id)} filePath={tab.filePath} webFile={tab.webFile || null}
                           fileName={tab.label} fileSize={tab.fileSize}
                           onLoadingChange={setTabLoading}
                           autoScrollDefault={settings.autoScrollDefault}
-                          showNumsDefault={settings.showNumsDefault} />
+                          showNumsDefault={settings.showNumsDefault}
+                          isActive={tab.id === activeTab.id && focused} />
                 : <Welcome onOpen={openFile} isElectron={IS_ELECTRON}
                            recentFiles={settings.recentFiles} onOpenRecent={openFileByPath} />}
         </div>
