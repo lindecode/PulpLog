@@ -109,11 +109,11 @@ function buildMatcher(text, useRegex) {
   if (useRegex) {
     try {
       const regex = new RegExp(text, "i");
-      return { match: item => regex.test(item.raw), valid:true };
+      return { match: item => Boolean(item.raw && regex.test(item.raw)), valid:true };
     } catch { return { match:null, valid:false }; }
   }
   const lower = text.toLowerCase();
-  return { match: item => item.raw.toLowerCase().includes(lower), valid:true };
+  return { match: item => Boolean(item.raw && item.raw.toLowerCase().includes(lower)), valid:true };
 }
 
 // `filterText` hides non-matching lines (with ±context); `searchText` highlights
