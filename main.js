@@ -941,6 +941,7 @@ function stopDockerStream(streamId) {
 /* ─── Remote logs: SSH / WSL tail -F ─── */
 const remoteStreams = new Map(); // streamId → { proc, stopped, label }
 const REMOTE_READY_MARKER = "__PULPLOG_REMOTE_READY__";
+const REMOTE_HISTORY_MARKER = "__PULPLOG_REMOTE_HISTORY__";
 
 function quotePosixArg(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -950,6 +951,25 @@ function normalizeTailLines(value) {
   const n = Number.parseInt(value, 10);
   if (!Number.isFinite(n)) return 500;
   return Math.min(Math.max(n, 1), 10000);
+}
+
+function normalizeRemoteHistory(config) {
+  const mode = ["lines", "bytes", "full"].includes(config?.historyMode) ? config.historyMode : "lines";
+  const requestedMb = Number.parseInt(config?.maxInitialMb, 10);
+  const maxMb = Math.min(Math.max(Number.isFinite(requestedMb) ? requestedMb : 100, 1), 200);
+  return { mode, maxMb, maxBytes:maxMb * 1024 * 1024, tailLines:normalizeTailLines(config?.tailLines) };
+}
+
+function buildRemoteTailScript(config, filePath) {
+  const history = normalizeRemoteHistory(config);
+  const quotedPath = quotePosixArg(filePath);
+  if (config?.resumeOnly)
+    return `printf '${REMOTE_READY_MARKER}\\n'; exec tail -n 0 -F -- ${quotedPath}`;
+  if (history.mode === "lines")
+    return `printf '${REMOTE_READY_MARKER}\\n'; exec tail -n ${history.tailLines} -F -- ${quotedPath}`;
+  return `size=$(wc -c < ${quotedPath} 2>/dev/null || printf -- -1); `
+    + `printf '${REMOTE_HISTORY_MARKER}:${history.mode}:%s:${history.maxBytes}\\n' "$size"; `
+    + `printf '${REMOTE_READY_MARKER}\\n'; exec tail -c ${history.maxBytes} -F -- ${quotedPath}`;
 }
 
 function normalizeFingerprint(value) {
@@ -988,7 +1008,7 @@ function validateSshTarget(config) {
 function buildRemoteCommand(config) {
   const mode = ["wsl", "ssh-wsl"].includes(config?.mode) ? config.mode : "ssh";
   const filePath = String(config?.filePath || "").trim();
-  const tailLines = normalizeTailLines(config?.tailLines);
+  const tailScript = buildRemoteTailScript(config, filePath);
   if (!filePath) throw new Error("La ruta de la bitácora es obligatoria");
 
   if (mode === "wsl") {
@@ -997,7 +1017,7 @@ function buildRemoteCommand(config) {
     if (distro.startsWith("-")) throw new Error("Nombre de distro WSL inválido");
     const args = [];
     if (distro) args.push("-d", distro);
-    args.push("--", "tail", "-n", String(tailLines), "-F", "--", filePath);
+    args.push("--", "sh", "-lc", tailScript);
     return {
       command: process.platform === "win32" ? "wsl.exe" : "wsl",
       args,
@@ -1021,7 +1041,7 @@ function buildRemoteCommand(config) {
     args.push("-J", proxyJump);
   }
   const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
-  args.push(sshTarget, `printf '${REMOTE_READY_MARKER}\\n'; exec tail -n ${tailLines} -F -- ${quotePosixArg(filePath)}`);
+  args.push(sshTarget, tailScript);
   if (mode === "ssh-wsl") {
     if (process.platform !== "win32") throw new Error("SSH desde WSL2 solo está disponible en Windows");
     const distro = String(config?.distro || "").trim();
@@ -1125,7 +1145,7 @@ function testNativeSsh(config) {
 function startNativeSshStream(event, payload) {
   const streamId = payload?.streamId;
   const filePath = String(payload?.filePath || "").trim();
-  const tailLines = normalizeTailLines(payload?.tailLines);
+  const tailScript = buildRemoteTailScript(payload, filePath);
   if (!filePath) throw new Error("La ruta de la bitácora es obligatoria");
 
   const { host, username, port, identityFile, target } = validateSshTarget(payload);
@@ -1163,25 +1183,51 @@ function startNativeSshStream(event, payload) {
   let lineBuf = "";
   let stderrBuf = "";
   let hadLines = false;
+  let dropFirstHistoryLine = false;
+  let historyExpected = 0;
+  let historyReceived = 0;
+  let lastHistoryProgress = 0;
 
   function send(ch, ...args) {
     if (!event.sender.isDestroyed()) event.sender.send(ch, ...args);
   }
 
   function flushLines(data) {
+    if (historyExpected > 0) historyReceived += data.length;
     lineBuf += data.toString("utf8");
     const parts = lineBuf.split("\n");
     lineBuf = parts.pop();
-    const complete = parts.filter(Boolean);
+    const complete = parts.filter(Boolean).filter(line => {
+      const history = line.trim().match(/^__PULPLOG_REMOTE_HISTORY__:(lines|bytes|full):(-?\d+):(\d+)$/);
+      if (history) {
+        const size = Number(history[2]);
+        const limit = Number(history[3]);
+        send("remote:history", streamId, { mode:history[1], size, limit });
+        dropFirstHistoryLine = size > limit;
+        historyExpected = size >= 0 ? Math.min(size, limit) : 0;
+        historyReceived = Math.min(data.length, historyExpected);
+        return false;
+      }
+      if (dropFirstHistoryLine) { dropFirstHistoryLine = false; return false; }
+      return line.trim() !== REMOTE_READY_MARKER;
+    });
     if (complete.length) {
       hadLines = true;
       send("remote:lines", streamId, complete.join("\n"));
+    }
+    if (historyExpected > 0) {
+      const percent = Math.min(100, Math.round(historyReceived * 100 / historyExpected));
+      if (percent === 100 || percent >= lastHistoryProgress + 2) {
+        lastHistoryProgress = percent;
+        send("remote:progress", streamId, { received:Math.min(historyReceived, historyExpected), total:historyExpected, percent });
+      }
+      if (percent === 100) historyExpected = 0;
     }
   }
 
   client.on("ready", () => {
     logEntry("INFO", "remote", `SSH nativo conectado: ${label}`);
-    client.exec(`tail -n ${tailLines} -F -- ${quotePosixArg(filePath)}`, (err, channel) => {
+    client.exec(tailScript, (err, channel) => {
       if (err) {
         remoteStreams.delete(streamId);
         showErrorAlert(event.sender, "remote", mt("err_remote"), err.message);
@@ -1269,16 +1315,32 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
   let stderrBuf = "";
   let hadLines = false;
   let remoteReady = false;
+  let dropFirstHistoryLine = false;
+  let historyExpected = 0;
+  let historyReceived = 0;
+  let lastHistoryProgress = 0;
 
   function send(ch, ...args) {
     if (!event.sender.isDestroyed()) event.sender.send(ch, ...args);
   }
 
   function flushLines(data) {
+    if (historyExpected > 0) historyReceived += data.length;
     lineBuf += data.toString("utf8");
     const parts = lineBuf.split("\n");
     lineBuf = parts.pop();
     const complete = parts.filter(Boolean).filter(line => {
+      const history = line.trim().match(/^__PULPLOG_REMOTE_HISTORY__:(lines|bytes|full):(-?\d+):(\d+)$/);
+      if (history) {
+        const size = Number(history[2]);
+        const limit = Number(history[3]);
+        send("remote:history", streamId, { mode:history[1], size, limit });
+        dropFirstHistoryLine = size > limit;
+        historyExpected = size >= 0 ? Math.min(size, limit) : 0;
+        historyReceived = Math.min(data.length, historyExpected);
+        return false;
+      }
+      if (dropFirstHistoryLine) { dropFirstHistoryLine = false; return false; }
       if (line.trim() !== REMOTE_READY_MARKER) return true;
       if (!remoteReady) {
         remoteReady = true;
@@ -1289,6 +1351,14 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     if (complete.length) {
       hadLines = true;
       send("remote:lines", streamId, complete.join("\n"));
+    }
+    if (historyExpected > 0) {
+      const percent = Math.min(100, Math.round(historyReceived * 100 / historyExpected));
+      if (percent === 100 || percent >= lastHistoryProgress + 2) {
+        lastHistoryProgress = percent;
+        send("remote:progress", streamId, { received:Math.min(historyReceived, historyExpected), total:historyExpected, percent });
+      }
+      if (percent === 100) historyExpected = 0;
     }
   }
 
@@ -1385,6 +1455,8 @@ function normalizeRemoteProfiles(value) {
     distro: typeof profile.distro === "string" ? profile.distro.slice(0, 160) : "",
     filePath: typeof profile.filePath === "string" ? profile.filePath.slice(0, 4096) : "",
     tailLines: normalizeTailLines(profile.tailLines),
+    historyMode: ["lines", "bytes", "full"].includes(profile.historyMode) ? profile.historyMode : "lines",
+    maxInitialMb: normalizeRemoteHistory(profile).maxMb,
   }));
 }
 

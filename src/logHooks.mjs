@@ -35,7 +35,8 @@ export function setRememberedScroll(tabKey, scrollTop) {
   getTabRecord(tabKey).set("scrollTop", scrollTop);
 }
 
-export function useBatchedLines(onBatch, delay = 75) {
+export function useBatchedLines(onBatch, delay = 75, maxBufferedLines = Number.POSITIVE_INFINITY) {
+  const MAX_BATCH_LINES = 5000;
   const callbackRef = useRef(onBatch);
   const bufferRef = useRef([]);
   const timerRef = useRef(null);
@@ -45,16 +46,25 @@ export function useBatchedLines(onBatch, delay = 75) {
     clearTimeout(timerRef.current);
     timerRef.current = null;
     if (!bufferRef.current.length) return;
-    const batch = bufferRef.current;
-    bufferRef.current = [];
-    callbackRef.current(batch);
+    const batch = bufferRef.current.splice(0, MAX_BATCH_LINES);
+    const result = callbackRef.current(batch);
+    if (result && typeof result.finally === "function") {
+      timerRef.current = -1;
+      result.finally(() => {
+        timerRef.current = null;
+        if (bufferRef.current.length) timerRef.current = setTimeout(flush, 16);
+      });
+    } else if (bufferRef.current.length) timerRef.current = setTimeout(flush, 16);
   }, []);
 
   const enqueue = useCallback((lines) => {
     if (!lines.length) return;
-    bufferRef.current.push(...lines);
+    for (let offset = 0; offset < lines.length; offset += MAX_BATCH_LINES)
+      bufferRef.current.push(...lines.slice(offset, offset + MAX_BATCH_LINES));
+    if (bufferRef.current.length > maxBufferedLines)
+      bufferRef.current.splice(0, bufferRef.current.length - maxBufferedLines);
     if (!timerRef.current) timerRef.current = setTimeout(flush, delay);
-  }, [delay, flush]);
+  }, [delay, flush, maxBufferedLines]);
 
   useEffect(() => () => {
     clearTimeout(timerRef.current);

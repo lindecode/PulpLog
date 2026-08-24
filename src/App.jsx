@@ -188,6 +188,15 @@ const T = {
     remote_distro:   "Distro WSL",
     remote_path:     "Ruta del log",
     remote_tail:     "Lineas iniciales",
+    remote_history_500:"Últimas 500 líneas (rápido)",
+    remote_history_5000:"Últimas 5,000 líneas",
+    remote_history_10mb:"Últimos 10 MB",
+    remote_history_50mb:"Últimos 50 MB",
+    remote_history_full:"Archivo completo (máx. 100 MB)",
+    remote_history_loaded:(size, limit) => size > limit
+      ? `El archivo mide ${fmtBytes(size)}; se cargaron los últimos ${fmtBytes(limit)} para proteger la memoria.`
+      : `Historial inicial: ${fmtBytes(Math.max(0, size))} de ${fmtBytes(limit)} permitidos.`,
+    remote_history_loading:p => `Descargando y preparando historial… ${p}%`,
     remote_open:     "Conectar",
     remote_test:     "Probar conexión",
     remote_detect_identity:"Detectar servidor",
@@ -362,6 +371,15 @@ const T = {
     remote_distro:   "WSL distro",
     remote_path:     "Log path",
     remote_tail:     "Initial lines",
+    remote_history_500:"Last 500 lines (fast)",
+    remote_history_5000:"Last 5,000 lines",
+    remote_history_10mb:"Last 10 MB",
+    remote_history_50mb:"Last 50 MB",
+    remote_history_full:"Full file (100 MB max)",
+    remote_history_loaded:(size, limit) => size > limit
+      ? `The file is ${fmtBytes(size)}; only the last ${fmtBytes(limit)} were loaded to protect memory.`
+      : `Initial history: ${fmtBytes(Math.max(0, size))} of ${fmtBytes(limit)} allowed.`,
+    remote_history_loading:p => `Downloading and preparing history… ${p}%`,
     remote_open:     "Connect",
     remote_test:     "Test connection",
     remote_detect_identity:"Detect server",
@@ -557,6 +575,15 @@ function hl(raw, type) {
 const esc     = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 const fmtSize = b => b>=1e9?`${(b/1e9).toFixed(2)} GB`:b>=1e6?`${(b/1e6).toFixed(1)} MB`:b>=1e3?`${(b/1e3).toFixed(0)} KB`:`${b} B`;
 const fmtNum  = n => n>=1e6?`${(n/1e6).toFixed(1)}M`:n>=1e3?`${(n/1e3).toFixed(1)}k`:String(n);
+const fmtBytes = value => {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let amount = bytes / 1024;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+  return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${units[unit]}`;
+};
 const safeFileName = s => String(s || "pulplog-results").replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").slice(0, 80);
 
 function buildResultText({ source, filter, items, total }) {
@@ -1955,7 +1982,7 @@ function DockerTab({ tabKey, containerId, containerName, maxLiveLines }) {
     setClassified(prev => appendRecentItems(prev, batch, maxLiveLines));
     setConnected(true);
     if (autoScrollRef.current && selectionRef.current.lines.size === 0) listRef.current?.scrollToBottom();
-  });
+  }, 75, maxLiveLines);
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
 
   useEffect(() => {
@@ -2236,6 +2263,9 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const [distro, setDistro] = useState(initialConfig?.distro || "");
   const [filePath, setFilePath] = useState(initialConfig?.filePath || "");
   const [tailLines, setTailLines] = useState(initialConfig?.tailLines || 500);
+  const [historyPreset, setHistoryPreset] = useState(() => initialConfig?.historyMode === "full" ? "full:100"
+    : initialConfig?.historyMode === "bytes" ? `bytes:${initialConfig?.maxInitialMb || 50}`
+    : `lines:${initialConfig?.tailLines || 500}`);
   const [advanced, setAdvanced] = useState(initialConfig?.mode === "ssh-native");
   const [selectedProfile, setSelectedProfile] = useState("");
   const [profileName, setProfileName] = useState("");
@@ -2292,7 +2322,8 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
 
   const connectionConfig = () => ({ mode, target:target.trim(), user:user.trim(), port:String(port).trim(),
     identityFile:identityFile.trim(), proxyJump:proxyJump.trim(), password, passphrase, fingerprint:fingerprint.trim(),
-    trustHostForSession, distro:distro.trim(), filePath:filePath.trim(), tailLines });
+    trustHostForSession, distro:distro.trim(), filePath:filePath.trim(), tailLines,
+    historyMode:historyPreset.split(":")[0], maxInitialMb:Number(historyPreset.split(":")[1]) || 100 });
 
   const loadProfile = (id) => {
     setSelectedProfile(id);
@@ -2304,6 +2335,9 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     setProxyJump(profile.proxyJump || "");
     setFingerprint(profile.fingerprint || ""); setDistro(profile.distro || "");
     setFilePath(profile.filePath || ""); setTailLines(profile.tailLines || 500);
+    setHistoryPreset(profile.historyMode === "full" ? "full:100"
+      : profile.historyMode === "bytes" ? `bytes:${profile.maxInitialMb || 50}`
+      : `lines:${profile.tailLines || 500}`);
     setProfileName(profile.name || ""); setTrustHostForSession(false);
   };
 
@@ -2502,8 +2536,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
                 <input style={inputStyle} value={distro} onChange={e => setDistro(e.target.value)}
                   placeholder={`${t("remote_distro")} (Ubuntu)`} />
               )}
-              <input style={inputStyle} value={tailLines} onChange={e => setTailLines(e.target.value)}
-                placeholder={t("remote_tail")} />
+              <span />
             </>
           )}
         </div>
@@ -2573,15 +2606,19 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
           </div>
         )}
 
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 110px", gap:10, marginBottom:12 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr minmax(190px, 240px)", gap:10, marginBottom:12 }}>
           <input style={inputStyle} value={filePath} onChange={e => setFilePath(e.target.value)}
             placeholder={`${t("remote_path")} (/var/log/app.log)`} />
-          {mode !== "wsl" ? (
-            <input style={inputStyle} value={tailLines} onChange={e => setTailLines(e.target.value)}
-              placeholder={t("remote_tail")} />
-          ) : (
-            <span />
-          )}
+          <select style={inputStyle} value={historyPreset} onChange={e => {
+            setHistoryPreset(e.target.value);
+            if (e.target.value.startsWith("lines:")) setTailLines(Number(e.target.value.split(":")[1]));
+          }}>
+            <option value="lines:500">{t("remote_history_500")}</option>
+            <option value="lines:5000">{t("remote_history_5000")}</option>
+            <option value="bytes:10">{t("remote_history_10mb")}</option>
+            <option value="bytes:50">{t("remote_history_50mb")}</option>
+            <option value="full:100">{t("remote_history_full")}</option>
+          </select>
         </div>
 
         <div style={{ color:"var(--pl-text-5)", fontSize:10, lineHeight:1.5, marginBottom:18 }}>
@@ -2635,6 +2672,8 @@ function RemoteTab({ tabKey, config, maxLiveLines, onConfigureConnection }) {
   const [spawned,    setSpawned]   = useState(false);
   const [connected,  setConnected] = useState(false);
   const [error,      setError]     = useState(null);
+  const [historyInfo,setHistoryInfo]= useState(null);
+  const [historyProgress,setHistoryProgress]= useState(null);
   const [retryNonce, setRetryNonce]= useState(0);
   const [reconnectIn,setReconnectIn]= useState(0);
   const [filter,       setFilter]       = useRememberedState(tabKey, "filter", "");
@@ -2661,14 +2700,25 @@ function RemoteTab({ tabKey, config, maxLiveLines, onConfigureConnection }) {
   const nextLineRef   = useRef(1);
   const autoScrollRef = useRef(true);
   const reconnectAttemptRef = useRef(0);
+  const workerRef = useRef(null);
+  const processingRef = useRef(Promise.resolve());
   const enqueueLines = useBatchedLines(incoming => {
-    const batch = classifyLines(incoming, nextLineRef.current);
+    const startLine = nextLineRef.current;
     nextLineRef.current += incoming.length;
-    setClassified(prev => appendRecentItems(prev, batch, maxLiveLines));
-    setConnected(true);
-    if (autoScrollRef.current && selectionRef.current.lines.size === 0) listRef.current?.scrollToBottom();
-  });
+    return processingRef.current = processingRef.current
+      .then(() => workerRef.current?.process(incoming, startLine)
+        || { items:classifyLines(incoming, startLine) })
+      .then(result => {
+        setClassified(prev => appendRecentItems(prev, result.items, maxLiveLines));
+        setConnected(true);
+        if (autoScrollRef.current && selectionRef.current.lines.size === 0) listRef.current?.scrollToBottom();
+      });
+  }, 75, maxLiveLines);
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
+  useEffect(() => {
+    workerRef.current = createLogWorkerClient();
+    return () => { workerRef.current?.terminate(); workerRef.current = null; };
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -2685,11 +2735,13 @@ function RemoteTab({ tabKey, config, maxLiveLines, onConfigureConnection }) {
         if (!disposed) setRetryNonce(value => value + 1);
       }, seconds * 1000);
     };
-    const unwatch = window.electronAPI.streamRemoteLogs(config, {
+    const unwatch = window.electronAPI.streamRemoteLogs(retryNonce > 0 ? { ...config, resumeOnly:true } : config, {
       onSpawned() { reconnectAttemptRef.current = 0; setReconnectIn(0); setError(null); setSpawned(true); setConnected(true); },
       onLines(text) {
         enqueueLines(text.split("\n").filter(Boolean));
       },
+      onHistory(data) { setHistoryInfo(data); setHistoryProgress(data.size > 0 ? 0 : null); },
+      onProgress(data) { setHistoryProgress(data.percent >= 100 ? null : data.percent); },
       onEnd()      { setConnected(false); setError(t("remote_disconnected")); scheduleReconnect("connection terminated"); },
       onError(msg) { setError(msg); setConnected(false); scheduleReconnect(msg); },
     });
@@ -2926,7 +2978,27 @@ function RemoteTab({ tabKey, config, maxLiveLines, onConfigureConnection }) {
         </div>
       )}
 
-      {classified.length === 0 && !error ? (
+      {historyInfo && historyInfo.mode !== "lines" && (
+        <div style={{ padding:"5px 14px", background:"var(--pl-bg-hover)", borderBottom:"0.5px solid var(--pl-border-soft)",
+          color:"var(--pl-text-4)", fontSize:10, flexShrink:0 }}>
+          {historyInfo.size >= 0
+            ? t("remote_history_loaded", historyInfo.size, historyInfo.limit)
+            : t("remote_history_full")}
+        </div>
+      )}
+
+      {historyProgress !== null && !error ? (
+        <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column",
+          gap:12, color:"var(--pl-text-5)", fontSize:12 }}>
+          <span>{t("remote_history_loading", historyProgress)}</span>
+          <div style={{ width:"min(420px, 70%)", height:8, borderRadius:5, overflow:"hidden",
+            background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)" }}>
+            <div style={{ width:`${historyProgress}%`, height:"100%", transition:"width .15s ease",
+              background:"var(--pl-accent)" }} />
+          </div>
+          {historyInfo && <span style={{ fontSize:10 }}>{fmtBytes(Math.min(historyInfo.size, historyInfo.limit))}</span>}
+        </div>
+      ) : classified.length === 0 && !error ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
                       flexDirection:"column", gap:10, color:"var(--pl-text-7)", fontSize:13 }}>
           <span style={{ fontSize:28, color:"var(--pl-cat-remote)", animation:"spin 1s linear infinite" }}>↻</span>

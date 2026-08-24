@@ -159,6 +159,12 @@ Las contraseñas y passphrases:
 
 Las interrupciones temporales se reintentan automáticamente con espera progresiva. Ante una desconexión también aparece **Reconectar**. Si el error requiere contraseña, passphrase o nueva autenticación, **Configurar y reconectar** abre nuevamente la ventana con los datos no secretos y solicita otra vez las credenciales.
 
+#### Historial inicial y límites
+
+Al abrir una bitácora remota se puede elegir entre 500 o 5,000 líneas, los últimos 10 o 50 MB, o el archivo completo con un máximo de 100 MB. El proceso principal valida un límite absoluto de 200 MB aunque la interfaz sea manipulada. Si el archivo completo supera el límite elegido, se cargan sólo sus últimos bytes, se descarta cualquier primera línea incompleta y se muestra el tamaño real junto al recorte aplicado. Durante una carga por tamaño, la pestaña muestra el porcentaje recibido y clasifica los registros en un Web Worker con lotes limitados para mantener la interfaz disponible.
+
+El límite de líneas vivas configurado en PulpLog continúa protegiendo la memoria. Las reconexiones siguen únicamente contenido nuevo y no vuelven a transferir el historial inicial.
+
 ### Configuración y diagnóstico
 
 | Función | Detalle |

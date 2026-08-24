@@ -97,14 +97,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   /* ── App diagnostics log ── */
-  streamRemoteLogs(config, { onLines, onEnd, onError, onSpawned }) {
+  streamRemoteLogs(config, { onLines, onEnd, onError, onSpawned, onHistory, onProgress }) {
     const streamId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const spawnH = (_e, id)       => { if (id === streamId) onSpawned?.(); };
     const linesH = (_e, id, text) => { if (id === streamId) onLines?.(text); };
+    const historyH = (_e, id, data) => { if (id === streamId) onHistory?.(data); };
+    const progressH = (_e, id, data) => { if (id === streamId) onProgress?.(data); };
     const endH   = (_e, id)       => { if (id === streamId) { cleanup(); onEnd?.(); } };
     const errH   = (_e, id, msg)  => { if (id === streamId) { cleanup(); onError?.(msg); } };
     ipcRenderer.on("remote:spawned", spawnH);
     ipcRenderer.on("remote:lines",   linesH);
+    ipcRenderer.on("remote:history", historyH);
+    ipcRenderer.on("remote:progress", progressH);
     ipcRenderer.on("remote:end",     endH);
     ipcRenderer.on("remote:error",   errH);
     ipcRenderer.invoke("remote:logs:start", { ...config, streamId }).catch(e => {
@@ -114,6 +118,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     function cleanup() {
       ipcRenderer.removeListener("remote:spawned", spawnH);
       ipcRenderer.removeListener("remote:lines",   linesH);
+      ipcRenderer.removeListener("remote:history", historyH);
+      ipcRenderer.removeListener("remote:progress", progressH);
       ipcRenderer.removeListener("remote:end",     endH);
       ipcRenderer.removeListener("remote:error",   errH);
     }
