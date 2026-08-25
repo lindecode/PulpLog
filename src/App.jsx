@@ -232,7 +232,6 @@ export default function App() {
                      padding:"0 14px", cursor:"pointer", fontSize:13,
                      borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
             title={t("split_right_title")}>◨</button>
-
           <button onClick={() => setSplitDirection("column")}
             style={{ background: splitDirection==="column" ? "var(--pl-split-active-bg)" : "transparent",
                      border:"none", color: splitDirection==="column" ? "var(--pl-accent-alt)" : "var(--pl-text-6)",
@@ -240,7 +239,6 @@ export default function App() {
                      borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
             title={t("split_down_title")}>⬓</button>
 
-          {splitDirection && (
             <button onClick={closeSplit}
               style={{ background:"transparent", border:"none", color:"var(--pl-icon-close)",
                        padding:"0 14px", cursor:"pointer", fontSize:13,
