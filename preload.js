@@ -129,6 +129,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   getAppLog:   () => ipcRenderer.invoke("applog:get"),
   clearAppLog: () => ipcRenderer.invoke("applog:clear"),
+  addAppLog:   (level, category, msg) => ipcRenderer.invoke("applog:add", level, category, msg),
   recordMetric: (data) => ipcRenderer.invoke("diagnostics:metric", data),
   onAppLogNew: (cb) => {
     const h = (_e, entry) => cb(entry);

@@ -65,6 +65,10 @@ if (!app.requestSingleInstanceLock()) {
 /* ── App diagnostics logger ── */
 const MAX_APP_LOG = 500;
 const appLogEntries = [];
+const portableDir = process.env.PORTABLE_EXECUTABLE_DIR || (process.env.APPIMAGE ? path.dirname(process.env.APPIMAGE) : null);
+const logsDir = portableDir ? path.join(portableDir, "logs") : path.join(app.getPath("userData"), "logs");
+if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+const logFilePath = path.join(logsDir, "pulplog-app.log");
 
 function logEntry(level, category, msg) {
   const entry = { ts: Date.now(), level, category, msg };
@@ -73,7 +77,18 @@ function logEntry(level, category, msg) {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send("applog:new", entry);
   }
+  try {
+    const tsStr = new Date(entry.ts).toISOString();
+    fs.appendFileSync(logFilePath, `[${tsStr}] [${entry.level}] [${entry.category}] ${entry.msg}\n`);
+  } catch {}
 }
+
+process.on("uncaughtException", err => {
+  logEntry("ERROR", "main", `Uncaught exception: ${err.stack || err.message}`);
+});
+process.on("unhandledRejection", reason => {
+  logEntry("ERROR", "main", `Unhandled rejection: ${reason instanceof Error ? reason.stack : reason}`);
+});
 
 const alertCooldowns = new Map();
 
@@ -1548,6 +1563,7 @@ ipcMain.handle("recentfiles:remove", (_event, fp) => updateSettings(current => (
 /* ─── IPC: app diagnostics log ─── */
 ipcMain.handle("applog:get",   () => [...appLogEntries]);
 ipcMain.handle("applog:clear", () => { appLogEntries.length = 0; });
+ipcMain.handle("applog:add",   (_e, level, category, msg) => logEntry(level, category, msg));
 ipcMain.handle("diagnostics:metric", (_event, data) => {
   const name = typeof data?.name === "string" ? data.name.slice(0, 40) : "metric";
   const value = Number(data?.value);

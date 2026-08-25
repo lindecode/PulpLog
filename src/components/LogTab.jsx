@@ -57,6 +57,9 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   const timerRef      = useRef(null);
   const watchOffsetRef= useRef(null);
   const autoScrollRef = useRef(autoScroll);
+  const searchInputRef = useRef(null);
+  const filterInputRef = useRef(null);
+  useSearchShortcuts(searchInputRef, filterInputRef, isActive);
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
   useEffect(() => { onLoadingChange?.(Number(tabKey), loading); }, [tabKey, loading, onLoadingChange]);
 
@@ -453,8 +456,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           title={t("refresh_title")}>
           {t("refresh_btn")}
         </Btn>
-        <Btn active={autoScroll} onClick={() => setAutoScroll(p => !p)} title={t("autoscroll_title")}>
-          ↓ auto
+        <Btn active={autoScroll} variant="accent" onClick={() => { setAutoScroll(p => { if (!p) listRef.current?.scrollToBottom(); return !p; }); }} title={t("autoscroll_title")}>
+          {t("autoscroll_btn")}
         </Btn>
         <Btn active={showNums} onClick={() => setShowNums(p => !p)} title={t("linenums_title")}>
           #
@@ -514,6 +517,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           selectionSource={selectionSource}
           onFilterText={setFilter}
           onJumpBookmark={jumpBookmark}
+          onUserScrollUp={() => setAutoScroll(false)}
+          autoScroll={autoScroll}
         />
       )}
 

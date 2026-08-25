@@ -724,7 +724,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
         <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
         <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
         <Sep />
-        <Btn active={autoScroll} onClick={() => setAutoScroll(p => !p)} title={t("autoscroll_title")}>↓ auto</Btn>
+        <Btn active={autoScroll} variant="accent" onClick={() => { setAutoScroll(p => { if (!p) listRef.current?.scrollToBottom(); return !p; }); }} title={t("autoscroll_title")}>{t("autoscroll_btn")}</Btn>
         <Btn active={showNums}   onClick={() => setShowNums(p => !p)}   title={t("linenums_title")}>#</Btn>
         <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
@@ -795,6 +795,8 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
           selectionSource={selectionSource}
           onFilterText={setFilter}
           onJumpBookmark={jumpBookmark}
+          onUserScrollUp={() => setAutoScroll(false)}
+          autoScroll={autoScroll}
         />
       )}
 

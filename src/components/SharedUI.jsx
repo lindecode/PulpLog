@@ -38,12 +38,21 @@ function ContextInput({ value, onChange }) {
   </label>;
 }
 
-function Btn({ children, onClick, active, title, disabled }) {
+function Btn({ children, onClick, active, title, disabled, variant }) {
+  let bg = active ? "var(--pl-btn-active-bg)" : "var(--pl-bg-input)";
+  let border = active ? "var(--pl-btn-active-border)" : "var(--pl-border)";
+  let color = active ? "var(--pl-btn-active-text)" : "var(--pl-text-3)";
+
+  if (active && variant === "accent") {
+    bg = "var(--pl-accent)";
+    border = "var(--pl-accent-hover)";
+    color = "var(--pl-bg-app)";
+  }
+
   return (
     <button onClick={onClick} title={title} disabled={disabled}
-      style={{ background: active ? "var(--pl-btn-active-bg)" : "var(--pl-bg-input)",
-               border:`0.5px solid ${active ? "var(--pl-btn-active-border)":"var(--pl-border)"}`,
-               borderRadius:6, color: active ? "var(--pl-btn-active-text)":"var(--pl-text-3)",
+      style={{ background: bg, border: `0.5px solid ${border}`,
+               borderRadius:6, color: color,
                fontFamily:"inherit", fontSize:11, padding:"4px 9px",
                cursor: disabled ? "not-allowed":"pointer",
                opacity: disabled ? 0.4 : 1, whiteSpace:"nowrap" }}>

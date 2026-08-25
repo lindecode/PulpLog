@@ -320,7 +320,7 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
 
         <Sep />
 
-        <Btn active={autoScroll} onClick={() => setAutoScroll(p => !p)} title={t("autoscroll_title")}>↓ auto</Btn>
+        <Btn active={autoScroll} variant="accent" onClick={() => { setAutoScroll(p => { if (!p) listRef.current?.scrollToBottom(); return !p; }); }} title={t("autoscroll_title")}>{t("autoscroll_btn")}</Btn>
         <Btn active={showNums}   onClick={() => setShowNums(p => !p)}   title={t("linenums_title")}>#</Btn>
         <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
@@ -365,6 +365,8 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
           selectionSource={selectionSource}
           onFilterText={setFilter}
           onJumpBookmark={jumpBookmark}
+          onUserScrollUp={() => setAutoScroll(false)}
+          autoScroll={autoScroll}
         />
       )}
 

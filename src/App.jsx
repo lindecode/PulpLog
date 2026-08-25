@@ -143,7 +143,13 @@ export default function App() {
           if (stat) {
             const label = initialArg.split(/[\\/]/).pop();
             const id = Date.now();
-            paneA.setTabs(previous => [...previous, { id, label, filePath:initialArg, fileSize:stat.size }]);
+            paneA.setTabs(previous => {
+              if (previous.length === 1 && previous[0].label === "$welcome") {
+                return [{ id, label, filePath:initialArg, fileSize:stat.size }];
+              }
+              if (previous.some(t => t.filePath === initialArg)) return previous;
+              return [...previous, { id, label, filePath:initialArg, fileSize:stat.size }];
+            });
             const recent = await window.electronAPI.addRecentFile(initialArg);
             if (alive) setSettings(prev => ({ ...prev, recentFiles:recent }));
           }
@@ -154,7 +160,12 @@ export default function App() {
               id:Date.now() + idx, label:st.label, filePath:st.filePath, fileSize:st.fileSize, groupStart:!!st.groupStart,
             }));
             if (!tabEntries.length) return false;
-            setTabs(previous => [...previous, ...tabEntries]);
+            setTabs(previous => {
+              if (previous.length === 1 && previous[0].label === "$welcome") {
+                return tabEntries;
+              }
+              return previous;
+            });
             return true;
           };
           restorePane(s.panes[0]?.tabs, paneA.setTabs);
@@ -220,14 +231,14 @@ export default function App() {
                      border:"none", color: splitDirection==="row" ? "var(--pl-accent-alt)" : "var(--pl-text-6)",
                      padding:"0 14px", cursor:"pointer", fontSize:13,
                      borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
-            title={t("split_right_title")}>⬓</button>
+            title={t("split_right_title")}>◨</button>
 
           <button onClick={() => setSplitDirection("column")}
             style={{ background: splitDirection==="column" ? "var(--pl-split-active-bg)" : "transparent",
                      border:"none", color: splitDirection==="column" ? "var(--pl-accent-alt)" : "var(--pl-text-6)",
                      padding:"0 14px", cursor:"pointer", fontSize:13,
                      borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
-            title={t("split_down_title")}>▤</button>
+            title={t("split_down_title")}>⬓</button>
 
           {splitDirection && (
             <button onClick={closeSplit}

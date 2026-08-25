@@ -192,6 +192,13 @@
       ::-webkit-scrollbar-thumb:hover { background: var(--pl-scroll-thumb-hover); }
       ::-webkit-scrollbar-thumb:active { background: var(--pl-scroll-thumb-active); }
       ::-webkit-scrollbar-corner { background: var(--pl-scroll-track); }
+
+      /* global button hover & click */
+      button { transition: filter 0.15s ease, transform 0.05s ease; }
+      button:hover:not(:disabled) { filter: brightness(1.2); }
+      html[data-theme="light"] button:hover:not(:disabled) { filter: brightness(0.92); }
+      button:active:not(:disabled) { filter: brightness(0.8); transform: scale(0.97); transition: none; }
+      html[data-theme="light"] button:active:not(:disabled) { filter: brightness(0.85); }
     </style>
   </head>
   <body>

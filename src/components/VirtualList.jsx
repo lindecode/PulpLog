@@ -6,7 +6,7 @@ import { LogRow, selectedLogText } from "./LogRow.jsx";
 import { findLineRange, findAdjacentLineIndex } from "../logProcessing.mjs";
 
 function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark, selection, setSelection,
-                       listRef, stateKey, selectionSource, onFilterText, onJumpBookmark }) {
+                       listRef, stateKey, selectionSource, onFilterText, onJumpBookmark, onUserScrollUp, autoScroll }) {
   const t = useLang();
   const [scrollTop, setScrollTop] = useState(() => getRememberedScroll(stateKey));
   const [height,    setHeight]    = useState(500);
@@ -23,9 +23,22 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
   }, []);
 
   useEffect(() => {
+    if (autoScroll && containerRef.current && selection.lines.size === 0) {
+      // Force layout to ensure scrollHeight is up to date, then set
+      const syncScroll = () => {
+        if (containerRef.current) {
+          containerRef.current.scrollTop = containerRef.current.scrollHeight;
+        }
+      };
+      syncScroll();
+      requestAnimationFrame(syncScroll);
+    }
+  }, [items.length, autoScroll, height, selection.lines.size]);
+
+  useEffect(() => {
     if (!listRef) return;
     listRef.current = {
-      scrollToBottom: () => { if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight; },
+      scrollToBottom: () => { setTimeout(() => { if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight; }, 10); },
       scrollToTop:    () => { if (containerRef.current) containerRef.current.scrollTop = 0; },
       scrollToIndex:  (index) => {
         if (containerRef.current)
@@ -126,7 +139,7 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
          aria-multiselectable="true"
          tabIndex={0}
          aria-label="Log lines"
-         style={{ overflow:"auto", flex:1, minHeight:0, outline:"none" }}
+         style={{ overflow:"auto", flex:1, minHeight:0, outline:"none", overflowAnchor:"none" }}
          onMouseDown={() => containerRef.current?.focus({ preventScroll:true })}
          onKeyDown={event => {
            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
@@ -156,9 +169,14 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
          }}
          onScroll={event => {
            const next = event.currentTarget.scrollTop;
+           const clientH = event.currentTarget.clientHeight;
+           const scrollH = event.currentTarget.scrollHeight;
            setScrollTop(next);
            setRememberedScroll(stateKey, next);
            setContextMenu(null);
+           if (onUserScrollUp && scrollH - next - clientH > 50) {
+             onUserScrollUp();
+           }
          }}>
       <div style={{ height:totalH, position:"relative", minWidth:"100%", width:"max-content" }}>
         <div style={{ position:"absolute", top: start * ROW_H, minWidth:"100%", width:"max-content" }}>
