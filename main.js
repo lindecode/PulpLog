@@ -102,6 +102,7 @@ const MENU_STRINGS = {
     file:"Archivo", open_file:"Abrir archivo…", open_recent:"Abrir reciente", no_recent:"Sin archivos recientes",
     new_tab:"Nueva pestaña", close_tab:"Cerrar pestaña", reopen_tab:"Reabrir pestaña cerrada", quit:"Salir",
     view:"Ver", reload:"Recargar", devtools:"DevTools", fullscreen:"Pantalla completa",
+    zoom_reset:"Tamaño real", zoom_in:"Acercar", zoom_out:"Alejar",
     split_right:"Dividir a la derecha", split_down:"Dividir abajo", split_close:"Cerrar división",
     help:"Ayuda", user_guide:"Manual de usuario", github:"GitHub", about:"Acerca de PulpLog…",
     file_unavailable_title:"Archivo no disponible", file_unavailable_msg:"No se pudo abrir el archivo reciente",
@@ -124,6 +125,7 @@ const MENU_STRINGS = {
     file:"File", open_file:"Open file…", open_recent:"Open recent", no_recent:"No recent files",
     new_tab:"New tab", close_tab:"Close tab", reopen_tab:"Reopen closed tab", quit:"Quit",
     view:"View", reload:"Reload", devtools:"DevTools", fullscreen:"Toggle Full Screen",
+    zoom_reset:"Actual Size", zoom_in:"Zoom In", zoom_out:"Zoom Out",
     split_right:"Split right", split_down:"Split down", split_close:"Close split",
     help:"Help", user_guide:"User Guide", github:"GitHub", about:"About PulpLog…",
     file_unavailable_title:"File unavailable", file_unavailable_msg:"Could not open the recent file",
@@ -211,6 +213,39 @@ function showErrorAlert(sender, category, title, msg) {
     buttons: [mt("ok")],
     noLink: true,
   }).catch(() => {});
+}
+
+const MIN_ZOOM_LEVEL = -4;
+const MAX_ZOOM_LEVEL = 4;
+const ZOOM_STEP = 0.5;
+
+function setWindowZoom(win, nextLevel) {
+  if (!win || win.isDestroyed()) return;
+  const bounded = Math.max(MIN_ZOOM_LEVEL, Math.min(MAX_ZOOM_LEVEL, nextLevel));
+  win.webContents.setZoomLevel(bounded);
+}
+
+function adjustWindowZoom(win, delta) {
+  if (!win || win.isDestroyed()) return;
+  setWindowZoom(win, win.webContents.getZoomLevel() + delta);
+}
+
+function setupWindowZoomShortcuts(win) {
+  win.webContents.on("before-input-event", (event, input) => {
+    if (!(input.control || input.meta) || input.alt) return;
+    const key = String(input.key || "").toLowerCase();
+    const code = String(input.code || "");
+    if (key === "+" || key === "=" || code === "Equal" || code === "NumpadAdd") {
+      event.preventDefault();
+      adjustWindowZoom(win, ZOOM_STEP);
+    } else if (key === "-" || key === "_" || code === "Minus" || code === "NumpadSubtract") {
+      event.preventDefault();
+      adjustWindowZoom(win, -ZOOM_STEP);
+    } else if (key === "0" || code === "Digit0" || code === "Numpad0") {
+      event.preventDefault();
+      setWindowZoom(win, 0);
+    }
+  });
 }
 
 function checkCommand(command, args, options = {}) {
@@ -313,12 +348,14 @@ async function getSystemCapabilities() {
   };
 }
 
-ipcMain.handle("system:capabilities", async () => {
+ipcMain.handle("system:capabilities", async (_event, options = {}) => {
   const caps = await getSystemCapabilities();
-  for (const [name, cap] of Object.entries(caps)) {
-    if (name === "platform") continue;
-    logEntry(cap.available ? "INFO" : "WARN", "system",
-      `${name}: ${cap.available ? "disponible" : cap.reason}`);
+  if (!options?.silent) {
+    for (const [name, cap] of Object.entries(caps)) {
+      if (name === "platform") continue;
+      logEntry(cap.available ? "INFO" : "WARN", "system",
+        `${name}: ${cap.available ? "disponible" : cap.reason}`);
+    }
   }
   return caps;
 });
@@ -454,6 +491,7 @@ function createWindow(splash = null) {
     const current = win.webContents.getURL();
     if (current && url !== current) event.preventDefault();
   });
+  setupWindowZoomShortcuts(win);
   if (IS_DEV) { win.loadURL("http://localhost:5173"); win.webContents.openDevTools(); }
   else          win.loadFile(path.join(__dirname, "dist", "index.html"));
   buildMenu(win);
@@ -514,7 +552,9 @@ function buildMenu(win, recentFiles = []) {
       { role:"reload", label:mt("reload") },
       { role:"toggleDevTools", label:mt("devtools") },
       { type:"separator" },
-      { role:"resetZoom" }, { role:"zoomIn" }, { role:"zoomOut" },
+      { label:mt("zoom_reset"), accelerator:"CmdOrCtrl+0", click: () => setWindowZoom(win, 0) },
+      { label:mt("zoom_in"), accelerator:"CmdOrCtrl+Plus", click: () => adjustWindowZoom(win, ZOOM_STEP) },
+      { label:mt("zoom_out"), accelerator:"CmdOrCtrl+-", click: () => adjustWindowZoom(win, -ZOOM_STEP) },
       { type:"separator" }, { role:"togglefullscreen", label:mt("fullscreen") },
       { type:"separator" },
       { label:mt("split_right"), accelerator:"CmdOrCtrl+\\",

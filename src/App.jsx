@@ -63,12 +63,31 @@ export default function App() {
   useEffect(() => {
     if (!IS_ELECTRON) return;
     let alive = true;
+    let inFlight = false;
+    const refreshCapabilities = async (silent = true) => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const caps = await window.electronAPI.getCapabilities({ silent });
+        if (alive) setCapabilities(caps);
+      } catch {
+        if (alive) setCapabilities({});
+      } finally {
+        inFlight = false;
+      }
+    };
     const timer = setTimeout(() => {
-      window.electronAPI.getCapabilities()
-        .then(caps => { if (alive) setCapabilities(caps); })
-        .catch(() => { if (alive) setCapabilities({}); });
+      refreshCapabilities(false);
     }, 600);
-    return () => { alive = false; clearTimeout(timer); };
+    const interval = setInterval(() => refreshCapabilities(true), 15000);
+    const onFocus = () => refreshCapabilities(true);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
 
   const savePref = useCallback((key, val) => {
@@ -239,6 +258,7 @@ export default function App() {
                      borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
             title={t("split_down_title")}>⬓</button>
 
+          {splitDirection && (
             <button onClick={closeSplit}
               style={{ background:"transparent", border:"none", color:"var(--pl-icon-close)",
                        padding:"0 14px", cursor:"pointer", fontSize:13,

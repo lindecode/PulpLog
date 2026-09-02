@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useLang } from "../i18n.jsx";
 import { getRememberedScroll, setRememberedScroll } from "../logHooks.mjs";
 import { ROW_H, OVERSCAN, exportResultText, copyResultText, safeFileName } from "../utils.mjs";
@@ -6,12 +6,21 @@ import { LogRow, selectedLogText } from "./LogRow.jsx";
 import { findLineRange, findAdjacentLineIndex } from "../logProcessing.mjs";
 
 function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark, selection, setSelection,
-                       listRef, stateKey, selectionSource, onFilterText, onJumpBookmark, onUserScrollUp, autoScroll }) {
+                       listRef, stateKey, selectionSource, onFilterText, onJumpBookmark, onUserScrollUp, onUserInteract, autoScroll }) {
   const t = useLang();
   const [scrollTop, setScrollTop] = useState(() => getRememberedScroll(stateKey));
   const [height,    setHeight]    = useState(500);
   const [contextMenu, setContextMenu] = useState(null);
   const containerRef = useRef(null);
+  const total  = items.length;
+  const totalH = total * ROW_H;
+  const maxScrollTop = Math.max(0, totalH - height);
+  const setScrollPosition = useCallback((value) => {
+    const next = Math.max(0, Math.min(Number(value) || 0, maxScrollTop));
+    setScrollTop(next);
+    setRememberedScroll(stateKey, next);
+    if (containerRef.current) containerRef.current.scrollTop = next;
+  }, [maxScrollTop, stateKey]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -24,26 +33,22 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
 
   useEffect(() => {
     if (autoScroll && containerRef.current && selection.lines.size === 0) {
-      // Force layout to ensure scrollHeight is up to date, then set
-      const syncScroll = () => {
-        if (containerRef.current) {
-          containerRef.current.scrollTop = containerRef.current.scrollHeight;
-        }
-      };
+      const syncScroll = () => setScrollPosition(maxScrollTop);
       syncScroll();
       requestAnimationFrame(syncScroll);
     }
-  }, [items.length, autoScroll, height, selection.lines.size]);
+  }, [items.length, autoScroll, height, selection.lines.size, maxScrollTop, setScrollPosition]);
+
+  useEffect(() => {
+    if (scrollTop > maxScrollTop) setScrollPosition(maxScrollTop);
+  }, [scrollTop, maxScrollTop, setScrollPosition]);
 
   useEffect(() => {
     if (!listRef) return;
     listRef.current = {
-      scrollToBottom: () => { setTimeout(() => { if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight; }, 10); },
-      scrollToTop:    () => { if (containerRef.current) containerRef.current.scrollTop = 0; },
-      scrollToIndex:  (index) => {
-        if (containerRef.current)
-          containerRef.current.scrollTop = Math.max(0, index * ROW_H - height / 2);
-      },
+      scrollToBottom: () => setTimeout(() => setScrollPosition(maxScrollTop), 10),
+      scrollToTop:    () => setScrollPosition(0),
+      scrollToIndex:  (index) => setScrollPosition(Math.max(0, index * ROW_H - height / 2)),
     };
   });
 
@@ -59,8 +64,6 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
     };
   }, [contextMenu]);
 
-  const total  = items.length;
-  const totalH = total * ROW_H;
   const start  = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
   const end    = Math.min(total, Math.ceil((scrollTop + height) / ROW_H) + OVERSCAN);
   const nativeText = () => window.getSelection?.()?.toString() || "";
@@ -68,6 +71,7 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
   const selectLine = (line, event = {}, ignoreNativeText = false) => {
     const hasRowModifier = !!(event.shiftKey || event.ctrlKey || event.metaKey);
     if (!ignoreNativeText && !hasRowModifier && nativeText().trim()) return;
+    onUserInteract?.();
     const additive = !!(event.ctrlKey || event.metaKey);
     const extending = !!event.shiftKey;
     setSelection(previous => {
@@ -140,7 +144,10 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
          tabIndex={0}
          aria-label="Log lines"
          style={{ overflow:"auto", flex:1, minHeight:0, outline:"none", overflowAnchor:"none" }}
-         onMouseDown={() => containerRef.current?.focus({ preventScroll:true })}
+         onMouseDown={() => {
+           containerRef.current?.focus({ preventScroll:true });
+           onUserInteract?.();
+         }}
          onKeyDown={event => {
            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
              if (nativeText()) return;
@@ -163,7 +170,7 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
            } else if (event.key === "F2") {
              event.preventDefault();
              onJumpBookmark?.(event.shiftKey ? "prev" : "next");
-           } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
+           } else if (event.code === "Space") {
              if (selection.lines.size) { event.preventDefault(); toggleSelectionBookmarks(); }
            }
          }}

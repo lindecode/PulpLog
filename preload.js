@@ -63,7 +63,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onMenuSplitDown:  (cb) => { ipcRenderer.on("menu:split-down",  cb); return () => ipcRenderer.removeListener("menu:split-down",  cb); },
   onMenuSplitClose: (cb) => { ipcRenderer.on("menu:split-close", cb); return () => ipcRenderer.removeListener("menu:split-close", cb); },
 
-  getCapabilities: () => ipcRenderer.invoke("system:capabilities"),
+  getCapabilities: (options) => ipcRenderer.invoke("system:capabilities", options),
   copyText: (text) => ipcRenderer.invoke("clipboard:writeText", text),
   exportText: (payload) => ipcRenderer.invoke("export:text", payload),
 

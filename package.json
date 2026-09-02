@@ -1,7 +1,7 @@
 {
   "name": "pulplog",
-  "version": "3.0.0",
-  "description": "PulpLog — visor de logs de escritorio con coloreado de stack traces",
+  "version": "3.0.1",
+  "description": "PulpLog — visor de logs avanzado",
   "author": "LindeCode",
   "license": "MIT",
   "main": "main.js",

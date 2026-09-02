@@ -56,12 +56,16 @@ export const fmtBytes = value => {
 
 export const safeFileName = s => String(s || "pulplog-results").replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").slice(0, 80);
 
-export function buildResultText({ source, filter, items, total }) {
+export function buildResultText({ source, filter, timeRange, items, total }) {
   const realRows = items.filter(x => !x.separator).length;
+  const timeFilter = timeRange?.enabled
+    ? `${timeRange.date || "today/no day"} ${timeRange.from || "*"}..${timeRange.to || "*"}${timeRange.includeUndated === false ? " (dated only)" : " (including undated)"}`
+    : "(none)";
   const header = [
     `PulpLog export`,
     `Source: ${source || "unknown"}`,
     `Filter: ${filter || "(none)"}`,
+    `Time range: ${timeFilter}`,
     `Rows: ${realRows} / ${total}`,
     `Exported: ${new Date().toISOString()}`,
     "",
@@ -87,4 +91,3 @@ export async function exportResultText(defaultPath, content) {
   URL.revokeObjectURL(url);
   return defaultPath;
 }
-

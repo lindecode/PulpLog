@@ -61,9 +61,66 @@ function Btn({ children, onClick, active, title, disabled, variant }) {
   );
 }
 
+function TimeRangeFilter({ value, onChange, invalid, availableDates = [] }) {
+  const t = useLang();
+  const enabled = !!value?.enabled;
+  const update = patch => onChange({ includeUndated:true, ...value, ...patch });
+  const inputStyle = {
+    width:112, background:"var(--pl-bg-input)",
+    border:`0.5px solid ${invalid ? "var(--pl-error-border)" : "var(--pl-border)"}`,
+    borderRadius:6, color: invalid ? "var(--pl-error-text)" : "var(--pl-text-2)",
+    fontFamily:"inherit", fontSize:11, padding:"4px 7px", outline:"none",
+  };
+
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:5, flexWrap:"wrap" }}>
+      <Btn active={enabled} onClick={() => update({ enabled:!enabled })} title={t("time_filter_title")}>
+        {t("time_filter_btn")}
+      </Btn>
+      {enabled && (
+        <>
+          {availableDates.length > 0 && (
+            <select
+              value={value?.date || ""}
+              onChange={event => update({ date:event.target.value })}
+              title={t("time_date_title")}
+              style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
+                padding:"4px 7px", outline:"none", maxWidth:150 }}>
+              <option value="">{t("time_date_today")}</option>
+              {availableDates.map(date => <option key={date} value={date}>{date}</option>)}
+            </select>
+          )}
+          <input
+            type="time"
+            step="1"
+            value={value?.from || ""}
+            onChange={event => update({ from:event.target.value })}
+            placeholder={t("time_from_ph")}
+            title={t("time_input_title")}
+            style={inputStyle}
+          />
+          <input
+            type="time"
+            step="1"
+            value={value?.to || ""}
+            onChange={event => update({ to:event.target.value })}
+            placeholder={t("time_to_ph")}
+            title={t("time_input_title")}
+            style={inputStyle}
+          />
+          <Btn onClick={() => onChange({ enabled:true, date:"", from:"", to:"", includeUndated:true })} title={t("time_clear_title")}>
+            {t("time_clear_btn")}
+          </Btn>
+        </>
+      )}
+    </div>
+  );
+}
+
 function Sep() {
   return <span style={{ width:"0.5px", background:"var(--pl-text-8)", alignSelf:"stretch" }} />;
 }
 
 
-export { ContextInput, Btn, Sep };
+export { ContextInput, TimeRangeFilter, Btn, Sep };

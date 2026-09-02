@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useLang } from "../i18n.jsx";
 import { useDebouncedValue, useRowSelection, useEscapeToClose, useSearchShortcuts } from "../hooks.mjs";
-import { useRememberedState, useBatchedLines, useFilteredLogs } from "../logHooks.mjs";
+import { useRememberedState, useBatchedLines, useFilteredLogs, useAvailableLogDates, setRememberedScroll } from "../logHooks.mjs";
 import { classifyLines, countLevels, appendRecentItems } from "../logProcessing.mjs";
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtBytes, fmtNum } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, Btn, Sep } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, Btn, Sep } from "./SharedUI.jsx";
 
 function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfilesChange, initialConfig = null }) {
   const t = useLang();
@@ -442,11 +442,13 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
   const [historyInfo,setHistoryInfo]= useState(null);
   const [historyProgress,setHistoryProgress]= useState(null);
   const [retryNonce, setRetryNonce]= useState(0);
+  const [reloadNonce,setReloadNonce]= useState(0);
   const [reconnectIn,setReconnectIn]= useState(0);
   const [filter,       setFilter]       = useRememberedState(tabKey, "filter", "");
   const [filterUseRegex, setFilterUseRegex] = useRememberedState(tabKey, "useRegex", false);
   const filterDebounced = useDebouncedValue(filter);
   const [context,      setContext]      = useRememberedState(tabKey, "context", 0);
+  const [timeRange,    setTimeRange]    = useRememberedState(tabKey, "timeRange", () => ({ enabled:false, date:"", from:"", to:"", includeUndated:true }));
   const [search,       setSearch]       = useRememberedState(tabKey, "search", "");
   const [searchUseRegex, setSearchUseRegex] = useRememberedState(tabKey, "searchUseRegex", false);
   const searchDebounced = useDebouncedValue(search);
@@ -467,6 +469,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
   const nextLineRef   = useRef(1);
   const autoScrollRef = useRef(true);
   const reconnectAttemptRef = useRef(0);
+  const streamVersionRef = useRef(0);
   const workerRef = useRef(null);
   const processingRef = useRef(Promise.resolve());
   const enqueueLines = useBatchedLines(incoming => {
@@ -489,6 +492,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
 
   useEffect(() => {
     let disposed = false;
+    const streamVersion = ++streamVersionRef.current;
     let retryTimer = null;
     let countdownTimer = null;
     setReconnectIn(0);
@@ -502,15 +506,32 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
         if (!disposed) setRetryNonce(value => value + 1);
       }, seconds * 1000);
     };
+    const isCurrentStream = () => !disposed && streamVersionRef.current === streamVersion;
     const unwatch = window.electronAPI.streamRemoteLogs(retryNonce > 0 ? { ...config, resumeOnly:true } : config, {
-      onSpawned() { reconnectAttemptRef.current = 0; setReconnectIn(0); setError(null); setSpawned(true); setConnected(true); },
+      onSpawned() {
+        if (!isCurrentStream()) return;
+        reconnectAttemptRef.current = 0; setReconnectIn(0); setError(null); setSpawned(true); setConnected(true);
+      },
       onLines(text) {
+        if (!isCurrentStream()) return;
         enqueueLines(text.split("\n").filter(Boolean));
       },
-      onHistory(data) { setHistoryInfo(data); setHistoryProgress(data.size > 0 ? 0 : null); },
-      onProgress(data) { setHistoryProgress(data.percent >= 100 ? null : data.percent); },
-      onEnd()      { setConnected(false); setError(t("remote_disconnected")); scheduleReconnect("connection terminated"); },
-      onError(msg) { setError(msg); setConnected(false); scheduleReconnect(msg); },
+      onHistory(data) {
+        if (!isCurrentStream()) return;
+        setHistoryInfo(data); setHistoryProgress(data.size > 0 ? 0 : null);
+      },
+      onProgress(data) {
+        if (!isCurrentStream()) return;
+        setHistoryProgress(data.percent >= 100 ? null : data.percent);
+      },
+      onEnd() {
+        if (!isCurrentStream()) return;
+        setConnected(false); setError(t("remote_disconnected")); scheduleReconnect("connection terminated");
+      },
+      onError(msg) {
+        if (!isCurrentStream()) return;
+        setError(msg); setConnected(false); scheduleReconnect(msg);
+      },
     });
     return () => {
       disposed = true;
@@ -518,7 +539,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
       clearInterval(countdownTimer);
       unwatch?.();
     };
-  }, [config, retryNonce]);
+  }, [config, retryNonce, reloadNonce]);
 
   const stats = useMemo(() => countLevels(classified), [classified]);
   const reconnectNeedsConfig = Boolean(config.password || config.passphrase)
@@ -534,10 +555,52 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
     setRetryNonce(value => value + 1);
   };
 
-  const { filtered, filterRegexValid, searchRegexValid, matchOrigLines } =
-    useFilteredLogs("remote", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, reportMetric);
+  const resetViewState = useCallback(() => {
+    setRememberedScroll(tabKey, 0);
+    listRef.current?.scrollToTop();
+    streamVersionRef.current += 1;
+    enqueueLines.clear?.();
+    processingRef.current = Promise.resolve();
+    workerRef.current?.terminate();
+    workerRef.current = createLogWorkerClient();
+    setClassified([]);
+    nextLineRef.current = 1;
+    setSelection({ lines:new Set(), active:null, anchor:null });
+    setBookmarks(new Set());
+    setBmCursor(-1);
+    setMatchCursor(-1);
+  }, [tabKey, enqueueLines, setSelection, setBookmarks, setBmCursor, setMatchCursor]);
+
+  const clearVisibleLog = useCallback(() => {
+    resetViewState();
+    reconnectAttemptRef.current = 0;
+    setReconnectIn(0);
+    setHistoryInfo(null);
+    setHistoryProgress(null);
+    setSpawned(false);
+    setConnected(false);
+    setError(null);
+    setRetryNonce(value => value + 1);
+  }, [resetViewState]);
+
+  const reloadLog = useCallback(() => {
+    resetViewState();
+    reconnectAttemptRef.current = 0;
+    setRetryNonce(0);
+    setReconnectIn(0);
+    setHistoryInfo(null);
+    setHistoryProgress(null);
+    setSpawned(false);
+    setConnected(false);
+    setError(null);
+    setReloadNonce(value => value + 1);
+  }, [resetViewState]);
+
+  const { filtered, filterRegexValid, searchRegexValid, timeRangeValid, matchOrigLines } =
+    useFilteredLogs("remote", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
+  const availableDates = useAvailableLogDates(classified);
 
   const droppedCount = Math.max(0, nextLineRef.current - 1 - classified.length);
 
@@ -600,6 +663,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
     : config.mode === "ssh-wsl" && config.distro
       ? `${config.distro} → ${sshTarget}:${config.filePath}`
       : `${sshTarget}:${config.filePath}`;
+  const sourceLabel = `${modeLabel} ${targetLabel}`;
 
   const BADGES = [
     { key:"error", label:"ERROR", bg:"var(--pl-chip-error-bg)", fg:"var(--pl-chip-error-fg)", cnt:stats.error },
@@ -612,15 +676,15 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
   ];
 
   const copyResults = useCallback(() => {
-    const text = buildResultText({ source: `${modeLabel} ${targetLabel}`, filter, items: filtered, total: classified.length });
+    const text = buildResultText({ source: sourceLabel, filter, timeRange, items: filtered, total: classified.length });
     copyResultText(text);
-  }, [modeLabel, targetLabel, filter, filtered, classified.length]);
+  }, [sourceLabel, filter, timeRange, filtered, classified.length]);
 
   const exportResults = useCallback(() => {
     const source = `${modeLabel}-${targetLabel}`;
-    const text = buildResultText({ source: `${modeLabel} ${targetLabel}`, filter, items: filtered, total: classified.length });
+    const text = buildResultText({ source: sourceLabel, filter, timeRange, items: filtered, total: classified.length });
     exportResultText(`${safeFileName(source)}-filtered.log`, text);
-  }, [modeLabel, targetLabel, filter, filtered, classified.length]);
+  }, [modeLabel, targetLabel, sourceLabel, filter, timeRange, filtered, classified.length]);
 
   return (
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
@@ -628,14 +692,25 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
                     background:"var(--pl-bg-panel)", borderBottom:"0.5px solid var(--pl-border-soft)",
                     flexShrink:0 }}>
 
-        {/* row 1: filter + search + context + match nav */}
+        {/* row 1: source + result actions */}
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-          <span style={{ fontSize:11, color:"var(--pl-cat-remote)", background:"var(--pl-remote-badge-bg)",
+          <span title={sourceLabel}
+            style={{ fontSize:11, color:"var(--pl-source-remote)", background:"var(--pl-remote-badge-bg)",
                          border:"0.5px solid var(--pl-remote-badge-border)", borderRadius:6, padding:"3px 8px",
-                         fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
-            {modeLabel} {targetLabel}
+                         fontWeight:700, minWidth:0, flex:"1 1 220px", overflow:"hidden",
+                         textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+            {sourceLabel}
           </span>
+          <Btn active={showNums} onClick={() => setShowNums(p => !p)} title={t("linenums_title")}>#</Btn>
+          <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
+          <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
+          <Sep />
+          <Btn onClick={clearVisibleLog} disabled={!classified.length} title={t("clear_log_title")}>{t("clear_log")}</Btn>
+          <Btn onClick={reloadLog} title={t("reload_log_title")}>{t("reload_log")}</Btn>
+        </div>
 
+        {/* row 2: filter + search + context + match nav */}
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
               ref={searchInputRef}
@@ -656,7 +731,9 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
             <button onClick={() => setSearchUseRegex(p => !p)}
               title={t("search_regex_btn_title")}
               style={{ background: searchUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
-                       border:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderTop:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderRight:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderBottom:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
                        borderLeft:"none", borderRadius:"0 6px 6px 0",
                        color: searchUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
                        fontFamily:"monospace", fontSize:11, padding:"4px 10px",
@@ -675,11 +752,18 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
               placeholder={filterUseRegex ? t("regex_ph") : t("filter_ph")}
               value={filter}
               onChange={e => setFilter(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                jumpMatch(e.shiftKey ? "prev" : "next");
+              }}
             />
             <button onClick={() => setFilterUseRegex(p => !p)}
               title={t("regex_btn_title")}
               style={{ background: filterUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
-                       border:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderTop:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderRight:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderBottom:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
                        borderLeft:"none", borderRadius:"0 6px 6px 0",
                        color: filterUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
                        fontFamily:"monospace", fontSize:11, padding:"4px 10px",
@@ -689,19 +773,20 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
           </div>
 
           <ContextInput value={context} onChange={setContext} />
+          <TimeRangeFilter value={timeRange} onChange={setTimeRange} invalid={!timeRangeValid} availableDates={availableDates} />
 
           {(filter || search) && matchOrigLines.length > 0 && (
             <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
               <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
               <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
               <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
-                {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
+                {(search ? t("match_source_search") : t("match_source_filter"))} {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
               </span>
             </div>
           )}
         </div>
 
-        {/* row 2: level chips + bookmarks + actions */}
+        {/* row 3: level chips + bookmarks + actions */}
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
           <span key={key} onClick={event => toggle(key, event)} title={t("level_toggle_title")}
@@ -721,11 +806,14 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
         <Btn onClick={() => jumpBookmark("next")} disabled={!sortedBookmarks.length} title={t("bm_next_title")}>◆ ↓</Btn>
         {bookmarks.size > 0 && <span style={{ fontSize:10, color:"var(--pl-bookmark)", padding:"0 2px" }}>{t("bm_count", bookmarks.size)}</span>}
         {bookmarks.size > 0 && <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }} title={t("bm_clear_title")}>{t("bm_clear_btn")}</Btn>}
-        <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
-        <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
-        <Sep />
-        <Btn active={autoScroll} variant="accent" onClick={() => { setAutoScroll(p => { if (!p) listRef.current?.scrollToBottom(); return !p; }); }} title={t("autoscroll_title")}>{t("autoscroll_btn")}</Btn>
-        <Btn active={showNums}   onClick={() => setShowNums(p => !p)}   title={t("linenums_title")}>#</Btn>
+        <Btn active={autoScroll} variant="accent" onClick={() => {
+          const next = !autoScroll;
+          if (next) {
+            setSelection({ lines:new Set(), active:null, anchor:null });
+            listRef.current?.scrollToBottom();
+          }
+          setAutoScroll(next);
+        }} title={t("autoscroll_title")}>{t("autoscroll_btn")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
         </div>
@@ -779,6 +867,8 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
                       color:"var(--pl-text-7)", fontSize:13 }}>
           {filterRegexError
             ? <><span style={{ color:"var(--pl-error-text)" }}>⚠</span> {t("regex_invalid")}</>
+            : !timeRangeValid ? <><span style={{ color:"var(--pl-error-text)" }}>⚠</span> {t("time_invalid")}</>
+            : timeRange.enabled ? t("time_no_results")
             : filter ? t("no_results", filter) : t("no_lines")}
         </div>
       ) : (
@@ -796,6 +886,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
           onFilterText={setFilter}
           onJumpBookmark={jumpBookmark}
           onUserScrollUp={() => setAutoScroll(false)}
+          onUserInteract={() => setAutoScroll(false)}
           autoScroll={autoScroll}
         />
       )}

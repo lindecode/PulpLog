@@ -42,6 +42,7 @@ Los instaladores se generan en `release/`.
 | Virtual scroll | Renderiza solo las filas visibles para mantener fluidez con muchos registros |
 | Pestañas | Abre varios archivos o streams en la misma ventana |
 | Auto-scroll | Sigue automáticamente el final del archivo cuando está activo |
+| Limpiar y recargar | `Limpiar` vacía sólo la vista actual para mostrar lo nuevo; `Recargar` vuelve a leer desde el origen |
 | Restauración de sesión | Reabre las pestañas de archivos guardadas al iniciar la app |
 | Archivos recientes | Guarda hasta 10 archivos recientes y permite reabrirlos desde bienvenida o configuración |
 
@@ -51,6 +52,7 @@ Los instaladores se generan en `release/`.
 |---------|---------|
 | Filtro por texto | En tiempo real, sin distinguir mayúsculas/minúsculas |
 | Filtro por regex | Botón `.*` con validación en vivo |
+| Filtro por hora | Rango opcional con control de reloj (`HH:mm:ss`) y selector de día cuando el log trae fechas; las líneas continuadas heredan la última hora detectada |
 | Filtro por nivel | Toggles para ERROR, WARN, INFO, DEBUG, TRACE, STACK y PLAIN. Ctrl+clic (Cmd+clic en macOS) aísla ese nivel; Ctrl+clic de nuevo restaura todos |
 | Coloreado semántico | Resalta niveles de log, timestamps, paquetes Java, stack frames y `Caused by:` |
 | Marcadores | Clic en el número de línea para marcar/desmarcar |
@@ -170,7 +172,7 @@ El límite de líneas vivas configurado en PulpLog continúa protegiendo la memo
 | Función | Detalle |
 |---------|---------|
 | Idioma | Interfaz en español o inglés |
-| Tema | Clásica, Blanca, Oscura o Brasa (oscuro, inspirado en fuego/carmesí) |
+| Tema | Clásica, Blanca, Oscura, Brasa (fuego/carmesí) o Azul (oscuro, tonalidad azul) |
 | Preferencias | Auto-scroll por defecto y números de línea por defecto |
 | Bitácora interna | Panel de diagnóstico con eventos de archivos, Docker y atajos |
 | Acerca de | Modal con información de la app, autor y licencia |
@@ -196,7 +198,7 @@ En Windows 11 algunos atajos con `Super` pueden estar reservados por el sistema.
 - `Ctrl+Shift+T` (`Cmd+Shift+T` en macOS): reabrir pestaña cerrada
 - `F2`: siguiente marcador
 - `Shift+F2`: marcador anterior
-- `Ctrl+B`: marcar/desmarcar la línea seleccionada
+- `Space`: marcar/desmarcar la línea seleccionada
 - Ctrl+clic en un badge de nivel (`Cmd+clic` en macOS): aislar ese nivel; Ctrl+clic de nuevo restaura todos
 - Clic en `◇`: marcar línea
 - Botón Docker: conectar a un contenedor activo

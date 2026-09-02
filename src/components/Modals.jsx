@@ -172,7 +172,7 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
           {t("theme_h")}
         </div>
         <div style={{ display:"flex", gap:8, marginBottom:24 }}>
-          {["classic","light","vscode","ember"].map(th => (
+          {["classic","light","vscode","ember","blue"].map(th => (
             <button key={th} onClick={() => onTogglePref("theme", th)}
               style={{ background: theme === th ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
                        border:`0.5px solid ${theme === th ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
@@ -281,7 +281,7 @@ function AboutModal({ onClose }) {
         <img src={logoSrc} alt="LindeCode"
           style={{ width:96, height:96, borderRadius:12, objectFit:"cover", marginBottom:12 }} />
         <div style={{ fontSize:18, color:"var(--pl-text-1)", fontWeight:700, marginBottom:4 }}>PulpLog</div>
-        <div style={{ fontSize:11, color:"var(--pl-text-6)", marginBottom:20 }}>v3.0.0</div>
+        <div style={{ fontSize:11, color:"var(--pl-text-6)", marginBottom:20 }}>v3.0.1</div>
         <div style={{ width:40, height:"0.5px", background:"var(--pl-border-strong)", margin:"0 auto 20px" }} />
         <div style={{ fontSize:13, color:"var(--pl-text-3)", marginBottom:6 }}>{t("developed_by")}</div>
         <div style={{ fontSize:16, color:"var(--pl-accent)", fontWeight:700, letterSpacing:1 }}>LindeCode</div>
@@ -314,24 +314,13 @@ function HelpGuideModal({ lang, onClose }) {
            style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                     padding:"26px 30px", width:"min(640px, calc(100vw - 32px))", maxHeight:"85vh",
                     overflowY:"auto", boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
+
         <div style={{ display:"flex", alignItems:"center", marginBottom:18 }}>
           <span style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700 }}>📋 {t("help_guide_title")}</span>
           <button onClick={onClose}
             style={{ marginLeft:"auto", background:"none", border:"none",
                      color:"var(--pl-text-6)", cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>✕</button>
         </div>
-
-        {sections.map(({ title, items }) => (
-          <div key={title} style={{ marginBottom:18 }}>
-            <div style={{ fontSize:11, color:"var(--pl-accent-hover)", fontWeight:700,
-                          letterSpacing:.5, marginBottom:6 }}>{title}</div>
-            <ul style={{ margin:0, paddingLeft:18, display:"flex", flexDirection:"column", gap:4 }}>
-              {items.map(item => (
-                <li key={item} style={{ fontSize:12, color:"var(--pl-text-3)", lineHeight:1.5 }}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        ))}
 
         <div style={{ fontSize:10, color:"var(--pl-text-6)", fontWeight:700, letterSpacing:1, marginBottom:10 }}>
           {lang === "en" ? "KEYBOARD SHORTCUTS" : "ATAJOS DE TECLADO"}
@@ -347,6 +336,18 @@ function HelpGuideModal({ lang, onClose }) {
             </div>
           ))}
         </div>
+
+        {sections.map(({ title, items }) => (
+          <div key={title} style={{ marginBottom:18 }}>
+            <div style={{ fontSize:11, color:"var(--pl-accent-hover)", fontWeight:700,
+                          letterSpacing:.5, marginBottom:6 }}>{title}</div>
+            <ul style={{ margin:0, paddingLeft:18, display:"flex", flexDirection:"column", gap:4 }}>
+              {items.map(item => (
+                <li key={item} style={{ fontSize:12, color:"var(--pl-text-3)", lineHeight:1.5 }}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ))}
 
         <button onClick={onClose}
           style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",

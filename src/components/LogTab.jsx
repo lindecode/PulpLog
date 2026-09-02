@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useLang } from "../i18n.jsx";
 import { useDebouncedValue, useRowSelection, useSearchShortcuts } from "../hooks.mjs";
-import { useRememberedState, useFilteredLogs } from "../logHooks.mjs";
+import { useRememberedState, useFilteredLogs, useAvailableLogDates, setRememberedScroll } from "../logHooks.mjs";
 import { classifyLines, countLevels, splitTextChunk } from "../logProcessing.mjs";
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, getCachedFile, cacheFile, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtSize, fmtNum } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, Btn, Sep } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, Btn, Sep } from "./SharedUI.jsx";
 import { RotationBanner } from "./Modals.jsx";
 
 /* ═══════════════════════════════════════════
@@ -16,6 +16,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
                   autoScrollDefault = false, showNumsDefault = true, isActive = false }) {
   const t = useLang();
   const selectionSource = fileName || filePath || "pulplog";
+  const sourceLabel = filePath || fileName || selectionSource;
   const [classified,  setClassified] = useState([]);
   const [stats,       setStats]      = useState({ error:0, warn:0, info:0, debug:0, trace:0 });
   const [loading,     setLoading]     = useState(true);
@@ -28,6 +29,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   const [filterUseRegex, setFilterUseRegex] = useRememberedState(tabKey, "useRegex", false);
   const filterDebounced = useDebouncedValue(filter);
   const [context,      setContext]      = useRememberedState(tabKey, "context", 0);
+  const [timeRange,    setTimeRange]    = useRememberedState(tabKey, "timeRange", () => ({ enabled:false, date:"", from:"", to:"", includeUndated:true }));
   const [search,       setSearch]       = useRememberedState(tabKey, "search", "");
   const [searchUseRegex, setSearchUseRegex] = useRememberedState(tabKey, "searchUseRegex", false);
   const searchDebounced = useDebouncedValue(search);
@@ -39,6 +41,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
 
   const [rotation,    setRotation]    = useState(null);
   const [reloadKey,   setReloadKey]   = useState(0);
+  const [watchNonce,   setWatchNonce]  = useState(0);
   const [lvl, setLvl] = useRememberedState(tabKey, "levels", () => ({
     error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true
   }));
@@ -105,6 +108,37 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
       }
     }).catch(() => {});
   };
+
+  const clearViewState = useCallback(() => {
+    setRememberedScroll(tabKey, 0);
+    listRef.current?.scrollToTop();
+    itemsRef.current = [];
+    carryRef.current = "";
+    statsRef.current = { error:0, warn:0, info:0, debug:0, trace:0 };
+    progressRef.current = 0;
+    processingRef.current = Promise.resolve();
+    nextParsedRef.current = 1;
+    setClassified([]);
+    setStats({ ...statsRef.current });
+    setSelection({ lines:new Set(), active:null, anchor:null });
+    setBookmarks(new Set());
+    setBmCursor(-1);
+    setMatchCursor(-1);
+  }, [tabKey, setSelection, setBookmarks, setBmCursor, setMatchCursor]);
+
+  const clearVisibleLog = useCallback(async () => {
+    clearViewState();
+    if (IS_ELECTRON && filePath) {
+      const stat = await window.electronAPI.statFile(filePath).catch(() => null);
+      if (stat) watchOffsetRef.current = stat.size;
+      setWatchNonce(value => value + 1);
+    }
+  }, [clearViewState, filePath]);
+
+  const reloadLog = useCallback(() => {
+    clearViewState();
+    setReloadKey(value => value + 1);
+  }, [clearViewState]);
 
   /* Stream read */
   useEffect(() => {
@@ -247,12 +281,13 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
       onRecreated() { setRotation({ event:"recreated", countdown: 0 }); setReloadKey(k => k + 1); },
     });
     return () => unwatch?.();
-  }, [tailing, loading, filePath]); // eslint-disable-line
+  }, [tailing, loading, filePath, watchNonce]); // eslint-disable-line
 
-  const { filtered, filterRegexValid, searchRegexValid, matchOrigLines } =
-    useFilteredLogs("file", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, reportMetric);
+  const { filtered, filterRegexValid, searchRegexValid, timeRangeValid, matchOrigLines } =
+    useFilteredLogs("file", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
+  const availableDates = useAvailableLogDates(classified);
 
 
   useEffect(() => setFilterRegexError(!filterRegexValid), [filterRegexValid]);
@@ -314,15 +349,15 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   ];
 
   const copyResults = useCallback(() => {
-    const text = buildResultText({ source: filePath || fileName, filter, items: filtered, total: classified.length });
+    const text = buildResultText({ source: filePath || fileName, filter, timeRange, items: filtered, total: classified.length });
     copyResultText(text);
-  }, [filePath, fileName, filter, filtered, classified.length]);
+  }, [filePath, fileName, filter, timeRange, filtered, classified.length]);
 
   const exportResults = useCallback(() => {
     const source = fileName || filePath || "pulplog-results";
-    const text = buildResultText({ source: filePath || fileName, filter, items: filtered, total: classified.length });
+    const text = buildResultText({ source: filePath || fileName, filter, timeRange, items: filtered, total: classified.length });
     exportResultText(`${safeFileName(source)}-filtered.log`, text);
-  }, [filePath, fileName, filter, filtered, classified.length]);
+  }, [filePath, fileName, filter, timeRange, filtered, classified.length]);
 
   return (
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
@@ -332,7 +367,24 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
                     background:"var(--pl-bg-panel)", borderBottom:"0.5px solid var(--pl-border-soft)",
                     flexShrink:0 }}>
 
-        {/* row 1: filter + search + context + match nav */}
+        {/* row 1: source + result actions */}
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+          <span title={sourceLabel}
+            style={{ fontSize:11, color:"var(--pl-source-file)", background:"var(--pl-file-badge-bg)",
+                     border:"0.5px solid var(--pl-file-badge-border)", borderRadius:6, padding:"3px 8px",
+                     fontWeight:700, minWidth:0, flex:"1 1 220px", overflow:"hidden",
+                     textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+            LOG {sourceLabel}
+          </span>
+          <Btn active={showNums} onClick={() => setShowNums(p => !p)} title={t("linenums_title")}>#</Btn>
+          <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
+          <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
+          <Sep />
+          <Btn onClick={clearVisibleLog} disabled={!classified.length} title={t("clear_log_title")}>{t("clear_log")}</Btn>
+          <Btn onClick={reloadLog} disabled={!filePath && !webFile} title={t("reload_log_title")}>{t("reload_log")}</Btn>
+        </div>
+
+        {/* row 2: filter + search + context + match nav */}
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
@@ -355,7 +407,9 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
               onClick={() => setSearchUseRegex(p => !p)}
               title={t("search_regex_btn_title")}
               style={{ background: searchUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
-                       border:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderTop:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderRight:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderBottom:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
                        borderLeft:"none", borderRadius:"0 6px 6px 0",
                        color: searchUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
                        fontFamily:"monospace", fontSize:11, padding:"4px 10px",
@@ -374,12 +428,19 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
               placeholder={filterUseRegex ? t("regex_ph") : t("filter_ph")}
               value={filter}
               onChange={e => setFilter(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                jumpMatch(e.shiftKey ? "prev" : "next");
+              }}
             />
             <button
               onClick={() => setFilterUseRegex(p => !p)}
               title={t("regex_btn_title")}
               style={{ background: filterUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
-                       border:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderTop:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderRight:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderBottom:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
                        borderLeft:"none", borderRadius:"0 6px 6px 0",
                        color: filterUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
                        fontFamily:"monospace", fontSize:11, padding:"4px 10px",
@@ -389,19 +450,20 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           </div>
 
           <ContextInput value={context} onChange={setContext} />
+          <TimeRangeFilter value={timeRange} onChange={setTimeRange} invalid={!timeRangeValid} availableDates={availableDates} />
 
           {(filter || search) && matchOrigLines.length > 0 && (
             <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
               <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
               <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
               <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
-                {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
+                {(search ? t("match_source_search") : t("match_source_filter"))} {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
               </span>
             </div>
           )}
         </div>
 
-        {/* row 2: level chips + bookmarks + actions */}
+        {/* row 3: level chips + bookmarks + actions */}
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
 
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
@@ -443,24 +505,19 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           </Btn>
         )}
 
-        <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
-        <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
-
-        <Sep />
-
         <Btn active={tailing} onClick={toggleTail} disabled={!IS_ELECTRON}
           title={t("tail_title")}>
           {tailing ? t("tail_stop") : t("tail_follow")}
         </Btn>
-        <Btn onClick={() => setReloadKey(k => k + 1)} disabled={!filePath}
-          title={t("refresh_title")}>
-          {t("refresh_btn")}
-        </Btn>
-        <Btn active={autoScroll} variant="accent" onClick={() => { setAutoScroll(p => { if (!p) listRef.current?.scrollToBottom(); return !p; }); }} title={t("autoscroll_title")}>
+        <Btn active={autoScroll} variant="accent" onClick={() => {
+          const next = !autoScroll;
+          if (next) {
+            setSelection({ lines:new Set(), active:null, anchor:null });
+            listRef.current?.scrollToBottom();
+          }
+          setAutoScroll(next);
+        }} title={t("autoscroll_title")}>
           {t("autoscroll_btn")}
-        </Btn>
-        <Btn active={showNums} onClick={() => setShowNums(p => !p)} title={t("linenums_title")}>
-          #
         </Btn>
         <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
@@ -501,6 +558,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
                       flexDirection:"column", gap:8, color:"var(--pl-text-7)", fontSize:13 }}>
           {filterRegexError
             ? <><span style={{ color:"var(--pl-error-text)", fontSize:14 }}>⚠</span> {t("regex_invalid")}</>
+            : !timeRangeValid ? <><span style={{ color:"var(--pl-error-text)", fontSize:14 }}>⚠</span> {t("time_invalid")}</>
+            : timeRange.enabled ? t("time_no_results")
             : filter ? t("no_results", filter) : t("no_lines")}
         </div>
       ) : (
@@ -518,6 +577,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           onFilterText={setFilter}
           onJumpBookmark={jumpBookmark}
           onUserScrollUp={() => setAutoScroll(false)}
+          onUserInteract={() => setAutoScroll(false)}
           autoScroll={autoScroll}
         />
       )}

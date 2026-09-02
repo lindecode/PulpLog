@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useLang } from "../i18n.jsx";
 import { useDebouncedValue, useRowSelection, useEscapeToClose, useSearchShortcuts } from "../hooks.mjs";
-import { useRememberedState, useBatchedLines, useFilteredLogs } from "../logHooks.mjs";
+import { useRememberedState, useBatchedLines, useFilteredLogs, useAvailableLogDates, setRememberedScroll } from "../logHooks.mjs";
 import { classifyLines, countLevels, appendRecentItems } from "../logProcessing.mjs";
 import { reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtNum } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, Btn, Sep } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, Btn, Sep } from "./SharedUI.jsx";
 
 /* ═══════════════════════════════════════════
    Docker – container picker modal
@@ -88,14 +88,17 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
   useSearchShortcuts(searchInputRef, filterInputRef, isActive);
 
   const selectionSource = `docker-${containerName}`;
+  const sourceLabel = `Docker ${containerName}${containerId ? ` (${String(containerId).slice(0, 12)})` : ""}`;
   const [classified, setClassified] = useState([]);
   const [spawned,    setSpawned]   = useState(false);
   const [connected,  setConnected] = useState(false);
   const [error,      setError]     = useState(null);
+  const [streamNonce,setStreamNonce]= useState(0);
   const [filter,       setFilter]       = useRememberedState(tabKey, "filter", "");
   const [filterUseRegex, setFilterUseRegex] = useRememberedState(tabKey, "useRegex", false);
   const filterDebounced = useDebouncedValue(filter);
   const [context,      setContext]      = useRememberedState(tabKey, "context", 0);
+  const [timeRange,    setTimeRange]    = useRememberedState(tabKey, "timeRange", () => ({ enabled:false, date:"", from:"", to:"", includeUndated:true }));
   const [search,       setSearch]       = useRememberedState(tabKey, "search", "");
   const [searchUseRegex, setSearchUseRegex] = useRememberedState(tabKey, "searchUseRegex", false);
   const searchDebounced = useDebouncedValue(search);
@@ -125,6 +128,9 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
 
   useEffect(() => {
+    setSpawned(false);
+    setConnected(false);
+    setError(null);
     const unwatch = window.electronAPI.streamDockerLogs(containerId, {
       onSpawned() { setSpawned(true); },
       onLines(text) {
@@ -134,14 +140,15 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
       onError(msg) { setError(msg); setConnected(false); },
     });
     return unwatch;
-  }, [containerId]);
+  }, [containerId, streamNonce]);
 
   const stats = useMemo(() => countLevels(classified), [classified]);
 
-  const { filtered, filterRegexValid, searchRegexValid, matchOrigLines } =
-    useFilteredLogs("docker", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, reportMetric);
+  const { filtered, filterRegexValid, searchRegexValid, timeRangeValid, matchOrigLines } =
+    useFilteredLogs("docker", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
+  const availableDates = useAvailableLogDates(classified);
 
   const droppedCount = Math.max(0, nextLineRef.current - 1 - classified.length);
 
@@ -201,15 +208,35 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
   ];
 
   const copyResults = useCallback(() => {
-    const text = buildResultText({ source: `Docker ${containerName}`, filter, items: filtered, total: classified.length });
+    const text = buildResultText({ source: `Docker ${containerName}`, filter, timeRange, items: filtered, total: classified.length });
     copyResultText(text);
-  }, [containerName, filter, filtered, classified.length]);
+  }, [containerName, filter, timeRange, filtered, classified.length]);
 
   const exportResults = useCallback(() => {
     const source = `docker-${containerName}`;
-    const text = buildResultText({ source: `Docker ${containerName}`, filter, items: filtered, total: classified.length });
+    const text = buildResultText({ source: `Docker ${containerName}`, filter, timeRange, items: filtered, total: classified.length });
     exportResultText(`${safeFileName(source)}-filtered.log`, text);
-  }, [containerName, filter, filtered, classified.length]);
+  }, [containerName, filter, timeRange, filtered, classified.length]);
+
+  const clearVisibleLog = useCallback(() => {
+    setRememberedScroll(tabKey, 0);
+    listRef.current?.scrollToTop();
+    enqueueLines.clear?.();
+    setClassified([]);
+    nextLineRef.current = 1;
+    setSelection({ lines:new Set(), active:null, anchor:null });
+    setBookmarks(new Set());
+    setBmCursor(-1);
+    setMatchCursor(-1);
+  }, [tabKey, enqueueLines, setSelection, setBookmarks, setBmCursor, setMatchCursor]);
+
+  const reloadLog = useCallback(() => {
+    clearVisibleLog();
+    setSpawned(false);
+    setConnected(false);
+    setError(null);
+    setStreamNonce(value => value + 1);
+  }, [clearVisibleLog]);
 
   return (
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
@@ -219,14 +246,25 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
                     background:"var(--pl-bg-panel)", borderBottom:"0.5px solid var(--pl-border-soft)",
                     flexShrink:0 }}>
 
-        {/* row 1: filter + search + context + match nav */}
+        {/* row 1: source + result actions */}
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-          <span style={{ fontSize:11, color:"var(--pl-cat-docker)", background:"var(--pl-docker-badge-bg)",
+          <span title={sourceLabel}
+            style={{ fontSize:11, color:"var(--pl-source-docker)", background:"var(--pl-docker-badge-bg)",
                          border:"0.5px solid var(--pl-docker-badge-border)", borderRadius:6, padding:"3px 8px",
-                         fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
-            🐳 {containerName}
+                         fontWeight:700, minWidth:0, flex:"1 1 220px", overflow:"hidden",
+                         textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+            {sourceLabel}
           </span>
+          <Btn active={showNums} onClick={() => setShowNums(p => !p)} title={t("linenums_title")}>#</Btn>
+          <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
+          <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
+          <Sep />
+          <Btn onClick={clearVisibleLog} disabled={!classified.length} title={t("clear_log_title")}>{t("clear_log")}</Btn>
+          <Btn onClick={reloadLog} title={t("reload_log_title")}>{t("reload_log")}</Btn>
+        </div>
 
+        {/* row 2: filter + search + context + match nav */}
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
               ref={searchInputRef}
@@ -247,7 +285,9 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
             <button onClick={() => setSearchUseRegex(p => !p)}
               title={t("search_regex_btn_title")}
               style={{ background: searchUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
-                       border:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderTop:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderRight:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderBottom:`0.5px solid ${searchUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
                        borderLeft:"none", borderRadius:"0 6px 6px 0",
                        color: searchUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
                        fontFamily:"monospace", fontSize:11, padding:"4px 10px",
@@ -266,11 +306,18 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
               placeholder={filterUseRegex ? t("regex_ph") : t("filter_ph")}
               value={filter}
               onChange={e => setFilter(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                jumpMatch(e.shiftKey ? "prev" : "next");
+              }}
             />
             <button onClick={() => setFilterUseRegex(p => !p)}
               title={t("regex_btn_title")}
               style={{ background: filterUseRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
-                       border:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderTop:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderRight:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderBottom:`0.5px solid ${filterUseRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
                        borderLeft:"none", borderRadius:"0 6px 6px 0",
                        color: filterUseRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)",
                        fontFamily:"monospace", fontSize:11, padding:"4px 10px",
@@ -280,19 +327,20 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
           </div>
 
           <ContextInput value={context} onChange={setContext} />
+          <TimeRangeFilter value={timeRange} onChange={setTimeRange} invalid={!timeRangeValid} availableDates={availableDates} />
 
           {(filter || search) && matchOrigLines.length > 0 && (
             <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
               <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
               <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
               <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
-                {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
+                {(search ? t("match_source_search") : t("match_source_filter"))} {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
               </span>
             </div>
           )}
         </div>
 
-        {/* row 2: level chips + bookmarks + actions */}
+        {/* row 3: level chips + bookmarks + actions */}
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
 
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
@@ -315,13 +363,14 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
         <Btn onClick={() => jumpBookmark("next")} disabled={!sortedBookmarks.length} title={t("bm_next_title")}>◆ ↓</Btn>
         {bookmarks.size > 0 && <span style={{ fontSize:10, color:"var(--pl-bookmark)", padding:"0 2px" }}>{t("bm_count", bookmarks.size)}</span>}
         {bookmarks.size > 0 && <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }} title={t("bm_clear_title")}>{t("bm_clear_btn")}</Btn>}
-        <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
-        <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
-
-        <Sep />
-
-        <Btn active={autoScroll} variant="accent" onClick={() => { setAutoScroll(p => { if (!p) listRef.current?.scrollToBottom(); return !p; }); }} title={t("autoscroll_title")}>{t("autoscroll_btn")}</Btn>
-        <Btn active={showNums}   onClick={() => setShowNums(p => !p)}   title={t("linenums_title")}>#</Btn>
+        <Btn active={autoScroll} variant="accent" onClick={() => {
+          const next = !autoScroll;
+          if (next) {
+            setSelection({ lines:new Set(), active:null, anchor:null });
+            listRef.current?.scrollToBottom();
+          }
+          setAutoScroll(next);
+        }} title={t("autoscroll_title")}>{t("autoscroll_btn")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
         </div>
@@ -349,6 +398,8 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
                       color:"var(--pl-text-7)", fontSize:13 }}>
           {filterRegexError
             ? <><span style={{ color:"var(--pl-error-text)" }}>⚠</span> {t("regex_invalid")}</>
+            : !timeRangeValid ? <><span style={{ color:"var(--pl-error-text)" }}>⚠</span> {t("time_invalid")}</>
+            : timeRange.enabled ? t("time_no_results")
             : filter ? t("no_results", filter) : t("no_lines")}
         </div>
       ) : (
@@ -366,6 +417,7 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
           onFilterText={setFilter}
           onJumpBookmark={jumpBookmark}
           onUserScrollUp={() => setAutoScroll(false)}
+          onUserInteract={() => setAutoScroll(false)}
           autoScroll={autoScroll}
         />
       )}

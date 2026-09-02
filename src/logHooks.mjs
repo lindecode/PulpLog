@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { filterLogs } from "./logProcessing.mjs";
+import { collectLogDates, filterLogs } from "./logProcessing.mjs";
 
 const MAX_REMEMBERED_TABS = 100;
 const rememberedTabs = new Map();
@@ -66,6 +66,12 @@ export function useBatchedLines(onBatch, delay = 75, maxBufferedLines = Number.P
     if (!timerRef.current) timerRef.current = setTimeout(flush, delay);
   }, [delay, flush, maxBufferedLines]);
 
+  enqueue.clear = () => {
+    clearTimeout(timerRef.current);
+    timerRef.current = null;
+    bufferRef.current = [];
+  };
+
   useEffect(() => () => {
     clearTimeout(timerRef.current);
     bufferRef.current = [];
@@ -73,14 +79,18 @@ export function useBatchedLines(onBatch, delay = 75, maxBufferedLines = Number.P
 
   return enqueue;
 }
-export function useFilteredLogs(kind, classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, reportMetric) {
+export function useFilteredLogs(kind, classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange, reportMetric) {
   return useMemo(() => {
     const started = performance.now();
-    const result = filterLogs(classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex);
+    const result = filterLogs(classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange);
     const duration = performance.now() - started;
     if (duration >= 4) {
       queueMicrotask(() => reportMetric("search", duration, `${kind}: ${classified.length} lines`));
     }
     return result;
-  }, [kind, classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, reportMetric]);
+  }, [kind, classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange, reportMetric]);
+}
+
+export function useAvailableLogDates(classified) {
+  return useMemo(() => collectLogDates(classified), [classified]);
 }
