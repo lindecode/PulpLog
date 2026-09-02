@@ -4,11 +4,14 @@ const fs   = require("fs");
 const crypto = require("crypto");
 const { StringDecoder } = require("string_decoder");
 const http           = require("http");
+const https          = require("https");
 const { execFile, spawn } = require("child_process");
 const { Client: SshClient } = require("ssh2");
 
 const IS_SMOKE_TEST = process.env.PULPLOG_SMOKE_TEST === "1";
 const IS_DEV = !IS_SMOKE_TEST && (process.env.NODE_ENV === "development" || !app.isPackaged);
+const GITHUB_RELEASES_URL = "https://github.com/lindecode/PulpLog/releases";
+const GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/lindecode/PulpLog/releases/latest";
 
 function assertTrustedSender(event) {
   const source = event?.senderFrame?.url || event?.sender?.getURL?.() || "";
@@ -104,7 +107,8 @@ const MENU_STRINGS = {
     view:"Ver", reload:"Recargar", devtools:"DevTools", fullscreen:"Pantalla completa",
     zoom_reset:"Tamaño real", zoom_in:"Acercar", zoom_out:"Alejar",
     split_right:"Dividir a la derecha", split_down:"Dividir abajo", split_close:"Cerrar división",
-    help:"Ayuda", user_guide:"Manual de usuario", github:"GitHub", about:"Acerca de PulpLog…",
+    help:"Ayuda", user_guide:"Manual de usuario", check_updates:"Buscar actualizaciones",
+    github:"GitHub", about:"Acerca de PulpLog…",
     file_unavailable_title:"Archivo no disponible", file_unavailable_msg:"No se pudo abrir el archivo reciente",
     open_location:"Abrir ubicación del archivo", copy_path:"Copiar ruta del archivo",
     duplicate_tab:"Duplicar bitácora", reload_tab:"Recargar bitácora", rename_tab:"Renombrar pestaña",
@@ -112,7 +116,17 @@ const MENU_STRINGS = {
     close_others:"Cerrar otras pestañas", close_right:"Cerrar pestañas a la derecha",
     open_log_dialog:"Abrir archivo de log", pick_ssh_key:"Seleccionar llave privada SSH",
     export_dialog:"Exportar resultados", filter_logs:"Logs", filter_all:"Todos", filter_ssh_keys:"Llaves SSH",
-    ok:"Aceptar", tech_detail:"Detalle técnico",
+    ok:"Aceptar", cancel:"Cancelar", tech_detail:"Detalle técnico",
+    updates_title:"Actualizaciones de PulpLog",
+    update_available:(latest, current) => `Hay una nueva versión disponible: ${latest}\nVersión instalada: ${current}`,
+    update_available_detail:(name, publishedAt) => [name, publishedAt ? `Publicado: ${publishedAt}` : ""].filter(Boolean).join("\n"),
+    update_open_release:"Abrir GitHub Releases",
+    update_later:"Después",
+    update_skip_version:"No volver a mostrar esta versión",
+    update_skipped:(latest) => `La versión ${latest} está oculta por tu preferencia.`,
+    update_show_again:"Volver a mostrar",
+    update_current:(current) => `PulpLog está actualizado.\nVersión instalada: ${current}`,
+    update_error:"No se pudo consultar GitHub Releases.",
     err_docker:"Error de Docker", err_docker_logs:"Error en logs Docker",
     err_remote:"Error remoto", err_ssh:"Error SSH",
     shortcut_open_file:"Abrir archivo", shortcut_new_tab:"Nueva pestaña",
@@ -127,7 +141,8 @@ const MENU_STRINGS = {
     view:"View", reload:"Reload", devtools:"DevTools", fullscreen:"Toggle Full Screen",
     zoom_reset:"Actual Size", zoom_in:"Zoom In", zoom_out:"Zoom Out",
     split_right:"Split right", split_down:"Split down", split_close:"Close split",
-    help:"Help", user_guide:"User Guide", github:"GitHub", about:"About PulpLog…",
+    help:"Help", user_guide:"User Guide", check_updates:"Check for Updates",
+    github:"GitHub", about:"About PulpLog…",
     file_unavailable_title:"File unavailable", file_unavailable_msg:"Could not open the recent file",
     open_location:"Show in folder", copy_path:"Copy file path",
     duplicate_tab:"Duplicate tab", reload_tab:"Reload tab", rename_tab:"Rename tab",
@@ -135,7 +150,17 @@ const MENU_STRINGS = {
     close_others:"Close other tabs", close_right:"Close tabs to the right",
     open_log_dialog:"Open log file", pick_ssh_key:"Select SSH private key",
     export_dialog:"Export results", filter_logs:"Logs", filter_all:"All files", filter_ssh_keys:"SSH keys",
-    ok:"OK", tech_detail:"Technical detail",
+    ok:"OK", cancel:"Cancel", tech_detail:"Technical detail",
+    updates_title:"PulpLog Updates",
+    update_available:(latest, current) => `A new version is available: ${latest}\nInstalled version: ${current}`,
+    update_available_detail:(name, publishedAt) => [name, publishedAt ? `Published: ${publishedAt}` : ""].filter(Boolean).join("\n"),
+    update_open_release:"Open GitHub Releases",
+    update_later:"Later",
+    update_skip_version:"Do not show this version again",
+    update_skipped:(latest) => `Version ${latest} is hidden by your preference.`,
+    update_show_again:"Show Again",
+    update_current:(current) => `PulpLog is up to date.\nInstalled version: ${current}`,
+    update_error:"Could not check GitHub Releases.",
     err_docker:"Docker error", err_docker_logs:"Docker logs error",
     err_remote:"Remote error", err_ssh:"SSH error",
     shortcut_open_file:"Open file", shortcut_new_tab:"New tab",
@@ -147,6 +172,142 @@ const MENU_STRINGS = {
 };
 function mt(key) {
   return (MENU_STRINGS[currentLanguage] || MENU_STRINGS.es)[key] || key;
+}
+function mtf(key, ...args) {
+  const entry = mt(key);
+  return typeof entry === "function" ? entry(...args) : entry;
+}
+
+function parseReleaseVersion(value) {
+  const match = String(value || "").trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/i);
+  if (!match) return null;
+  return match.slice(1, 4).map(Number);
+}
+
+function compareVersions(a, b) {
+  const av = parseReleaseVersion(a);
+  const bv = parseReleaseVersion(b);
+  if (!av || !bv) return 0;
+  for (let i = 0; i < 3; i += 1) {
+    if (av[i] !== bv[i]) return av[i] > bv[i] ? 1 : -1;
+  }
+  return 0;
+}
+
+function formatReleaseDate(value) {
+  if (!value) return "";
+  try {
+    return new Intl.DateTimeFormat(currentLanguage === "en" ? "en-US" : "es-MX", {
+      year: "numeric", month: "short", day: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return String(value);
+  }
+}
+
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": `PulpLog/${app.getVersion()}`,
+      },
+    }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", chunk => {
+        body += chunk;
+        if (body.length > 1024 * 1024) {
+          req.destroy(new Error("Response too large"));
+        }
+      });
+      res.on("end", () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          reject(new Error(`GitHub HTTP ${res.statusCode}: ${body.slice(0, 240)}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(body));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+    req.setTimeout(8000, () => req.destroy(new Error("GitHub request timed out")));
+    req.on("error", reject);
+  });
+}
+
+async function checkForUpdates(win) {
+  const currentVersion = app.getVersion();
+  try {
+    const release = await fetchJson(GITHUB_LATEST_RELEASE_API);
+    const latestTag = String(release?.tag_name || "").trim();
+    const latestUrl = release?.html_url || GITHUB_RELEASES_URL;
+    if (!parseReleaseVersion(latestTag)) throw new Error(`Invalid release tag: ${latestTag || "(empty)"}`);
+
+    if (compareVersions(latestTag, currentVersion) > 0) {
+      const settings = await loadSettings();
+      if (settings.skippedUpdateVersion === latestTag) {
+        const { response } = await dialog.showMessageBox(win || undefined, {
+          type: "info",
+          title: mt("updates_title"),
+          message: mtf("update_skipped", latestTag),
+          detail: mtf("update_available_detail", release?.name || "", formatReleaseDate(release?.published_at)),
+          buttons: [mt("ok"), mt("update_open_release"), mt("update_show_again")],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
+        if (response === 1) shell.openExternal(latestUrl);
+        if (response === 2) await updateSettings(current => ({ ...current, skippedUpdateVersion: "" }));
+        return;
+      }
+
+      logEntry("INFO", "system", `Nueva version disponible: ${latestTag} (instalada ${currentVersion})`);
+      const { response, checkboxChecked } = await dialog.showMessageBox(win || undefined, {
+        type: "info",
+        title: mt("updates_title"),
+        message: mtf("update_available", latestTag, `v${currentVersion}`),
+        detail: mtf("update_available_detail", release?.name || "", formatReleaseDate(release?.published_at)),
+        buttons: [mt("update_open_release"), mt("update_later")],
+        checkboxLabel: mt("update_skip_version"),
+        checkboxChecked: false,
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (checkboxChecked) {
+        await updateSettings(current => ({ ...current, skippedUpdateVersion: latestTag }));
+      }
+      if (response === 0) shell.openExternal(latestUrl);
+      return;
+    }
+
+    logEntry("INFO", "system", `PulpLog actualizado: ${currentVersion}; ultimo release ${latestTag}`);
+    await dialog.showMessageBox(win || undefined, {
+      type: "info",
+      title: mt("updates_title"),
+      message: mtf("update_current", `v${currentVersion}`),
+      detail: latestTag ? `GitHub Releases: ${latestTag}` : GITHUB_RELEASES_URL,
+      buttons: [mt("ok")],
+      noLink: true,
+    });
+  } catch (err) {
+    const msg = err?.message || String(err);
+    logEntry("WARN", "system", `No se pudo consultar actualizaciones: ${msg}`);
+    const { response } = await dialog.showMessageBox(win || undefined, {
+      type: "warning",
+      title: mt("updates_title"),
+      message: mt("update_error"),
+      detail: msg,
+      buttons: [mt("ok"), mt("update_open_release")],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    if (response === 1) shell.openExternal(GITHUB_RELEASES_URL);
+  }
 }
 
 const ERROR_EXPLANATIONS = {
@@ -566,6 +727,8 @@ function buildMenu(win, recentFiles = []) {
     ]},
     { label:mt("help"), submenu:[
       { label:mt("user_guide"), accelerator:"F1", click: () => win.webContents.send("menu:user-guide") },
+      { label:mt("check_updates"), click: () => checkForUpdates(win) },
+      { type:"separator" },
       { label:mt("github"), click: () => shell.openExternal("https://github.com/lindecode/PulpLog") },
       { type:"separator" },
       { label:mt("about"), click: () => win.webContents.send("menu:about") },
@@ -1518,7 +1681,8 @@ function normalizeRemoteProfiles(value) {
 function normalizeSettings(value) {
   const s = value && typeof value === "object" ? value : {};
   const language = ["es", "en"].includes(s.language) ? s.language : "es";
-  const theme = ["classic", "light", "vscode", "ember"].includes(s.theme) ? s.theme : "classic";
+  const theme = ["classic", "light", "vscode", "ember", "blue"].includes(s.theme) ? s.theme : "classic";
+  const skippedUpdateVersion = parseReleaseVersion(s.skippedUpdateVersion) ? String(s.skippedUpdateVersion).trim() : "";
 
   let panes;
   if (Array.isArray(s.panes)) {
@@ -1550,6 +1714,7 @@ function normalizeSettings(value) {
     maxLiveLines,
     language,
     theme,
+    skippedUpdateVersion,
   };
 }
 async function loadSettings() {

@@ -185,6 +185,7 @@ El límite de líneas vivas configurado en PulpLog continúa protegiendo la memo
 | Instancia única | Si ya hay una ventana abierta, los archivos nuevos se abren ahí |
 | Menú nativo | Abrir archivo, nueva pestaña, recargar, DevTools, zoom y pantalla completa |
 | Manual de usuario | Menú Ayuda → Manual de usuario (`F1`): resumen de funciones y atajos, en el idioma activo |
+| Buscar actualizaciones | Menú Ayuda → Buscar actualizaciones consulta GitHub Releases, permite ocultar una versión y abre la descarga oficial si hay una versión nueva |
 | Atajos de pestañas | `Ctrl+W` / `Cmd+W` cierra la pestaña activa; `Ctrl+Shift+T` / `Cmd+Shift+T` reabre la última pestaña cerrada |
 | Atajos globales | `Super+A` abre archivo, `Super+T` nueva pestaña, `Super+W` cierra pestaña, `Super+Shift+T` reabre la última pestaña y `Super+P` trae la app al frente |
 
