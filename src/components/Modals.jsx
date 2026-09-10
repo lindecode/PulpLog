@@ -287,7 +287,7 @@ function AboutModal({ onClose }) {
         <img src={logoSrc} alt="LindeCode"
           style={{ width:96, height:96, borderRadius:12, objectFit:"cover", marginBottom:12 }} />
         <div style={{ fontSize:18, color:"var(--pl-text-1)", fontWeight:700, marginBottom:4 }}>PulpLog</div>
-        <div style={{ fontSize:11, color:"var(--pl-text-6)", marginBottom:20 }}>v3.0.1</div>
+        <div style={{ fontSize:11, color:"var(--pl-text-6)", marginBottom:20 }}>v3.1.0</div>
         <div style={{ width:40, height:"0.5px", background:"var(--pl-border-strong)", margin:"0 auto 20px" }} />
         <div style={{ fontSize:13, color:"var(--pl-text-3)", marginBottom:6 }}>{t("developed_by")}</div>
         <div style={{ fontSize:16, color:"var(--pl-accent)", fontWeight:700, letterSpacing:1 }}>LindeCode</div>
