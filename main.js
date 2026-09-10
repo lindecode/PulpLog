@@ -94,6 +94,7 @@ process.on("unhandledRejection", reason => {
 });
 
 const alertCooldowns = new Map();
+const activeErrorAlerts = new Set();
 
 /* ── Native-UI i18n: menu, dialogs, and error alerts don't go through the
    renderer's translation table, so they need their own — kept in sync with
@@ -359,13 +360,15 @@ function explainError(category, msg) {
 }
 
 function showErrorAlert(sender, category, title, msg) {
-  const key = `${category}:${title}:${msg}`;
+  const detail = explainError(category, msg);
+  const key = `${category}:${title}:${detail}`;
   const now = Date.now();
-  if ((alertCooldowns.get(key) || 0) > now - 15000) return;
+  if (activeErrorAlerts.has(key)) return;
+  if ((alertCooldowns.get(key) || 0) > now - 60000) return;
   alertCooldowns.set(key, now);
+  activeErrorAlerts.add(key);
 
   const win = sender && !sender.isDestroyed() ? BrowserWindow.fromWebContents(sender) : BrowserWindow.getFocusedWindow();
-  const detail = explainError(category, msg);
   dialog.showMessageBox(win || undefined, {
     type: "error",
     title,
@@ -373,7 +376,12 @@ function showErrorAlert(sender, category, title, msg) {
     detail: detail === msg ? detail : `${detail}\n\n${mt("tech_detail")}: ${msg}`,
     buttons: [mt("ok")],
     noLink: true,
-  }).catch(() => {});
+  }).catch(() => {}).finally(() => activeErrorAlerts.delete(key));
+}
+
+function showRemoteStreamAlert(event, payload, title, msg) {
+  if (payload?.resumeOnly) return;
+  showErrorAlert(event.sender, "remote", title, msg);
 }
 
 const MIN_ZOOM_LEVEL = -4;
@@ -1452,7 +1460,7 @@ function startNativeSshStream(event, payload) {
     client.exec(tailScript, (err, channel) => {
       if (err) {
         remoteStreams.delete(streamId);
-        showErrorAlert(event.sender, "remote", mt("err_remote"), err.message);
+        showRemoteStreamAlert(event, payload, mt("err_remote"), err.message);
         send("remote:error", streamId, err.message);
         client.end();
         return;
@@ -1471,7 +1479,7 @@ function startNativeSshStream(event, payload) {
         if (code) {
           const msg = stderrBuf.trim() || `tail terminó con código ${code}`;
           logEntry("ERROR", "remote", `${label}: ${msg}`);
-          showErrorAlert(event.sender, "remote", mt("err_remote"), msg);
+          showRemoteStreamAlert(event, payload, mt("err_remote"), msg);
           send("remote:error", streamId, msg);
         } else {
           logEntry("INFO", "remote", `SSH nativo terminado: ${label}`);
@@ -1487,7 +1495,7 @@ function startNativeSshStream(event, payload) {
     const fingerprintHint = seenFingerprint ? ` Huella (fingerprint) del servidor: ${seenFingerprint}` : "";
     const msg = `${e.message}${fingerprintHint}`;
     logEntry("ERROR", "remote", `${label}: ${msg}`);
-    showErrorAlert(event.sender, "remote", mt("err_ssh"), msg);
+    showRemoteStreamAlert(event, payload, mt("err_ssh"), msg);
     send("remote:error", streamId, msg);
   });
 
@@ -1515,7 +1523,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     try {
       startNativeSshStream(event, payload);
     } catch (e) {
-      showErrorAlert(event.sender, "remote", mt("err_ssh"), e.message);
+      showRemoteStreamAlert(event, payload, mt("err_ssh"), e.message);
       event.sender.send("remote:error", streamId, e.message);
     }
     return;
@@ -1525,7 +1533,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
   try {
     spec = buildRemoteCommand(payload);
   } catch (e) {
-    showErrorAlert(event.sender, "remote", mt("err_remote"), e.message);
+    showRemoteStreamAlert(event, payload, mt("err_remote"), e.message);
     event.sender.send("remote:error", streamId, e.message);
     return;
   }
@@ -1601,7 +1609,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     if (isError) {
       const msg = stderrBuf.trim() || `${spec.command} terminó con código ${code}`;
       logEntry("ERROR", "remote", `${spec.label}: ${msg}`);
-      showErrorAlert(event.sender, "remote", mt("err_remote"), msg);
+      showRemoteStreamAlert(event, payload, mt("err_remote"), msg);
       send("remote:error", streamId, msg);
     } else {
       logEntry("INFO", "remote", `Stream remoto terminado: ${spec.label} (código ${code})`);
@@ -1613,7 +1621,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     remoteStreams.delete(streamId);
     if (stream.stopped) return;
     logEntry("ERROR", "remote", `${spec.label}: ${e.message}`);
-    showErrorAlert(event.sender, "remote", mt("err_remote"), e.message);
+    showRemoteStreamAlert(event, payload, mt("err_remote"), e.message);
     send("remote:error", streamId, e.message);
   });
 
