@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const { StringDecoder } = require("string_decoder");
 const http           = require("http");
 const https          = require("https");
+const zlib           = require("zlib");
 const { execFile, spawn } = require("child_process");
 const { Client: SshClient } = require("ssh2");
 
@@ -28,6 +29,10 @@ function normalizeLocalPath(value) {
   return path.resolve(value);
 }
 
+function isGzipPath(filePath) {
+  return /\.gz$/i.test(String(filePath || ""));
+}
+
 function normalizeIdentifier(value, label) {
   if (typeof value !== "string" || !value || value.length > 160 || /[\x00-\x1f]/.test(value)) {
     throw new Error(`Invalid ${label}`);
@@ -35,7 +40,7 @@ function normalizeIdentifier(value, label) {
   return value;
 }
 /* ── file IO state ── */
-const activeReads = new Map(); // readId → stream
+const activeReads = new Map(); // readId → cancellable stream
 const watchers = new Map(); // watchId → { watcher, pollTimer, filePath, lastSize }
 
 /* ── Single-instance + file-arg from OS ── */
@@ -130,6 +135,7 @@ const MENU_STRINGS = {
     update_error:"No se pudo consultar GitHub Releases.",
     err_docker:"Error de Docker", err_docker_logs:"Error en logs Docker",
     err_remote:"Error remoto", err_ssh:"Error SSH",
+    gzip_read_error:"No se pudo descomprimir el archivo gzip",
     shortcut_open_file:"Abrir archivo", shortcut_new_tab:"Nueva pestaña",
     shortcut_close_tab:"Cerrar pestaña activa", shortcut_reopen_tab:"Reabrir última pestaña",
     shortcut_bring_front:"Traer al frente", shortcut_registered:"registrado", shortcut_unavailable:"no disponible",
@@ -164,6 +170,7 @@ const MENU_STRINGS = {
     update_error:"Could not check GitHub Releases.",
     err_docker:"Docker error", err_docker_logs:"Docker logs error",
     err_remote:"Remote error", err_ssh:"SSH error",
+    gzip_read_error:"Could not decompress gzip file",
     shortcut_open_file:"Open file", shortcut_new_tab:"New tab",
     shortcut_close_tab:"Close active tab", shortcut_reopen_tab:"Reopen last tab",
     shortcut_bring_front:"Bring to front", shortcut_registered:"registered", shortcut_unavailable:"unavailable",
@@ -760,7 +767,7 @@ ipcMain.handle("dialog:open", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
     title: mt("open_log_dialog"),
     filters: [
-      { name:mt("filter_logs"), extensions:["log","txt","out"] },
+      { name:mt("filter_logs"), extensions:["log","txt","out","gz"] },
       { name:mt("filter_all"), extensions:["*"] },
     ],
     properties: ["openFile"],
@@ -802,13 +809,31 @@ ipcMain.handle("file:read", async (event, payload) => {
     let bytesRead = 0;
     let settled = false;
     const decoder = new StringDecoder("utf8");
-    const stream = fs.createReadStream(filePath, { highWaterMark: 1024*1024 });
-    activeReads.set(readId, stream);
-    stream.on("data",  chunk => {
+    const source = fs.createReadStream(filePath, { highWaterMark: 1024*1024 });
+    const stream = isGzipPath(filePath) ? source.pipe(zlib.createGunzip()) : source;
+    activeReads.set(readId, {
+      destroy() {
+        source.destroy();
+        if (stream !== source) stream.destroy();
+      },
+    });
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      activeReads.delete(readId);
+      const message = isGzipPath(filePath) ? `${mt("gzip_read_error")}: ${err.message}` : err.message;
+      logEntry("ERROR", "file", `Error leyendo ${path.basename(filePath)}: ${message}`);
+      event.sender.send("file:error", readId, message);
+      reject(err);
+    };
+    source.on("data", chunk => {
       bytesRead += chunk.length;
+    });
+    stream.on("data",  chunk => {
       event.sender.send("file:chunk", readId, decoder.write(chunk), bytesRead);
     });
     stream.on("end",   ()    => {
+      if (settled) return;
       settled = true;
       activeReads.delete(readId);
       const remainder = decoder.end();
@@ -816,13 +841,8 @@ ipcMain.handle("file:read", async (event, payload) => {
       event.sender.send("file:done", readId, bytesRead);
       resolve();
     });
-    stream.on("error", err  => {
-      settled = true;
-      activeReads.delete(readId);
-      logEntry("ERROR", "file", `Error leyendo ${path.basename(filePath)}: ${err.message}`);
-      event.sender.send("file:error", readId, err.message);
-      reject(err);
-    });
+    source.on("error", fail);
+    if (stream !== source) stream.on("error", fail);
     stream.on("close", () => {
       activeReads.delete(readId);
       if (!settled) {
@@ -1193,6 +1213,17 @@ function normalizeRemoteHistory(config) {
 function buildRemoteTailScript(config, filePath) {
   const history = normalizeRemoteHistory(config);
   const quotedPath = quotePosixArg(filePath);
+  if (isGzipPath(filePath)) {
+    const readCheck = `if ! command -v gzip >/dev/null 2>&1; then printf 'gzip no disponible en el host remoto\\n' >&2; exit 127; fi; `
+      + `if ! test -r ${quotedPath}; then printf 'No se pudo leer la ruta remota\\n' >&2; exit 1; fi; `;
+    if (history.mode === "lines") {
+      return `${readCheck}printf '${REMOTE_READY_MARKER}\\n'; gzip -cd -- ${quotedPath} | tail -n ${history.tailLines}`;
+    }
+    if (history.mode === "full") {
+      return `${readCheck}printf '${REMOTE_READY_MARKER}\\n'; gzip -cd -- ${quotedPath} | head -c ${history.maxBytes}`;
+    }
+    return `${readCheck}printf '${REMOTE_READY_MARKER}\\n'; gzip -cd -- ${quotedPath} | tail -c ${history.maxBytes}`;
+  }
   if (config?.resumeOnly)
     return `printf '${REMOTE_READY_MARKER}\\n'; exec tail -n 0 -F -- ${quotedPath}`;
   if (history.mode === "lines")
@@ -1200,6 +1231,19 @@ function buildRemoteTailScript(config, filePath) {
   return `size=$(wc -c < ${quotedPath} 2>/dev/null || printf -- -1); `
     + `printf '${REMOTE_HISTORY_MARKER}:${history.mode}:%s:${history.maxBytes}\\n' "$size"; `
     + `printf '${REMOTE_READY_MARKER}\\n'; exec tail -c ${history.maxBytes} -F -- ${quotedPath}`;
+}
+
+function buildRemoteReadCheck(filePath) {
+  const quotedPath = quotePosixArg(filePath);
+  const toolCheck = isGzipPath(filePath)
+    ? "command -v gzip >/dev/null"
+    : "command -v tail >/dev/null";
+  return `${toolCheck} && test -r ${quotedPath}`;
+}
+
+function hasRemoteGzipError(filePath, stderrText) {
+  if (!isGzipPath(filePath) || !stderrText) return false;
+  return /not in gzip format|unexpected end|invalid compressed|crc error|permission denied|no such file|cannot open/i.test(stderrText);
 }
 
 function normalizeFingerprint(value) {
@@ -1297,7 +1341,7 @@ function testSystemSsh(config) {
     args.push("-J", proxyJump);
   }
   const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
-  args.push(sshTarget, `command -v tail >/dev/null && test -r ${quotePosixArg(filePath)}`);
+  args.push(sshTarget, buildRemoteReadCheck(filePath));
   let command = "ssh";
   let commandArgs = args;
   if (config?.mode === "ssh-wsl") {
@@ -1353,7 +1397,7 @@ function testNativeSsh(config) {
       if (passphrase) connection.passphrase = passphrase;
     }
     client.once("ready", () => client.exec(
-      `command -v tail >/dev/null && test -r ${quotePosixArg(filePath)}`,
+      buildRemoteReadCheck(filePath),
       (error, channel) => {
         if (error) return finish(error);
         let stderr = "";
@@ -1455,6 +1499,15 @@ function startNativeSshStream(event, payload) {
     }
   }
 
+  function flushRemainder() {
+    if (!lineBuf) return;
+    const line = lineBuf;
+    lineBuf = "";
+    if (line.trim() === REMOTE_READY_MARKER) return;
+    hadLines = true;
+    send("remote:lines", streamId, line);
+  }
+
   client.on("ready", () => {
     logEntry("INFO", "remote", `SSH nativo conectado: ${label}`);
     client.exec(tailScript, (err, channel) => {
@@ -1472,12 +1525,14 @@ function startNativeSshStream(event, payload) {
       channel.on("close", (code) => {
         remoteStreams.delete(streamId);
         client.end();
+        flushRemainder();
         if (stream.stopped) {
           logEntry("INFO", "remote", `SSH nativo detenido: ${label}`);
           return;
         }
-        if (code) {
-          const msg = stderrBuf.trim() || `tail terminó con código ${code}`;
+        const stderrText = stderrBuf.trim();
+        if (code || hasRemoteGzipError(filePath, stderrText)) {
+          const msg = stderrText || `tail terminó con código ${code}`;
           logEntry("ERROR", "remote", `${label}: ${msg}`);
           showRemoteStreamAlert(event, payload, mt("err_remote"), msg);
           send("remote:error", streamId, msg);
@@ -1592,6 +1647,15 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
     }
   }
 
+  function flushRemainder() {
+    if (!lineBuf) return;
+    const line = lineBuf;
+    lineBuf = "";
+    if (line.trim() === REMOTE_READY_MARKER) return;
+    hadLines = true;
+    send("remote:lines", streamId, line);
+  }
+
   proc.stdout.on("data", flushLines);
   proc.stderr.on("data", data => { stderrBuf += data.toString("utf8"); });
 
@@ -1601,13 +1665,15 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
 
   proc.on("close", (code) => {
     remoteStreams.delete(streamId);
+    flushRemainder();
     if (stream.stopped) {
       logEntry("INFO", "remote", `Stream remoto detenido: ${spec.label}`);
       return;
     }
-    const isError = code !== null && code !== 0;
+    const stderrText = stderrBuf.trim();
+    const isError = (code !== null && code !== 0) || hasRemoteGzipError(payload?.filePath, stderrText);
     if (isError) {
-      const msg = stderrBuf.trim() || `${spec.command} terminó con código ${code}`;
+      const msg = stderrText || `${spec.command} terminó con código ${code}`;
       logEntry("ERROR", "remote", `${spec.label}: ${msg}`);
       showRemoteStreamAlert(event, payload, mt("err_remote"), msg);
       send("remote:error", streamId, msg);

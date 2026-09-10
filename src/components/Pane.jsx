@@ -421,7 +421,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
         )}
 
         {!IS_ELECTRON && (
-          <input ref={fileRef} type="file" accept=".log,.txt,.out" style={{ display:"none" }}
+          <input ref={fileRef} type="file" accept=".log,.txt,.out,.gz,.log.gz,.txt.gz,.out.gz" style={{ display:"none" }}
             onChange={e => {
               const f = e.target.files[0];
               if (!f) return;

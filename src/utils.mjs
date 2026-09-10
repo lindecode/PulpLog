@@ -43,6 +43,7 @@ export function cacheFile(filePath, stat, items, stats) {
 
 export const fmtSize = b => b>=1e9?`${(b/1e9).toFixed(2)} GB`:b>=1e6?`${(b/1e6).toFixed(1)} MB`:b>=1e3?`${(b/1e3).toFixed(0)} KB`:`${b} B`;
 export const fmtNum  = n => n>=1e6?`${(n/1e6).toFixed(1)}M`:n>=1e3?`${(n/1e3).toFixed(1)}k`:String(n);
+export const isGzipFilePath = value => /\.gz$/i.test(String(value || ""));
 
 export const fmtBytes = value => {
   const bytes = Math.max(0, Number(value) || 0);

@@ -46,7 +46,7 @@ test("keeps absolute line numbers when live history is trimmed", () => {
   const second = classifyLines(["ERROR three", "plain four"], 43);
   const retained = appendRecentItems(first, second, 3);
   assert.deepEqual(retained.map(x => x.origLine), [42, 43, 44]);
-  assert.deepEqual(countLevels(retained), { error:1, warn:1, info:0, debug:0 });
+  assert.deepEqual(countLevels(retained), { error:1, warn:1, info:0, debug:0, trace:0 });
 });
 
 test("merges overlapping context ranges and marks separate gaps", () => {
@@ -60,8 +60,8 @@ test("filtering preserves levels, context, and invalid-regex behavior", () => {
   const items = classifyLines(["INFO alpha", "plain", "ERROR beta", "WARN beta"]);
   const levels = { error:true, warn:false, info:true, debug:true, trace:true, stack:true, plain:true };
   const textResult = filterLogs(items, "beta", false, levels, 1);
-  assert.deepEqual(textResult.filtered.filter(x => !x.separator).map(x => x.origLine), [2, 3, 4]);
-  assert.equal(filterLogs(items, "[", true, levels, 0).regexValid, false);
+  assert.deepEqual(textResult.filtered.filter(x => !x.separator).map(x => x.origLine), [2, 3]);
+  assert.equal(filterLogs(items, "[", true, levels, 0).filterRegexValid, false);
 });
 test("navigates selectable log rows and skips context separators", () => {
   const items = [

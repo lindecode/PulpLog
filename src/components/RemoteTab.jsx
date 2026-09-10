@@ -4,7 +4,7 @@ import { useDebouncedValue, useRowSelection, useEscapeToClose, useSearchShortcut
 import { useRememberedState, useBatchedLines, useFilteredLogs, useAvailableLogDates, setRememberedScroll } from "../logHooks.mjs";
 import { classifyLines, countLevels, appendRecentItems } from "../logProcessing.mjs";
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
-import { IS_ELECTRON, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtBytes, fmtNum } from "../utils.mjs";
+import { IS_ELECTRON, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtBytes, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
 import { ContextInput, TimeRangeFilter, Btn, Sep } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
@@ -441,6 +441,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
   const searchInputRef = useRef(null);
   const filterInputRef = useRef(null);
   useSearchShortcuts(searchInputRef, filterInputRef, isActive);
+  const compressed = isGzipFilePath(config.filePath);
 
   const selectionSource = `${config.mode || "remote"}-${config.filePath || "logs"}`;
   const [classified, setClassified] = useState([]);
@@ -452,6 +453,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
   const [retryNonce, setRetryNonce]= useState(0);
   const [reloadNonce,setReloadNonce]= useState(0);
   const [reconnectIn,setReconnectIn]= useState(0);
+  const [ended, setEnded] = useState(false);
   const [filter,       setFilter]       = useRememberedState(tabKey, "filter", "");
   const [filterUseRegex, setFilterUseRegex] = useRememberedState(tabKey, "useRegex", false);
   const filterDebounced = useDebouncedValue(filter);
@@ -519,7 +521,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
     const unwatch = window.electronAPI.streamRemoteLogs(retryNonce > 0 ? { ...config, resumeOnly:true } : config, {
       onSpawned() {
         if (!isCurrentStream()) return;
-        reconnectAttemptRef.current = 0; setReconnectIn(0); setError(null); setSpawned(true); setConnected(true);
+        reconnectAttemptRef.current = 0; setReconnectIn(0); setError(null); setSpawned(true); setConnected(true); setEnded(false);
       },
       onLines(text) {
         if (!isCurrentStream()) return;
@@ -535,6 +537,11 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
       },
       onEnd() {
         if (!isCurrentStream()) return;
+        if (compressed) {
+          setConnected(false);
+          setEnded(true);
+          return;
+        }
         setConnected(false); setError(t("remote_disconnected")); scheduleReconnect("connection terminated");
       },
       onError(msg) {
@@ -586,6 +593,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
     setReconnectIn(0);
     setHistoryInfo(null);
     setHistoryProgress(null);
+    setEnded(false);
     setSpawned(false);
     setConnected(false);
     setError(null);
@@ -597,6 +605,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
     reconnectAttemptRef.current = 0;
     setRetryNonce(0);
     setReconnectIn(0);
+    setEnded(false);
     setHistoryInfo(null);
     setHistoryProgress(null);
     setSpawned(false);
@@ -708,7 +717,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
                          border:"0.5px solid var(--pl-remote-badge-border)", borderRadius:6, padding:"3px 8px",
                          fontWeight:700, minWidth:0, flex:"1 1 220px", overflow:"hidden",
                          textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-            {sourceLabel}
+            {compressed ? "GZ " : ""}{sourceLabel}
           </span>
           <Btn active={showNums} onClick={() => setShowNums(p => !p)} title={t("linenums_title")}>#</Btn>
           <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
@@ -879,6 +888,11 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
               background:"var(--pl-accent)" }} />
           </div>
           {historyInfo && <span style={{ fontSize:10 }}>{fmtBytes(Math.min(historyInfo.size, historyInfo.limit))}</span>}
+        </div>
+      ) : compressed && ended && classified.length === 0 && !error ? (
+        <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
+                      color:"var(--pl-text-7)", fontSize:13 }}>
+          {t("no_lines")}
         </div>
       ) : classified.length === 0 && !error ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",

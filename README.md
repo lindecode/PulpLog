@@ -39,6 +39,7 @@ Los instaladores se generan en `release/`.
 | Función | Detalle |
 |---------|---------|
 | Archivos grandes | Lectura por streams en chunks de 1 MB con progreso en tiempo real |
+| Archivos comprimidos | Abre `.log.gz`, `.txt.gz`, `.out.gz` y `.gz` como lectura estática |
 | Virtual scroll | Renderiza solo las filas visibles para mantener fluidez con muchos registros |
 | Pestañas | Abre varios archivos o streams en la misma ventana |
 | Auto-scroll | Sigue automáticamente el final del archivo cuando está activo |
@@ -78,7 +79,7 @@ Los instaladores se generan en `release/`.
 
 ### SSH y WSL2
 
-PulpLog puede seguir una bitácora remota mediante `tail -F`. La ventana **SSH / WSL** detecta las herramientas disponibles en el ordenador y sólo muestra WSL2 en Windows.
+PulpLog puede seguir una bitácora remota mediante `tail -F`. Para archivos `.gz`, lee y descomprime con `gzip -cd` de forma estática. La ventana **SSH / WSL** detecta las herramientas disponibles en el ordenador y sólo muestra WSL2 en Windows.
 
 | Tipo de conexión | Uso recomendado |
 |------------------|-----------------|
@@ -86,6 +87,8 @@ PulpLog puede seguir una bitácora remota mediante `tail -F`. La ventana **SSH /
 | SSH desde WSL2 | Windows ejecuta SSH dentro de la distribución elegida y usa su configuración y llaves Linux |
 | SSH con credenciales | Solicita host, usuario y contraseña o una llave privada con passphrase |
 | WSL2 local | Abre un log dentro de una distribución instalada, sin conectarse a otro servidor |
+
+Las rutas remotas `.gz` requieren que el host remoto, WSL2 o la distribución Linux tenga `gzip` disponible. Al ser archivos comprimidos cerrados, se muestran como una lectura puntual y no activan seguimiento en vivo.
 
 #### SSH config y aliases
 

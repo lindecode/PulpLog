@@ -80,6 +80,7 @@ const T = {
     reload_log_title:"Recargar la bitácora desde el origen",
     bm_count:        n => `${n} ${n === 1 ? "marca" : "marcas"}`,
     tail_title:      "Tail -f — seguir archivo en vivo",
+    gzip_static_title:"Los archivos gzip se abren como lectura estática",
     tail_follow:     "▶ seguir",
     tail_stop:       "⏹ detener",
     refresh_title:   "Recargar archivo ahora",
@@ -91,6 +92,7 @@ const T = {
     scroll_bottom:   "↓ fin",
     reading:         pct => `Leyendo… ${pct}%`,
     file_open_error: m => `No se pudo abrir el archivo: ${m}`,
+    gzip_web_unsupported:"Este navegador no puede descomprimir gzip.",
     regex_invalid:   "Regex inválida",
     time_invalid:    "Rango de tiempo inválido",
     time_no_results: "Sin resultados en ese rango de tiempo",
@@ -231,7 +233,7 @@ const T = {
     open_file_btn:   "Abrir archivo…",
     recent_h:        "RECIENTES",
     hint_electron:   "Ctrl+O  ·  Ctrl+T nueva pestaña  ·  clic en ◇ para marcar líneas",
-    hint_web:        ".log  .txt  .out",
+    hint_web:        ".log  .txt  .out  .gz",
     open_file_title: "Abrir archivo (Ctrl+O)",
     docker_btn_title:"Conectar a contenedor Docker",
     diag_btn_title:  "Bitácora de diagnóstico",
@@ -319,6 +321,7 @@ const T = {
     reload_log_title:"Reload the log from the source",
     bm_count:        n => `${n} ${n === 1 ? "bookmark" : "bookmarks"}`,
     tail_title:      "Tail -f — follow file live",
+    gzip_static_title:"Gzip files open as static reads",
     tail_follow:     "▶ follow",
     tail_stop:       "⏹ stop",
     refresh_title:   "Reload file now",
@@ -330,6 +333,7 @@ const T = {
     scroll_bottom:   "↓ bottom",
     reading:         pct => `Reading… ${pct}%`,
     file_open_error: m => `Could not open file: ${m}`,
+    gzip_web_unsupported:"This browser cannot decompress gzip.",
     regex_invalid:   "Invalid regex",
     time_invalid:    "Invalid time range",
     time_no_results: "No results in that time range",
@@ -470,7 +474,7 @@ const T = {
     open_file_btn:   "Open file…",
     recent_h:        "RECENT",
     hint_electron:   "Ctrl+O  ·  Ctrl+T new tab  ·  click ◇ to bookmark lines",
-    hint_web:        ".log  .txt  .out",
+    hint_web:        ".log  .txt  .out  .gz",
     open_file_title: "Open file (Ctrl+O)",
     docker_btn_title:"Connect to Docker container",
     diag_btn_title:  "Diagnostic log",
@@ -491,7 +495,7 @@ const T = {
 const GUIDE = {
   es: [
     { title:"Abrir archivos", items:[
-      "Ctrl+O abre un archivo. También podés arrastrar y soltar un .log, .txt o .out sobre la ventana.",
+      "Ctrl+O abre un archivo. También podés arrastrar y soltar un .log, .txt, .out o .gz sobre la ventana.",
       "Los últimos 10 archivos quedan en Configuración → Archivos recientes, y también aparecen en la pantalla de bienvenida.",
       "Si el sistema tiene asociados los .log, .out o .txt a PulpLog, abrirlos desde el explorador los abre acá.",
     ]},
@@ -532,7 +536,7 @@ const GUIDE = {
   ],
   en: [
     { title:"Opening files", items:[
-      "Ctrl+O opens a file. You can also drag and drop a .log, .txt, or .out onto the window.",
+      "Ctrl+O opens a file. You can also drag and drop a .log, .txt, .out, or .gz onto the window.",
       "The last 10 files show up under Settings → Recent files, and on the welcome screen.",
       "If .log, .out, or .txt files are associated with PulpLog, opening them from the OS opens them here.",
     ]},

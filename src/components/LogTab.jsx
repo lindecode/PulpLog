@@ -4,7 +4,7 @@ import { useDebouncedValue, useRowSelection, useSearchShortcuts } from "../hooks
 import { useRememberedState, useFilteredLogs, useAvailableLogDates, setRememberedScroll } from "../logHooks.mjs";
 import { classifyLines, countLevels, splitTextChunk } from "../logProcessing.mjs";
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
-import { IS_ELECTRON, getCachedFile, cacheFile, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtSize, fmtNum } from "../utils.mjs";
+import { IS_ELECTRON, getCachedFile, cacheFile, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtSize, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
 import { ContextInput, TimeRangeFilter, Btn, Sep } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
@@ -18,6 +18,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   const t = useLang();
   const selectionSource = fileName || filePath || "pulplog";
   const sourceLabel = filePath || fileName || selectionSource;
+  const compressed = isGzipFilePath(filePath || fileName);
   const [classified,  setClassified] = useState([]);
   const [stats,       setStats]      = useState({ error:0, warn:0, info:0, debug:0, trace:0 });
   const [loading,     setLoading]     = useState(true);
@@ -67,6 +68,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   useSearchShortcuts(searchInputRef, filterInputRef, isActive);
   useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
   useEffect(() => { onLoadingChange?.(Number(tabKey), loading); }, [tabKey, loading, onLoadingChange]);
+  useEffect(() => { if (compressed) setTailing(false); }, [compressed, setTailing]);
 
   const appendCompleteLines = (lines) => {
     if (!lines.length) return processingRef.current;
@@ -130,12 +132,12 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
 
   const clearVisibleLog = useCallback(async () => {
     clearViewState();
-    if (IS_ELECTRON && filePath) {
+    if (IS_ELECTRON && filePath && !compressed) {
       const stat = await window.electronAPI.statFile(filePath).catch(() => null);
       if (stat) watchOffsetRef.current = stat.size;
       setWatchNonce(value => value + 1);
     }
-  }, [clearViewState, filePath]);
+  }, [clearViewState, filePath, compressed]);
 
   const reloadLog = useCallback(() => {
     clearViewState();
@@ -220,6 +222,29 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
       resetBuffers();
       const file = webFile;
       if (!file) { setLoading(false); return; }
+      if (compressed) {
+        if (typeof DecompressionStream !== "function") {
+          throw new Error(t("gzip_web_unsupported"));
+        }
+        const decoder = new TextDecoder("utf-8");
+        const reader = file.stream().pipeThrough(new DecompressionStream("gzip")).getReader();
+        cancelRead = () => reader.cancel().catch(() => {});
+        let chunks = 0;
+        while (!disposed) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          chunks += 1;
+          appendChunk(decoder.decode(value, { stream:true }));
+          if (chunks % 8 === 0) setProgress(0.5);
+        }
+        appendChunk(decoder.decode());
+        await publishLoadedData();
+        if (disposed) return;
+        loadedRef.current = true;
+        setLoading(false);
+        setProgress(1);
+        return;
+      }
       const reader = new FileReader();
       cancelRead = () => reader.abort();
       reader.onprogress = (e) => {
@@ -247,7 +272,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
       workerRef.current?.terminate();
       workerRef.current = null;
     };
-  }, [filePath, webFile, fileSize, reloadKey]);
+  }, [filePath, webFile, fileSize, reloadKey, compressed, t]);
 
   /* ── Rotation countdown & reload ── */
   useEffect(() => {
@@ -268,7 +293,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
 
   /* ── Reactive watcher: auto-starts when tailing=true and file is fully loaded ── */
   useEffect(() => {
-    if (!tailing || loading || !IS_ELECTRON || !filePath) return;
+    if (!tailing || loading || !IS_ELECTRON || !filePath || compressed) return;
     const unwatch = window.electronAPI.watchFile(filePath, {
       startOffset: watchOffsetRef.current,
       async onNewLines(text) {
@@ -283,7 +308,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
       onRecreated() { setRotation({ event:"recreated", countdown: 0 }); setReloadKey(k => k + 1); },
     });
     return () => unwatch?.();
-  }, [tailing, loading, filePath, watchNonce]); // eslint-disable-line
+  }, [tailing, loading, filePath, watchNonce, compressed]); // eslint-disable-line
 
   const { filtered, filterRegexValid, searchRegexValid, timeRangeValid, matchOrigLines } =
     useFilteredLogs("file", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric);
@@ -376,7 +401,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
                      border:"0.5px solid var(--pl-file-badge-border)", borderRadius:6, padding:"3px 8px",
                      fontWeight:700, minWidth:0, flex:"1 1 220px", overflow:"hidden",
                      textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-            LOG {sourceLabel}
+            {compressed ? "GZ" : "LOG"} {sourceLabel}
           </span>
           <Btn active={showNums} onClick={() => setShowNums(p => !p)} title={t("linenums_title")}>#</Btn>
           <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
@@ -509,8 +534,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           </Btn>
         )}
 
-        <Btn active={tailing} onClick={toggleTail} disabled={!IS_ELECTRON}
-          title={t("tail_title")}>
+        <Btn active={tailing} onClick={toggleTail} disabled={!IS_ELECTRON || compressed}
+          title={compressed ? t("gzip_static_title") : t("tail_title")}>
           {tailing ? t("tail_stop") : t("tail_follow")}
         </Btn>
         <Btn active={autoScroll} variant="accent" onClick={() => {
