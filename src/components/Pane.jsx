@@ -205,7 +205,7 @@ function usePaneTabs(setSettings, notifyFileMissing) {
    these are rendered by App() (side by side or
    stacked) when split, one when not.
 ═══════════════════════════════════════════ */
-function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemoteProfilesChange }) {
+function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemoteProfilesChange, onTogglePref }) {
   const t = useLang();
   const {
     tabs, active, setActive,
@@ -461,6 +461,8 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
       {remotePicker && <RemotePicker onSelect={submitRemotePicker} onClose={() => setRemotePicker(false)}
         capabilities={capabilities} profiles={settings.remoteProfiles || []}
         onProfilesChange={onRemoteProfilesChange}
+        sshAgentPollingEnabled={settings.sshAgentPollingEnabled === true}
+        onToggleSshAgentPolling={(value) => onTogglePref?.("sshAgentPollingEnabled", value)}
         initialConfig={typeof remotePicker === "object" ? remotePicker.config : null} />}
     </div>
   );

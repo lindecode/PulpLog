@@ -8,7 +8,8 @@ import { IS_ELECTRON, reportMetric, safeFileName, buildResultText, copyResultTex
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
 import { ContextInput, TimeRangeFilter, Btn, Sep } from "./SharedUI.jsx";
 
-function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfilesChange, initialConfig = null }) {
+function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfilesChange,
+  sshAgentPollingEnabled = false, onToggleSshAgentPolling, initialConfig = null }) {
   const t = useLang();
   const [mode, setMode] = useState(() => initialConfig?.mode || (capabilities?.ssh?.available ? "ssh" : "ssh-native"));
   const [target, setTarget] = useState(initialConfig?.target || "");
@@ -258,14 +259,20 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
             <div style={{ color:"var(--pl-text-3)", fontSize:10, fontWeight:700, marginBottom:3 }}>{t("remote_auth_heading")}</div>
             <div style={{ color:"var(--pl-text-5)", fontSize:10, lineHeight:1.45 }}>{authenticationHelp}</div>
           </div>
-          {mode === "ssh" && <span style={{ flexShrink:0, borderRadius:10, padding:"4px 8px", fontSize:9,
-            color:sshCap?.agent?.keysLoaded ? "var(--pl-status-live)" : sshCap?.agent?.running ? "var(--pl-status-warn)" : "var(--pl-error-text)",
-            background:sshCap?.agent?.keysLoaded ? "var(--pl-bg-hover)" : sshCap?.agent?.running ? "var(--pl-diag-warn-bg)" : "var(--pl-error-bg)",
-            border:`0.5px solid ${sshCap?.agent?.keysLoaded ? "var(--pl-status-live)" : sshCap?.agent?.running ? "var(--pl-status-warn)" : "var(--pl-error-border)"}` }}>
-            {sshCap?.agent?.running
-              ? sshCap.agent.keysLoaded ? t("remote_agent_keys", sshCap.agent.keyCount) : t("remote_agent_empty")
-              : t("remote_agent_off")}
-          </span>}
+          {mode === "ssh" && <button type="button"
+            onClick={() => onToggleSshAgentPolling?.(!sshAgentPollingEnabled)}
+            title={sshAgentPollingEnabled ? t("remote_agent_polling_on_title") : t("remote_agent_polling_off_title")}
+            style={{ flexShrink:0, borderRadius:10, padding:"4px 8px", fontSize:9, fontFamily:"inherit",
+              cursor:"pointer",
+              color:!sshAgentPollingEnabled ? "var(--pl-text-3)" : sshCap?.agent?.keysLoaded ? "var(--pl-status-live)" : sshCap?.agent?.running ? "var(--pl-status-warn)" : "var(--pl-error-text)",
+              background:!sshAgentPollingEnabled ? "var(--pl-bg-hover)" : sshCap?.agent?.keysLoaded ? "var(--pl-bg-hover)" : sshCap?.agent?.running ? "var(--pl-diag-warn-bg)" : "var(--pl-error-bg)",
+              border:`0.5px solid ${!sshAgentPollingEnabled ? "var(--pl-border-strong)" : sshCap?.agent?.keysLoaded ? "var(--pl-status-live)" : sshCap?.agent?.running ? "var(--pl-status-warn)" : "var(--pl-error-border)"}` }}>
+            {!sshAgentPollingEnabled
+              ? t("remote_agent_polling_off")
+              : sshCap?.agent?.running
+                ? sshCap.agent.keysLoaded ? t("remote_agent_keys", sshCap.agent.keyCount) : t("remote_agent_empty")
+                : t("remote_agent_off")}
+          </button>}
         </div>
 
         <div style={{ display:"grid", gridTemplateColumns:advanced ? "1fr 110px" : "1fr", gap:10, marginBottom:10 }}>

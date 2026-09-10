@@ -11,7 +11,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen]= useState(false);
   const [capabilities, setCapabilities]= useState(null);
   const [settings,     setSettings]    = useState({
-    recentFiles:[], remoteProfiles:[], autoScrollDefault:false, showNumsDefault:true, maxLiveLines:500000, language:"es", theme:"classic"
+    recentFiles:[], remoteProfiles:[], autoScrollDefault:false, showNumsDefault:true,
+    sshAgentPollingEnabled:false, maxLiveLines:500000, language:"es", theme:"classic"
   });
   const [splitDirection, setSplitDirection] = useState(null); // null | "row" | "column"
   const [splitRatio,     setSplitRatio]     = useState(0.5);
@@ -68,7 +69,10 @@ export default function App() {
       if (inFlight) return;
       inFlight = true;
       try {
-        const caps = await window.electronAPI.getCapabilities({ silent });
+        const caps = await window.electronAPI.getCapabilities({
+          silent,
+          checkSshAgent: settings.sshAgentPollingEnabled === true,
+        });
         if (alive) setCapabilities(caps);
       } catch {
         if (alive) setCapabilities({});
@@ -88,7 +92,7 @@ export default function App() {
       clearInterval(interval);
       window.removeEventListener("focus", onFocus);
     };
-  }, []);
+  }, [settings.sshAgentPollingEnabled]);
 
   const savePref = useCallback((key, val) => {
     setSettings(prev => ({ ...prev, [key]: val }));
@@ -304,7 +308,8 @@ export default function App() {
                         minWidth:0, minHeight:0, display:"flex", overflow:"hidden" }}>
             <Pane paneId="A" focused={focusedPane==="A"} onFocus={() => setFocusedPane("A")}
                   pane={paneA} capabilities={capabilities} settings={settings}
-                  onRemoteProfilesChange={saveRemoteProfiles} />
+                  onRemoteProfilesChange={saveRemoteProfiles}
+                  onTogglePref={savePref} />
           </div>
 
           {splitDirection && (
@@ -317,7 +322,8 @@ export default function App() {
                             minWidth:0, minHeight:0, display:"flex", overflow:"hidden" }}>
                 <Pane paneId="B" focused={focusedPane==="B"} onFocus={() => setFocusedPane("B")}
                       pane={paneB} capabilities={capabilities} settings={settings}
-                      onRemoteProfilesChange={saveRemoteProfiles} />
+                      onRemoteProfilesChange={saveRemoteProfiles}
+                      onTogglePref={savePref} />
               </div>
             </>
           )}

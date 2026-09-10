@@ -237,7 +237,13 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
             label={t("pref_linenums")}
             value={settings.showNumsDefault}
             onChange={v => onTogglePref("showNumsDefault", v)}
-          />          <label style={{ display:"flex", alignItems:"center", gap:10, color:"var(--pl-text-4)", fontSize:11 }}>
+          />
+          <PrefToggle
+            label={t("pref_ssh_agent_polling")}
+            value={settings.sshAgentPollingEnabled === true}
+            onChange={v => onTogglePref("sshAgentPollingEnabled", v)}
+          />
+          <label style={{ display:"flex", alignItems:"center", gap:10, color:"var(--pl-text-4)", fontSize:11 }}>
             <span style={{ flex:1 }}>{t("pref_max_lines")}</span>
             <select value={settings.maxLiveLines || 500000}
               onChange={e => onTogglePref("maxLiveLines", Number(e.target.value))}

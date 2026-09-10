@@ -480,7 +480,8 @@ function checkSshAgent() {
   });
 }
 
-async function getSystemCapabilities() {
+async function getSystemCapabilities(options = {}) {
+  const shouldCheckSshAgent = options.checkSshAgent === true;
   const [docker, ssh, wsl] = await Promise.all([
     checkCommand("docker", ["version", "--format", "{{.Server.Version}}"]),
     checkCommand("ssh", ["-V"]),
@@ -499,7 +500,10 @@ async function getSystemCapabilities() {
   }
 
   ssh.hosts = ssh.available ? readSystemSshHosts() : [];
-  ssh.agent = ssh.available ? await checkSshAgent() : { running:false, keysLoaded:false, keyCount:0 };
+  ssh.agent = ssh.available && shouldCheckSshAgent
+    ? await checkSshAgent()
+    : { running:false, keysLoaded:false, keyCount:0 };
+  ssh.agent.pollingEnabled = shouldCheckSshAgent;
 
   return {
     platform: process.platform,
@@ -510,7 +514,7 @@ async function getSystemCapabilities() {
 }
 
 ipcMain.handle("system:capabilities", async (_event, options = {}) => {
-  const caps = await getSystemCapabilities();
+  const caps = await getSystemCapabilities(options);
   if (!options?.silent) {
     for (const [name, cap] of Object.entries(caps)) {
       if (name === "platform") continue;
@@ -1702,6 +1706,7 @@ function normalizeSettings(value) {
   const maxLiveLines = Number.isFinite(s.maxLiveLines)
     ? Math.min(Math.max(Math.round(s.maxLiveLines), 50_000), 2_000_000)
     : 500_000;
+  const sshAgentPollingEnabled = s.sshAgentPollingEnabled === true;
 
   return {
     recentFiles: Array.isArray(s.recentFiles) ? s.recentFiles.filter(f => typeof f === "string") : [],
@@ -1711,6 +1716,7 @@ function normalizeSettings(value) {
     splitRatio,
     autoScrollDefault: Boolean(s.autoScrollDefault),
     showNumsDefault: s.showNumsDefault !== false,
+    sshAgentPollingEnabled,
     maxLiveLines,
     language,
     theme,
