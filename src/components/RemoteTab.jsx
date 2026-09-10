@@ -9,6 +9,177 @@ import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
 import { ContextInput, TimeRangeFilter, Btn, Sep } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 
+function remoteDirname(value) {
+  const text = String(value || "").trim();
+  if (!text || text === "~") return "";
+  const clean = text.replace(/\/+$/, "");
+  const index = clean.lastIndexOf("/");
+  if (index < 0) return "";
+  if (index === 0) return "/";
+  return clean.slice(0, index);
+}
+
+function remoteParentDir(value) {
+  const text = String(value || "").trim();
+  if (!text || text === "/" || text === "~") return "";
+  return remoteDirname(text);
+}
+
+function validateRemoteBrowserPath(value, t) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.length > 4096) return t("remote_browser_path_too_long");
+  if (/[\0\r\n\t]/.test(text) || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) {
+    return t("remote_browser_path_invalid_chars");
+  }
+  if (text.startsWith("-")) return t("remote_browser_path_option");
+  if (text.includes("//")) return t("remote_browser_path_repeated_sep");
+  return "";
+}
+
+function isBrowsableLogFile(name) {
+  return /\.(log|txt|out)(\.gz)?$/i.test(String(name || "")) || /\.gz$/i.test(String(name || ""));
+}
+
+function remoteEntryLabel(entry) {
+  if (entry.type === "dir") return "DIR";
+  if (isGzipFilePath(entry.name)) return "GZ";
+  if (isBrowsableLogFile(entry.name)) return "LOG";
+  return "FILE";
+}
+
+function RemoteFileBrowser({ config, initialDir, onPick, onClose }) {
+  const t = useLang();
+  const [dir, setDir] = useState(initialDir || "");
+  const [pathInput, setPathInput] = useState(initialDir || "");
+  const [entries, setEntries] = useState([]);
+  const [cwd, setCwd] = useState(initialDir || "");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const pathValidation = validateRemoteBrowserPath(pathInput, t);
+
+  const loadDirectory = useCallback(async (nextDir = dir) => {
+    if (!IS_ELECTRON) return;
+    const validation = validateRemoteBrowserPath(nextDir, t);
+    if (validation) {
+      setError(validation);
+      setEntries([]);
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const result = await window.electronAPI.listRemoteDirectory({ ...config, dirPath:nextDir });
+      if (!result?.ok) throw new Error(result?.error || t("remote_browser_error"));
+      setEntries(Array.isArray(result.entries) ? result.entries : []);
+      setCwd(result.cwd || nextDir || "");
+      setDir(result.cwd || nextDir || "");
+      setPathInput(result.cwd || nextDir || "");
+    } catch (err) {
+      setError(err?.message ?? String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [config, dir, t]);
+
+  useEffect(() => { loadDirectory(initialDir || ""); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEscapeToClose(onClose);
+
+  const openEntry = (entry) => {
+    if (entry.type === "dir") {
+      loadDirectory(entry.path);
+      return;
+    }
+    onPick(entry.path);
+  };
+
+  return (
+    <div onClick={onClose}
+      style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.45)",
+        display:"flex", alignItems:"center", justifyContent:"center", zIndex:1002 }}>
+      <div onClick={e => e.stopPropagation()}
+        onKeyDown={e => {
+          if (e.key === "Enter") e.stopPropagation();
+        }}
+        role="dialog" aria-modal="true" aria-label={t("remote_browser_title")}
+        style={{ width:"min(760px, calc(100vw - 44px))", maxHeight:"min(680px, calc(100vh - 44px))",
+          display:"flex", flexDirection:"column", background:"var(--pl-bg-panel)",
+          border:"0.5px solid var(--pl-border-strong)", borderRadius:10, boxShadow:"0 12px 50px rgba(0,0,0,.75)",
+          overflow:"hidden" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"12px 14px",
+          borderBottom:"0.5px solid var(--pl-border-soft)" }}>
+          <strong style={{ color:"var(--pl-text-1)", fontSize:13 }}>{t("remote_browser_title")}</strong>
+          <button type="button" onClick={onClose}
+            style={{ marginLeft:"auto", background:"none", border:0, color:"var(--pl-text-6)", cursor:"pointer" }}>x</button>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"auto 1fr auto", gap:8, padding:"10px 14px",
+          borderBottom:"0.5px solid var(--pl-border-soft)" }}>
+          <button type="button" onClick={() => loadDirectory(remoteParentDir(cwd || dir))} disabled={loading}
+            title={t("remote_browser_up")}
+            style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:6,
+              color:"var(--pl-text-3)", cursor:loading ? "not-allowed" : "pointer", padding:"7px 10px" }}>↑</button>
+          <input value={pathInput} onChange={e => setPathInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              e.stopPropagation();
+              loadDirectory(e.currentTarget.value);
+            }}
+            aria-label={t("remote_browser_path")}
+            aria-invalid={Boolean(pathValidation)}
+            title={pathValidation || t("remote_browser_path")}
+            style={{ background:"var(--pl-bg-input)", border:`0.5px solid ${pathValidation ? "var(--pl-error-border)" : "var(--pl-border)"}`, borderRadius:6,
+              color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:12, padding:"7px 9px", outline:"none" }} />
+          <button type="button" onClick={() => loadDirectory(pathInput)} disabled={loading || Boolean(pathValidation)}
+            style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:6,
+              color:pathValidation ? "var(--pl-text-7)" : "var(--pl-text-3)", cursor:loading || pathValidation ? "not-allowed" : "pointer", padding:"7px 10px" }}>
+            {loading ? t("remote_browser_loading") : t("reload_log")}
+          </button>
+        </div>
+        {pathValidation && (
+          <div style={{ margin:"8px 14px 0", color:"var(--pl-error-text)", fontSize:10 }}>
+            {pathValidation}
+          </div>
+        )}
+        {error && (
+          <div style={{ margin:"10px 14px 0", padding:"8px 10px", borderRadius:6,
+            color:"var(--pl-error-text)", background:"var(--pl-error-bg)", fontSize:11 }}>
+            {error}
+          </div>
+        )}
+        <div style={{ padding:"10px 14px 14px", overflowY:"auto", minHeight:260 }}>
+          {!loading && entries.length === 0 && !error ? (
+            <div style={{ color:"var(--pl-text-6)", fontSize:12, textAlign:"center", padding:30 }}>
+              {t("remote_browser_empty")}
+            </div>
+          ) : entries.map(entry => {
+            const openable = entry.type === "dir" || entry.type === "file" || entry.type === "symlink";
+            return (
+              <button key={entry.path} type="button" onClick={() => openable && openEntry(entry)}
+                disabled={!openable}
+                title={entry.path}
+                style={{ width:"100%", display:"grid", gridTemplateColumns:"24px 1fr 90px 130px", gap:8,
+                  alignItems:"center", textAlign:"left", padding:"7px 8px", marginBottom:3,
+                  background:"transparent", border:"0.5px solid transparent", borderRadius:6,
+                  color:openable ? "var(--pl-text-3)" : "var(--pl-text-7)",
+                  cursor:openable ? "pointer" : "not-allowed", fontFamily:"inherit", fontSize:11 }}>
+                <span style={{ fontSize:9, fontWeight:700, color:entry.type === "dir" ? "var(--pl-accent-hover)" : "var(--pl-text-5)" }}>
+                  {remoteEntryLabel(entry)}
+                </span>
+                <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{entry.name}</span>
+                <span style={{ color:"var(--pl-text-6)", textAlign:"right" }}>{entry.type === "dir" ? t("remote_browser_folder") : fmtBytes(entry.size)}</span>
+                <span style={{ color:"var(--pl-text-6)", textAlign:"right" }}>
+                  {entry.mtime ? new Date(entry.mtime).toLocaleString() : ""}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfilesChange,
   sshAgentPollingEnabled = false, onToggleSshAgentPolling, initialConfig = null }) {
   const t = useLang();
@@ -34,6 +205,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
   const sshCap = capabilities?.ssh;
   const wslCap = capabilities?.wsl;
   const wslDistros = wslCap?.distros || [];
@@ -50,6 +222,8 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const canTest = modeAvailable && mode !== "wsl" && target.trim() && (discoveringHost || filePath.trim())
     && (mode !== "ssh-native" || discoveringHost || hasNativeAuth);
   const canSubmit = modeAvailable && filePath.trim() && (mode === "wsl" || target.trim()) && hasNativeAuth && hostAccepted;
+  const canBrowse = IS_ELECTRON && modeAvailable && (mode === "wsl" || target.trim())
+    && (mode !== "ssh-native" || (hasNativeAuth && hostAccepted));
   const selectedModeHelp = mode === "ssh" ? t("remote_mode_ssh_help")
     : mode === "ssh-wsl" ? t("remote_mode_ssh_wsl_help")
     : mode === "ssh-native" ? t("remote_mode_native_help") : t("remote_mode_wsl_help");
@@ -166,6 +340,15 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
             style={{ marginLeft:8, background:"none", border:"none",
                      color:"var(--pl-text-6)", cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>x</button>
         </div>
+
+        {browserOpen && (
+          <RemoteFileBrowser
+            config={connectionConfig()}
+            initialDir={remoteDirname(filePath)}
+            onPick={(nextPath) => { setFilePath(nextPath); setBrowserOpen(false); }}
+            onClose={() => setBrowserOpen(false)}
+          />
+        )}
 
         {showHelp && <div style={{ marginBottom:14, padding:"10px 12px", border:"0.5px solid var(--pl-border-focus)",
           borderRadius:8, background:"var(--pl-bg-input)", color:"var(--pl-text-4)", fontSize:10, lineHeight:1.5 }}>
@@ -374,9 +557,16 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
           </div>
         )}
 
-        <div style={{ display:"grid", gridTemplateColumns:"1fr minmax(190px, 240px)", gap:10, marginBottom:12 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr auto minmax(190px, 240px)", gap:10, marginBottom:12 }}>
           <input style={inputStyle} value={filePath} onChange={e => setFilePath(e.target.value)}
             placeholder={`${t("remote_path")} (/var/log/app.log)`} />
+          <button type="button" onClick={() => setBrowserOpen(true)} disabled={!canBrowse}
+            title={canBrowse ? t("remote_browse_title") : t("remote_browse_unavailable")}
+            style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+              borderRadius:6, color:canBrowse ? "var(--pl-text-3)" : "var(--pl-text-7)", fontFamily:"inherit",
+              fontSize:11, padding:"7px 10px", cursor:canBrowse ? "pointer" : "not-allowed" }}>
+            {t("remote_browse")}
+          </button>
           <select style={inputStyle} value={historyPreset} onChange={e => {
             setHistoryPreset(e.target.value);
             if (e.target.value.startsWith("lines:")) setTailLines(Number(e.target.value.split(":")[1]));

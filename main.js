@@ -1246,6 +1246,71 @@ function hasRemoteGzipError(filePath, stderrText) {
   return /not in gzip format|unexpected end|invalid compressed|crc error|permission denied|no such file|cannot open/i.test(stderrText);
 }
 
+function validateRemoteDirectoryPath(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.length > 4096) throw new Error("La ruta del directorio remoto es demasiado larga");
+  if (/[\0\r\n\t]/.test(text) || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text))
+    throw new Error("La ruta del directorio remoto contiene caracteres inválidos");
+  if (text.startsWith("-")) throw new Error("La ruta del directorio remoto no puede iniciar con guion");
+  if (text.includes("//")) throw new Error("La ruta del directorio remoto contiene separadores repetidos");
+  return text;
+}
+
+function buildRemoteListScript(dirPath) {
+  const quotedDir = quotePosixArg(validateRemoteDirectoryPath(dirPath));
+  return `dir=${quotedDir}; `
+    + `if [ -z "$dir" ]; then dir="\${HOME:-.}"; fi; `
+    + `if ! command -v find >/dev/null 2>&1; then printf 'find no disponible en el host remoto\\n' >&2; exit 127; fi; `
+    + `if ! cd -- "$dir"; then printf 'No se pudo abrir el directorio remoto\\n' >&2; exit 1; fi; `
+    + `printf 'PWD\\t%s\\n' "$(pwd -P)"; `
+    + `find . -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%T@\\t%p\\n'`;
+}
+
+function asRemoteShCommand(script) {
+  return `sh -lc ${quotePosixArg(script)}`;
+}
+
+function parseRemoteListOutput(stdout) {
+  const lines = String(stdout || "").split(/\r?\n/).filter(Boolean);
+  let cwd = "";
+  const entries = [];
+  for (const line of lines) {
+    if (line.startsWith("PWD\t")) {
+      cwd = line.slice(4);
+      continue;
+    }
+    const parts = line.split("\t");
+    if (parts.length < 4) continue;
+    const [kind, sizeText, mtimeText, ...pathParts] = parts;
+    const name = pathParts.join("\t").replace(/^\.\//, "");
+    if (!name || name === "." || name === "..") continue;
+    const type = kind === "d" ? "dir" : kind === "l" ? "symlink" : "file";
+    const fullPath = cwd === "/" ? `/${name}` : `${cwd.replace(/\/+$/, "")}/${name}`;
+    entries.push({
+      name,
+      path:fullPath,
+      type,
+      size:Number(sizeText) || 0,
+      mtime:Number(mtimeText) ? Math.round(Number(mtimeText) * 1000) : 0,
+    });
+  }
+  entries.sort((a, b) => {
+    if (a.type === "dir" && b.type !== "dir") return -1;
+    if (a.type !== "dir" && b.type === "dir") return 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity:"base" });
+  });
+  return { cwd, entries };
+}
+
+function formatRemoteListError(error, stderr, label) {
+  const detail = String(stderr || "").trim();
+  if (detail) return detail;
+  const code = error?.code ?? error?.signal;
+  const suffix = code ? ` (${code})` : "";
+  return `No se pudo listar el directorio remoto${label ? `: ${label}` : ""}${suffix}. Revisa autenticación, permisos y ruta.`;
+}
+
 function normalizeFingerprint(value) {
   return String(value || "")
     .trim()
@@ -1326,6 +1391,59 @@ function buildRemoteCommand(config) {
     return { command:"wsl.exe", args:wslArgs, label:`WSL SSH:${distro || "default"}:${sshTarget}:${filePath}` };
   }
   return { command: "ssh", args, label: `${sshTarget}:${filePath}` };
+}
+
+function buildRemoteListCommand(config) {
+  const mode = ["wsl", "ssh-wsl"].includes(config?.mode) ? config.mode : "ssh";
+  const dirPath = validateRemoteDirectoryPath(config?.dirPath);
+  const listScript = buildRemoteListScript(dirPath);
+
+  if (mode === "wsl") {
+    if (process.platform !== "win32") throw new Error("WSL2 solo está disponible en Windows");
+    const distro = String(config?.distro || "").trim();
+    if (distro.startsWith("-")) throw new Error("Nombre de distro WSL inválido");
+    const args = [];
+    if (distro) args.push("-d", distro);
+    args.push("--", "sh", "-lc", listScript);
+    return {
+      command: process.platform === "win32" ? "wsl.exe" : "wsl",
+      args,
+      label: distro ? `WSL:${distro}:${dirPath || "~"}` : `WSL:${dirPath || "~"}`,
+    };
+  }
+
+  const { target, user, port, identityFile } = {
+    ...validateSshTarget(config),
+    user: String(config?.user || "").trim(),
+    port: String(config?.port || "").trim(),
+  };
+  const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new"];
+  if (port) args.push("-p", port);
+  if (identityFile) args.push("-i", identityFile, "-o", "IdentitiesOnly=yes");
+  const proxyJump = String(config?.proxyJump || "").trim();
+  if (proxyJump) {
+    if (proxyJump.startsWith("-") || /\s/.test(proxyJump)) throw new Error("Servidor intermedio inválido");
+    args.push("-J", proxyJump);
+  }
+  const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
+  args.push(sshTarget, asRemoteShCommand(listScript));
+  if (mode === "ssh-wsl") {
+    if (process.platform !== "win32") throw new Error("SSH desde WSL2 solo está disponible en Windows");
+    const distro = String(config?.distro || "").trim();
+    if (distro.startsWith("-")) throw new Error("Nombre de distro WSL inválido");
+    return { command:"wsl.exe", args:[...(distro ? ["-d", distro] : []), "--", "ssh", ...args], label:`WSL SSH:${distro || "default"}:${sshTarget}:${dirPath || "~"}` };
+  }
+  return { command:"ssh", args, label:`${sshTarget}:${dirPath || "~"}` };
+}
+
+function listSystemRemoteDirectory(config) {
+  const spec = buildRemoteListCommand(config);
+  return new Promise((resolve, reject) => {
+    execFile(spec.command, spec.args, { timeout:20000, windowsHide:true, maxBuffer:4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) return reject(new Error(formatRemoteListError(error, stderr, spec.label)));
+      resolve({ ok:true, ...parseRemoteListOutput(stdout) });
+    });
+  });
 }
 
 function testSystemSsh(config) {
@@ -1412,6 +1530,78 @@ function testNativeSsh(config) {
         ? ` Huella (fingerprint) del servidor: ${seenFingerprint}` : "";
       finish(new Error(`${error.message}${hint}`));
     });
+    client.connect(connection);
+  });
+}
+
+function listNativeRemoteDirectory(config) {
+  const dirPath = validateRemoteDirectoryPath(config?.dirPath) || ".";
+  const { host, username:requestedUsername, port, identityFile } = validateSshTarget({
+    ...config,
+    filePath: config?.filePath || "/",
+  });
+  const expectedFingerprint = normalizeFingerprint(config?.fingerprint);
+  const trustHostForSession = Boolean(config?.trustHostForSession);
+  const username = requestedUsername || "";
+  if (!username) return Promise.reject(new Error("El usuario SSH es obligatorio para explorar archivos"));
+  const password = String(config?.password || "");
+  const passphrase = String(config?.passphrase || "");
+  if (!password && !identityFile) return Promise.reject(new Error("Ingresa contraseña o llave privada para explorar archivos"));
+  if (!expectedFingerprint || !trustHostForSession) return Promise.reject(new Error("Acepta la huella del servidor antes de explorar archivos"));
+
+  return new Promise((resolve, reject) => {
+    const client = new SshClient();
+    let settled = false;
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      try { client.end(); } catch {}
+      error ? reject(error) : resolve(result);
+    };
+    const connection = {
+      host, port, username, password:password || undefined,
+      readyTimeout:12000, keepaliveInterval:15000, keepaliveCountMax:3,
+      tryKeyboard:false,
+      hostVerifier(key) {
+        return normalizeFingerprint(formatHostFingerprint(key)) === expectedFingerprint;
+      },
+    };
+    if (identityFile) {
+      connection.privateKey = fs.readFileSync(identityFile);
+      if (passphrase) connection.passphrase = passphrase;
+    }
+    client.once("ready", () => {
+      client.sftp((sftpError, sftp) => {
+        if (sftpError) return finish(sftpError);
+        sftp.realpath(dirPath, (realpathError, realPath) => {
+          const cwd = realpathError ? dirPath : realPath;
+          sftp.readdir(cwd, (readError, list) => {
+            if (readError) return finish(readError);
+            const entries = (list || [])
+              .filter(item => item.filename && item.filename !== "." && item.filename !== "..")
+              .map(item => {
+                const attrs = item.attrs;
+                const type = attrs?.isDirectory?.() ? "dir" : attrs?.isSymbolicLink?.() ? "symlink" : "file";
+                const cleanCwd = String(cwd || "/").replace(/\/+$/, "") || "/";
+                return {
+                  name:item.filename,
+                  path:cleanCwd === "/" ? `/${item.filename}` : `${cleanCwd}/${item.filename}`,
+                  type,
+                  size:Number(attrs?.size) || 0,
+                  mtime:Number(attrs?.mtime) ? Number(attrs.mtime) * 1000 : 0,
+                };
+              })
+              .sort((a, b) => {
+                if (a.type === "dir" && b.type !== "dir") return -1;
+                if (a.type !== "dir" && b.type === "dir") return 1;
+                return a.name.localeCompare(b.name, undefined, { sensitivity:"base" });
+              });
+            finish(null, { ok:true, cwd, entries });
+          });
+        });
+      });
+    });
+    client.once("error", error => finish(error));
     client.connect(connection);
   });
 }
@@ -1702,6 +1892,21 @@ ipcMain.handle("remote:test", async (event, payload) => {
       : await testSystemSsh(payload);
   } catch (error) {
     return { ok:false, error:error?.message ?? String(error) };
+  }
+});
+
+ipcMain.handle("remote:list-dir", async (event, payload) => {
+  assertTrustedSender(event);
+  try {
+    const result = payload?.mode === "ssh-native"
+      ? await listNativeRemoteDirectory(payload)
+      : await listSystemRemoteDirectory(payload);
+    logEntry("INFO", "remote", `Directorio remoto listado: ${result.cwd || payload?.dirPath || "~"}`);
+    return result;
+  } catch (error) {
+    const message = error?.message ?? String(error);
+    logEntry("ERROR", "remote", `Error explorando directorio remoto: ${message}`);
+    return { ok:false, error:message };
   }
 });
 
