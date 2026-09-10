@@ -7,6 +7,7 @@ import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, getCachedFile, cacheFile, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtSize, fmtNum } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
 import { ContextInput, TimeRangeFilter, Btn, Sep } from "./SharedUI.jsx";
+import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 import { RotationBanner } from "./Modals.jsx";
 
 /* ═══════════════════════════════════════════
@@ -32,6 +33,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   const [timeRange,    setTimeRange]    = useRememberedState(tabKey, "timeRange", () => ({ enabled:false, date:"", from:"", to:"", includeUndated:true }));
   const [search,       setSearch]       = useRememberedState(tabKey, "search", "");
   const [searchUseRegex, setSearchUseRegex] = useRememberedState(tabKey, "searchUseRegex", false);
+  const [analysisOpen, setAnalysisOpen] = useRememberedState(tabKey, "analysisOpen", false);
   const searchDebounced = useDebouncedValue(search);
   const [matchCursor,  setMatchCursor]  = useRememberedState(tabKey, "matchCursor", -1);
   const [filterRegexError, setFilterRegexError] = useState(false);
@@ -360,7 +362,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   }, [filePath, fileName, filter, timeRange, filtered, classified.length]);
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden" }}>
+    <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden", position:"relative" }}>
 
       {/* toolbar */}
       <div style={{ display:"flex", flexDirection:"column", gap:6, padding:"7px 10px",
@@ -379,6 +381,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           <Btn active={showNums} onClick={() => setShowNums(p => !p)} title={t("linenums_title")}>#</Btn>
           <Btn onClick={copyResults} disabled={!filtered.length} title={t("copy_results_title")}>{t("copy_results")}</Btn>
           <Btn onClick={exportResults} disabled={!filtered.length} title={t("export_results_title")}>{t("export_results")}</Btn>
+          <Btn active={analysisOpen} onClick={() => setAnalysisOpen(value => !value)} disabled={!filtered.length}
+            title={t("analysis_open_title")}>{t("analysis_btn")}</Btn>
           <Sep />
           <Btn onClick={clearVisibleLog} disabled={!classified.length} title={t("clear_log_title")}>{t("clear_log")}</Btn>
           <Btn onClick={reloadLog} disabled={!filePath && !webFile} title={t("reload_log_title")}>{t("reload_log")}</Btn>
@@ -523,6 +527,20 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
         </div>
       </div>
+
+      {analysisOpen && (
+        <AnalysisSidebar
+          sourceLabel={sourceLabel}
+          filter={filter}
+          search={search}
+          timeRange={timeRange}
+          visibleItems={filtered}
+          sourceItems={classified}
+          selection={selection}
+          stats={stats}
+          onClose={() => setAnalysisOpen(false)}
+        />
+      )}
 
       {/* progress */}
       {loading && (
