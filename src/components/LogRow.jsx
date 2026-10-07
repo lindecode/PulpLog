@@ -91,6 +91,9 @@ const LogRow = memo(({ item, showNums, isBookmarked, isSelected, isActive, onTog
     );
   }
   const s = STYLE[item.type] || STYLE.plain;
+  const highlight = item.searchHighlight ?? (item.matched ? 0 : -1);
+  const highlightBg = highlight >= 0 ? `var(--pl-search-hit-${highlight + 1}-bg)` : null;
+  const highlightBorder = highlight >= 0 ? `var(--pl-search-hit-${highlight + 1}-border)` : null;
   return (
     <div
       role="option"
@@ -106,12 +109,12 @@ const LogRow = memo(({ item, showNums, isBookmarked, isSelected, isActive, onTog
         display:"flex", alignItems:"stretch", height:ROW_H,
         background: isSelected ? "color-mix(in srgb, var(--pl-accent) 24%, var(--pl-bg-panel))"
           : isBookmarked ? "rgba(255,200,50,.07)"
-          : item.matched ? "var(--pl-search-hit-bg)" : s.bg,
+          : highlightBg || s.bg,
         borderBottom:"0.5px solid var(--pl-hairline)",
         outline: isActive ? "1px solid var(--pl-accent)"
           : isSelected ? "1px solid color-mix(in srgb, var(--pl-accent) 55%, transparent)"
           : isBookmarked ? "0.5px solid rgba(255,200,50,.25)"
-          : item.matched ? "0.5px solid var(--pl-search-hit-border)" : "none",
+          : highlightBorder ? `0.5px solid ${highlightBorder}` : "none",
         outlineOffset:-1,
         opacity: item.contextOnly && !isSelected ? 0.55 : 1,
         cursor:"default",

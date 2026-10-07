@@ -5,7 +5,7 @@ import { useRememberedState, useBatchedLines, useFilteredLogs, useAvailableLogDa
 import { classifyLines, countLevels, appendRecentItems } from "../logProcessing.mjs";
 import { reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtNum } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, TimeRangeFilter, Btn, Sep } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, ExtraSearches, Btn, Sep } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 
 /* ═══════════════════════════════════════════
@@ -102,8 +102,10 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
   const [timeRange,    setTimeRange]    = useRememberedState(tabKey, "timeRange", () => ({ enabled:false, date:"", from:"", to:"", includeUndated:true }));
   const [search,       setSearch]       = useRememberedState(tabKey, "search", "");
   const [searchUseRegex, setSearchUseRegex] = useRememberedState(tabKey, "searchUseRegex", false);
+  const [extraSearches, setExtraSearches] = useRememberedState(tabKey, "extraSearches", () => []);
   const [analysisOpen, setAnalysisOpen] = useRememberedState(tabKey, "analysisOpen", false);
   const searchDebounced = useDebouncedValue(search);
+  const extraSearchesDebounced = useDebouncedValue(extraSearches);
   const [matchCursor,  setMatchCursor]  = useRememberedState(tabKey, "matchCursor", -1);
   const [filterRegexError, setFilterRegexError] = useState(false);
   const [searchRegexError, setSearchRegexError] = useState(false);
@@ -146,8 +148,8 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
 
   const stats = useMemo(() => countLevels(classified), [classified]);
 
-  const { filtered, filterRegexValid, searchRegexValid, timeRangeValid, matchOrigLines } =
-    useFilteredLogs("docker", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric);
+  const { filtered, filterRegexValid, searchRegexValid, extraSearchRegexValid, timeRangeValid, matchOrigLines } =
+    useFilteredLogs("docker", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric, extraSearchesDebounced);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
   const availableDates = useAvailableLogDates(classified);
@@ -299,6 +301,8 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
               .*
             </button>
           </div>
+
+          <ExtraSearches searches={extraSearches} onChange={setExtraSearches} validity={extraSearchRegexValid} />
 
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input

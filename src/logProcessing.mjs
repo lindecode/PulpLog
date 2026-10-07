@@ -220,7 +220,7 @@ function applyTimeRange(classified, timeRange) {
   return { items, valid:true };
 }
 
-export function filterLogs(classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange) {
+export function filterLogs(classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange, extraSearches = []) {
   const hidden = new Set();
   if (!levels.error) { hidden.add("error"); hidden.add("exception"); }
   if (!levels.stack) { hidden.add("stack"); hidden.add("causedby"); }
@@ -230,18 +230,24 @@ export function filterLogs(classified, filterText, filterUseRegex, levels, conte
   const visible = hidden.size ? classified.filter(item => !hidden.has(item.type)) : classified;
   const { items:timeVisible, valid:timeRangeValid } = applyTimeRange(visible, timeRange);
   if (!timeRangeValid) {
-    return { filtered:[], filterRegexValid:true, searchRegexValid:true, timeRangeValid, matchOrigLines:[] };
+    return { filtered:[], filterRegexValid:true, searchRegexValid:true, extraSearchRegexValid:extraSearches.map(() => true), timeRangeValid, matchOrigLines:[] };
   }
 
   const { match: filterMatch, valid: filterRegexValid } = buildMatcher(filterText, filterUseRegex);
   if (!filterRegexValid) {
-    return { filtered:[], filterRegexValid, searchRegexValid:true, timeRangeValid, matchOrigLines:[] };
+    return { filtered:[], filterRegexValid, searchRegexValid:true, extraSearchRegexValid:extraSearches.map(() => true), timeRangeValid, matchOrigLines:[] };
   }
   const afterFilter = filterMatch ? applyContext(timeVisible, filterMatch, context) : timeVisible;
 
   const { match: searchMatch, valid: searchRegexValid } = buildMatcher(searchText, searchUseRegex);
-  const filtered = searchMatch
-    ? afterFilter.map(item => searchMatch(item) ? { ...item, matched:true } : item)
+  const extraMatchers = extraSearches.slice(0, 3).map(search => buildMatcher(search?.text || "", !!search?.useRegex));
+  const extraSearchRegexValid = extraMatchers.map(matcher => matcher.valid);
+  const filtered = (searchMatch || extraMatchers.some(matcher => matcher.match))
+    ? afterFilter.map(item => {
+        if (searchMatch?.(item)) return { ...item, matched:true, searchHighlight:0 };
+        const extraIndex = extraMatchers.findIndex(matcher => matcher.match?.(item));
+        return extraIndex >= 0 ? { ...item, searchHighlight:extraIndex + 1 } : item;
+      })
     : afterFilter;
 
   let matchOrigLines = [];
@@ -251,5 +257,5 @@ export function filterLogs(classified, filterText, filterUseRegex, levels, conte
     matchOrigLines = afterFilter.filter(x => !x.contextOnly).map(x => x.origLine);
   }
 
-  return { filtered, filterRegexValid, searchRegexValid, timeRangeValid, matchOrigLines };
+  return { filtered, filterRegexValid, searchRegexValid, extraSearchRegexValid, timeRangeValid, matchOrigLines };
 }

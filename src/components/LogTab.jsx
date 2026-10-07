@@ -6,7 +6,7 @@ import { classifyLines, countLevels, splitTextChunk } from "../logProcessing.mjs
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, getCachedFile, cacheFile, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtSize, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, TimeRangeFilter, Btn, Sep } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, ExtraSearches, Btn, Sep } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 import { RotationBanner } from "./Modals.jsx";
 
@@ -34,8 +34,10 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   const [timeRange,    setTimeRange]    = useRememberedState(tabKey, "timeRange", () => ({ enabled:false, date:"", from:"", to:"", includeUndated:true }));
   const [search,       setSearch]       = useRememberedState(tabKey, "search", "");
   const [searchUseRegex, setSearchUseRegex] = useRememberedState(tabKey, "searchUseRegex", false);
+  const [extraSearches, setExtraSearches] = useRememberedState(tabKey, "extraSearches", () => []);
   const [analysisOpen, setAnalysisOpen] = useRememberedState(tabKey, "analysisOpen", false);
   const searchDebounced = useDebouncedValue(search);
+  const extraSearchesDebounced = useDebouncedValue(extraSearches);
   const [matchCursor,  setMatchCursor]  = useRememberedState(tabKey, "matchCursor", -1);
   const [filterRegexError, setFilterRegexError] = useState(false);
   const [searchRegexError, setSearchRegexError] = useState(false);
@@ -310,8 +312,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     return () => unwatch?.();
   }, [tailing, loading, filePath, watchNonce, compressed]); // eslint-disable-line
 
-  const { filtered, filterRegexValid, searchRegexValid, timeRangeValid, matchOrigLines } =
-    useFilteredLogs("file", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric);
+  const { filtered, filterRegexValid, searchRegexValid, extraSearchRegexValid, timeRangeValid, matchOrigLines } =
+    useFilteredLogs("file", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric, extraSearchesDebounced);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
   const availableDates = useAvailableLogDates(classified);
@@ -446,6 +448,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
               .*
             </button>
           </div>
+
+          <ExtraSearches searches={extraSearches} onChange={setExtraSearches} validity={extraSearchRegexValid} />
 
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input

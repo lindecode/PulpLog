@@ -61,6 +61,47 @@ function Btn({ children, onClick, active, title, disabled, variant }) {
   );
 }
 
+function ExtraSearches({ searches, onChange, validity = [] }) {
+  const t = useLang();
+  const update = (index, patch) => onChange(searches.map((search, i) => i === index ? { ...search, ...patch } : search));
+  const remove = index => onChange(searches.filter((_, i) => i !== index));
+  const add = () => {
+    if (searches.length < 3) onChange([...searches, { text:"", useRegex:false }]);
+  };
+  return (
+    <>
+      <Btn onClick={add} disabled={searches.length >= 3} title={searches.length >= 3 ? t("extra_search_limit") : t("extra_search_add_title")}>
+        + {t("extra_search_add")}
+      </Btn>
+      {searches.map((search, index) => {
+        const valid = validity[index] !== false;
+        return (
+          <div key={index} style={{ display:"flex", flex:"1 1 180px", minWidth:150, maxWidth:320 }}>
+            <span aria-hidden="true" style={{ width:6, flexShrink:0, borderRadius:"6px 0 0 6px",
+              background:`var(--pl-search-hit-${index + 2}-border)` }} />
+            <input value={search.text} onChange={event => update(index, { text:event.target.value })}
+              placeholder={search.useRegex ? t("search_regex_ph") : t("extra_search_ph", index + 2)}
+              title={valid ? t("extra_search_title", index + 2) : t("search_regex_invalid_title")}
+              style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
+                border:`0.5px solid ${valid ? "var(--pl-border)" : "var(--pl-error-border)"}`, borderLeft:"none",
+                color:valid ? "var(--pl-text-2)" : "var(--pl-error-text)", fontFamily:"inherit",
+                fontSize:12, padding:"4px 8px", outline:"none" }} />
+            <button onClick={() => update(index, { useRegex:!search.useRegex })} title={t("search_regex_btn_title")}
+              style={{ background:search.useRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+                border:`0.5px solid ${search.useRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`, borderLeft:"none",
+                color:search.useRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)", fontFamily:"monospace",
+                fontSize:11, padding:"4px 7px", cursor:"pointer", fontWeight:search.useRegex ? 700 : 400 }}>.*</button>
+            <button onClick={() => remove(index)} title={t("extra_search_remove")}
+              aria-label={t("extra_search_remove")}
+              style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderLeft:"none",
+                borderRadius:"0 6px 6px 0", color:"var(--pl-text-5)", fontSize:14, padding:"2px 7px", cursor:"pointer" }}>×</button>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 function TimeRangeFilter({ value, onChange, invalid, availableDates = [] }) {
   const t = useLang();
   const enabled = !!value?.enabled;
@@ -123,4 +164,4 @@ function Sep() {
 }
 
 
-export { ContextInput, TimeRangeFilter, Btn, Sep };
+export { ContextInput, TimeRangeFilter, ExtraSearches, Btn, Sep };

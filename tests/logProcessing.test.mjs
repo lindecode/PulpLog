@@ -63,6 +63,32 @@ test("filtering preserves levels, context, and invalid-regex behavior", () => {
   assert.deepEqual(textResult.filtered.filter(x => !x.separator).map(x => x.origLine), [2, 3]);
   assert.equal(filterLogs(items, "[", true, levels, 0).filterRegexValid, false);
 });
+test("highlights one primary search and up to three additional searches", () => {
+  const items = classifyLines(["INFO started", "WARN retry", "ERROR failed", "DEBUG cache", "plain"]);
+  const levels = { error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true };
+  const result = filterLogs(items, "", false, levels, 0, "started", false, null, [
+    { text:"retry", useRegex:false },
+    { text:"ERROR|failed", useRegex:true },
+    { text:"cache", useRegex:false },
+    { text:"plain", useRegex:false },
+  ]);
+
+  assert.deepEqual(result.filtered.map(item => item.searchHighlight), [0, 1, 2, 3, undefined]);
+  assert.deepEqual(result.matchOrigLines, [1]);
+  assert.deepEqual(result.extraSearchRegexValid, [true, true, true]);
+});
+
+test("reports invalid regex in an additional search without hiding rows", () => {
+  const items = classifyLines(["INFO ready", "ERROR stopped"]);
+  const levels = { error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true };
+  const result = filterLogs(items, "", false, levels, 0, "", false, null, [
+    { text:"[", useRegex:true },
+    { text:"stopped", useRegex:false },
+  ]);
+
+  assert.deepEqual(result.extraSearchRegexValid, [false, true]);
+  assert.deepEqual(result.filtered.map(item => item.searchHighlight), [undefined, 2]);
+});
 test("navigates selectable log rows and skips context separators", () => {
   const items = [
     { origLine:10 },
