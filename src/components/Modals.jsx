@@ -132,6 +132,7 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
   const t = useLang();
   const lang = settings.language || "es";
   const theme = settings.theme || "classic";
+  const appIconSrc = `${import.meta.env.BASE_URL}pulplog-iso.png`;
   useEscapeToClose(onClose);
 
   return (
@@ -143,8 +144,14 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
                     padding:"28px 32px", minWidth:500, maxWidth:620,
                     boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
 
-        <div style={{ display:"flex", alignItems:"center", marginBottom:22 }}>
-          <span style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700 }}>{t("settings_header")}</span>
+        <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:22 }}>
+          <img src={appIconSrc} alt="PulpLog"
+            style={{ width:44, height:44, borderRadius:10, objectFit:"contain",
+              background:"var(--pl-bg-app)", border:"0.5px solid var(--pl-border-soft)", padding:3 }} />
+          <div>
+            <div style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700 }}>{t("settings_header")}</div>
+            <div style={{ marginTop:2, fontSize:10, color:"var(--pl-text-6)", letterSpacing:.4 }}>PulpLog</div>
+          </div>
           <button onClick={onClose}
             style={{ marginLeft:"auto", background:"none", border:"none",
                      color:"var(--pl-text-6)", cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>✕</button>
