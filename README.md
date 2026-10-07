@@ -4,6 +4,16 @@ PulpLog es un visor de logs de escritorio hecho con Electron, React y Vite. Est�
 
 Funciona en Windows, macOS y Linux.
 
+## Instalación para usuarios
+
+Descarga el paquete correspondiente desde
+[GitHub Releases](https://github.com/lindecode/PulpLog/releases). En Windows el
+instalador NSIS permite elegir la carpeta de instalación y también se publica un
+ZIP; en macOS se genera un DMG y en Linux un AppImage y un paquete DEB.
+
+PulpLog no necesita Docker, OpenSSH ni WSL2 para abrir archivos locales. Esas
+herramientas sólo son necesarias para la integración correspondiente.
+
 ## Requisitos
 
 - Node.js 18+
@@ -31,6 +41,17 @@ npm run dist:linux    # .AppImage + .deb
 ```
 
 Los instaladores se generan en `release/`.
+
+## Pruebas
+
+```bash
+npm test                 # pruebas unitarias con node:test
+npm run test:integration # smoke test de Electron
+npm run build            # valida el bundle de producción
+```
+
+El smoke test necesita un entorno capaz de abrir Electron; en servidores sin
+sesión gráfica puede requerir una pantalla virtual.
 
 ## Funcionalidades
 
@@ -194,6 +215,38 @@ El límite de líneas vivas configurado en PulpLog continúa protegiendo la memo
 
 En Windows 11 algunos atajos con `Super` pueden estar reservados por el sistema. La bitácora interna indica cuáles se registraron correctamente.
 
+## Privacidad y seguridad
+
+- Los archivos locales se procesan en el equipo.
+- Las contraseñas y passphrases SSH manuales se conservan sólo durante la
+  conexión y no se guardan en perfiles ni en la restauración de sesión.
+- El prompt preparado en el panel de análisis se redacta localmente cuando está
+  activa la opción de ocultar posibles secretos. PulpLog sólo lo copia al
+  portapapeles; no lo envía a ningún modelo. La redacción es una ayuda, no una
+  garantía: revísalo antes de pegarlo en servicios externos.
+- **Buscar actualizaciones** consulta la API pública de GitHub Releases; PulpLog
+  no descarga ni instala una actualización automáticamente.
+- Docker, SSH y WSL ejecutan herramientas del sistema con los parámetros que
+  proporciona el usuario. Verifica siempre el host y la ruta antes de conectar.
+
+No agregues contraseñas, tokens, llaves privadas ni archivos `.env` al
+repositorio. Para SSH, prefiere el agente del sistema o selecciona la llave desde
+la interfaz.
+
+## Solución rápida de problemas
+
+| Problema | Comprobación |
+|---|---|
+| Docker no aparece | Ejecuta `docker ps` en la misma sesión del sistema |
+| SSH automático falla | Prueba primero `ssh alias` en una terminal |
+| Llave cifrada no abre | Cárgala con `ssh-add` o usa SSH con credenciales |
+| WSL2 no aparece | Ejecuta `wsl --list --quiet` y comprueba que exista una distribución |
+| El archivo no se actualiza | Confirma permisos, existencia y si fue rotado o recreado |
+| La interfaz se ralentiza | Reduce el historial inicial o el límite de líneas vivas |
+
+La bitácora interna de PulpLog muestra el detalle de detección, procesos y
+reconexiones sin registrar contraseñas.
+
 ## Uso rápido
 
 - `Ctrl+O`: abrir archivo
@@ -235,3 +288,14 @@ pulplog/
     ├── main.jsx
     └── App.jsx      # UI: pestañas, virtual scroll, filtros, Docker, settings y diagnóstico
 ```
+
+## Contribuir
+
+Antes de enviar un cambio, ejecuta `npm test` y `npm run build`. Mantén la lógica
+de procesamiento reutilizable en módulos pequeños, cubre los casos nuevos con
+pruebas y no incluyas `release/`, `node_modules/`, configuraciones locales ni
+archivos que puedan contener datos reales de logs.
+
+## Licencia
+
+PulpLog se distribuye bajo la licencia [MIT](LICENSE).
