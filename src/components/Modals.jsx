@@ -146,8 +146,8 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
 
         <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:22 }}>
           <img src={appIconSrc} alt="PulpLog"
-            style={{ width:44, height:44, borderRadius:10, objectFit:"contain",
-              background:"var(--pl-bg-app)", border:"0.5px solid var(--pl-border-soft)", padding:3 }} />
+            style={{ width:64, height:64, borderRadius:12, objectFit:"contain",
+              background:"var(--pl-bg-app)", border:"0.5px solid var(--pl-border-soft)", padding:4 }} />
           <div>
             <div style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700 }}>{t("settings_header")}</div>
             <div style={{ marginTop:2, fontSize:10, color:"var(--pl-text-6)", letterSpacing:.4 }}>PulpLog</div>
