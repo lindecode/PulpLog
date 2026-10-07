@@ -106,11 +106,9 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
   const [analysisOpen, setAnalysisOpen] = useRememberedState(tabKey, "analysisOpen", false);
   const searchDebounced = useDebouncedValue(search);
   const extraSearchesDebounced = useDebouncedValue(extraSearches);
-  const [matchCursor,  setMatchCursor]  = useRememberedState(tabKey, "matchCursor", -1);
   const [filterRegexError, setFilterRegexError] = useState(false);
   const [searchRegexError, setSearchRegexError] = useState(false);
   const [bookmarks,  setBookmarks] = useRememberedState(tabKey, "bookmarks", () => new Set());
-  const [bmCursor,   setBmCursor]  = useRememberedState(tabKey, "bmCursor", -1);
 
   const [showNums,   setShowNums]  = useRememberedState(tabKey, "showNums", true);
   const [autoScroll, setAutoScroll]= useRememberedState(tabKey, "autoScroll", true);
@@ -167,31 +165,34 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
     });
   }, []);
 
-  const sortedBookmarks = useMemo(() => [...bookmarks].sort((a, b) => a - b), [bookmarks]);
+  const visibleBookmarks = useMemo(() => {
+    const visibleLines = new Set(filtered.filter(item => !item.separator).map(item => item.origLine));
+    return [...bookmarks].filter(line => visibleLines.has(line)).sort((a, b) => a - b);
+  }, [bookmarks, filtered]);
 
   const jumpBookmark = useCallback((direction) => {
-    if (!sortedBookmarks.length) return;
-    const next = direction === "next"
-      ? (bmCursor >= sortedBookmarks.length - 1 ? 0 : bmCursor + 1)
-      : (bmCursor <= 0 ? sortedBookmarks.length - 1 : bmCursor - 1);
-    setBmCursor(next);
-    const idx = filtered.findIndex(x => x.origLine >= sortedBookmarks[next]);
-    if (idx >= 0) listRef.current?.scrollToIndex(idx);
-  }, [sortedBookmarks, bmCursor, filtered]);
+    if (!visibleBookmarks.length) return;
+    const active = selection.active;
+    const line = direction === "next"
+      ? visibleBookmarks.find(value => active == null || value > active) ?? visibleBookmarks[0]
+      : [...visibleBookmarks].reverse().find(value => active == null || value < active) ?? visibleBookmarks[visibleBookmarks.length - 1];
+    const index = filtered.findIndex(item => item.origLine === line);
+    if (index >= 0) listRef.current?.scrollToIndex(index);
+    setSelection({ lines:new Set([line]), active:line, anchor:line });
+  }, [visibleBookmarks, selection.active, filtered, setSelection]);
 
   const jumpMatch = useCallback((direction) => {
     if (!matchOrigLines.length) return;
-    const next = direction === "next"
-      ? (matchCursor >= matchOrigLines.length - 1 ? 0 : matchCursor + 1)
-      : (matchCursor <= 0 ? matchOrigLines.length - 1 : matchCursor - 1);
-    setMatchCursor(next);
-    const idx = filtered.findIndex(x => x.origLine >= matchOrigLines[next]);
+    const active = selection.active;
+    const line = direction === "next"
+      ? matchOrigLines.find(value => active == null || value > active) ?? matchOrigLines[0]
+      : [...matchOrigLines].reverse().find(value => active == null || value < active) ?? matchOrigLines[matchOrigLines.length - 1];
+    const idx = filtered.findIndex(x => x.origLine === line);
     if (idx >= 0) {
       listRef.current?.scrollToIndex(idx);
-      const hitLine = filtered[idx].origLine;
-      setSelection({ lines:new Set([hitLine]), active:hitLine, anchor:hitLine });
+      setSelection({ lines:new Set([line]), active:line, anchor:line });
     }
-  }, [matchOrigLines, matchCursor, filtered, setSelection]);
+  }, [matchOrigLines, selection.active, filtered, setSelection]);
 
   const jumpExtraMatch = useCallback((searchIndex, direction) => {
     const matches = extraMatchOrigLines[searchIndex] || [];
@@ -242,9 +243,7 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
     nextLineRef.current = 1;
     setSelection({ lines:new Set(), active:null, anchor:null });
     setBookmarks(new Set());
-    setBmCursor(-1);
-    setMatchCursor(-1);
-  }, [tabKey, enqueueLines, setSelection, setBookmarks, setBmCursor, setMatchCursor]);
+  }, [tabKey, enqueueLines, setSelection, setBookmarks]);
 
   const reloadLog = useCallback(() => {
     clearVisibleLog();
@@ -354,7 +353,7 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
               <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
               <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
               <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
-                {(search ? t("match_source_search") : t("match_source_filter"))} {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
+                {(search ? t("match_source_search") : t("match_source_filter"))} {t("match_count", matchOrigLines.includes(selection.active) ? matchOrigLines.indexOf(selection.active) + 1 : 0, matchOrigLines.length)}
               </span>
             </div>
           )}
@@ -379,10 +378,10 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
 
         <Sep />
 
-        <Btn onClick={() => jumpBookmark("prev")} disabled={!sortedBookmarks.length} title={t("bm_prev_title")}>◆ ↑</Btn>
-        <Btn onClick={() => jumpBookmark("next")} disabled={!sortedBookmarks.length} title={t("bm_next_title")}>◆ ↓</Btn>
+        <Btn onClick={() => jumpBookmark("prev")} disabled={!visibleBookmarks.length} title={t("bm_prev_title")}>◆ ↑</Btn>
+        <Btn onClick={() => jumpBookmark("next")} disabled={!visibleBookmarks.length} title={t("bm_next_title")}>◆ ↓</Btn>
         {bookmarks.size > 0 && <span style={{ fontSize:10, color:"var(--pl-bookmark)", padding:"0 2px" }}>{t("bm_count", bookmarks.size)}</span>}
-        {bookmarks.size > 0 && <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }} title={t("bm_clear_title")}>{t("bm_clear_btn")}</Btn>}
+        {bookmarks.size > 0 && <Btn onClick={() => setBookmarks(new Set())} title={t("bm_clear_title")}>{t("bm_clear_btn")}</Btn>}
         <Btn active={autoScroll} variant="accent" onClick={() => {
           const next = !autoScroll;
           if (next) {

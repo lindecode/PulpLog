@@ -38,11 +38,9 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   const [analysisOpen, setAnalysisOpen] = useRememberedState(tabKey, "analysisOpen", false);
   const searchDebounced = useDebouncedValue(search);
   const extraSearchesDebounced = useDebouncedValue(extraSearches);
-  const [matchCursor,  setMatchCursor]  = useRememberedState(tabKey, "matchCursor", -1);
   const [filterRegexError, setFilterRegexError] = useState(false);
   const [searchRegexError, setSearchRegexError] = useState(false);
   const [bookmarks,   setBookmarks]   = useRememberedState(tabKey, "bookmarks", () => new Set());
-  const [bmCursor,    setBmCursor]    = useRememberedState(tabKey, "bmCursor", -1);
 
   const [rotation,    setRotation]    = useState(null);
   const [reloadKey,   setReloadKey]   = useState(0);
@@ -128,9 +126,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     setStats({ ...statsRef.current });
     setSelection({ lines:new Set(), active:null, anchor:null });
     setBookmarks(new Set());
-    setBmCursor(-1);
-    setMatchCursor(-1);
-  }, [tabKey, setSelection, setBookmarks, setBmCursor, setMatchCursor]);
+  }, [tabKey, setSelection, setBookmarks]);
 
   const clearVisibleLog = useCallback(async () => {
     clearViewState();
@@ -330,34 +326,34 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     });
   }, []);
 
-  const sortedBookmarks = useMemo(() =>
-    [...bookmarks].sort((a,b) => a - b), [bookmarks]);
+  const visibleBookmarks = useMemo(() => {
+    const visibleLines = new Set(filtered.filter(item => !item.separator).map(item => item.origLine));
+    return [...bookmarks].filter(line => visibleLines.has(line)).sort((a,b) => a - b);
+  }, [bookmarks, filtered]);
 
   const jumpBookmark = useCallback((direction) => {
-    if (sortedBookmarks.length === 0) return;
-    const next = direction === "next"
-      ? (bmCursor >= sortedBookmarks.length - 1 ? 0 : bmCursor + 1)
-      : (bmCursor <= 0 ? sortedBookmarks.length - 1 : bmCursor - 1);
-    setBmCursor(next);
-    const origLine = sortedBookmarks[next];
-    const idx = filtered.findIndex(x => x.origLine >= origLine);
-    if (idx >= 0) listRef.current?.scrollToIndex(idx);
-  }, [sortedBookmarks, bmCursor, filtered]);
+    if (visibleBookmarks.length === 0) return;
+    const active = selection.active;
+    const line = direction === "next"
+      ? visibleBookmarks.find(value => active == null || value > active) ?? visibleBookmarks[0]
+      : [...visibleBookmarks].reverse().find(value => active == null || value < active) ?? visibleBookmarks[visibleBookmarks.length - 1];
+    const index = filtered.findIndex(item => item.origLine === line);
+    if (index >= 0) listRef.current?.scrollToIndex(index);
+    setSelection({ lines:new Set([line]), active:line, anchor:line });
+  }, [visibleBookmarks, selection.active, filtered, setSelection]);
 
   const jumpMatch = useCallback((direction) => {
     if (matchOrigLines.length === 0) return;
-    const next = direction === "next"
-      ? (matchCursor >= matchOrigLines.length - 1 ? 0 : matchCursor + 1)
-      : (matchCursor <= 0 ? matchOrigLines.length - 1 : matchCursor - 1);
-    setMatchCursor(next);
-    const origLine = matchOrigLines[next];
-    const idx = filtered.findIndex(x => x.origLine >= origLine);
+    const active = selection.active;
+    const line = direction === "next"
+      ? matchOrigLines.find(value => active == null || value > active) ?? matchOrigLines[0]
+      : [...matchOrigLines].reverse().find(value => active == null || value < active) ?? matchOrigLines[matchOrigLines.length - 1];
+    const idx = filtered.findIndex(x => x.origLine === line);
     if (idx >= 0) {
       listRef.current?.scrollToIndex(idx);
-      const hitLine = filtered[idx].origLine;
-      setSelection({ lines:new Set([hitLine]), active:hitLine, anchor:hitLine });
+      setSelection({ lines:new Set([line]), active:line, anchor:line });
     }
-  }, [matchOrigLines, matchCursor, filtered, setSelection]);
+  }, [matchOrigLines, selection.active, filtered, setSelection]);
 
   const jumpExtraMatch = useCallback((searchIndex, direction) => {
     const matches = extraMatchOrigLines[searchIndex] || [];
@@ -502,7 +498,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
               <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
               <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
               <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
-                {(search ? t("match_source_search") : t("match_source_filter"))} {t("match_count", matchCursor < 0 ? 0 : matchCursor + 1, matchOrigLines.length)}
+                {(search ? t("match_source_search") : t("match_source_filter"))} {t("match_count", matchOrigLines.includes(selection.active) ? matchOrigLines.indexOf(selection.active) + 1 : 0, matchOrigLines.length)}
               </span>
             </div>
           )}
@@ -531,11 +527,11 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
         <Sep />
 
         <Btn onClick={() => jumpBookmark("prev")}
-          disabled={sortedBookmarks.length === 0} title={t("bm_prev_title")}>
+          disabled={visibleBookmarks.length === 0} title={t("bm_prev_title")}>
           ◆ ↑
         </Btn>
         <Btn onClick={() => jumpBookmark("next")}
-          disabled={sortedBookmarks.length === 0} title={t("bm_next_title")}>
+          disabled={visibleBookmarks.length === 0} title={t("bm_next_title")}>
           ◆ ↓
         </Btn>
         {bookmarks.size > 0 && (
@@ -544,7 +540,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           </span>
         )}
         {bookmarks.size > 0 && (
-          <Btn onClick={() => { setBookmarks(new Set()); setBmCursor(-1); }}
+          <Btn onClick={() => setBookmarks(new Set())}
             title={t("bm_clear_title")}>
             {t("bm_clear_btn")}
           </Btn>
