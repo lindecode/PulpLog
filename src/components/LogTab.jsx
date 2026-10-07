@@ -312,7 +312,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     return () => unwatch?.();
   }, [tailing, loading, filePath, watchNonce, compressed]); // eslint-disable-line
 
-  const { filtered, filterRegexValid, searchRegexValid, extraSearchRegexValid, timeRangeValid, matchOrigLines } =
+  const { filtered, filterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines } =
     useFilteredLogs("file", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric, extraSearchesDebounced);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
@@ -358,6 +358,18 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
       setSelection({ lines:new Set([hitLine]), active:hitLine, anchor:hitLine });
     }
   }, [matchOrigLines, matchCursor, filtered, setSelection]);
+
+  const jumpExtraMatch = useCallback((searchIndex, direction) => {
+    const matches = extraMatchOrigLines[searchIndex] || [];
+    if (!matches.length) return;
+    const active = selection.active;
+    const line = direction === "next"
+      ? matches.find(value => active == null || value > active) ?? matches[0]
+      : [...matches].reverse().find(value => active == null || value < active) ?? matches[matches.length - 1];
+    const index = filtered.findIndex(item => item.origLine === line);
+    if (index >= 0) listRef.current?.scrollToIndex(index);
+    setSelection({ lines:new Set([line]), active:line, anchor:line });
+  }, [extraMatchOrigLines, selection.active, filtered, setSelection]);
 
   const toggle = (key, event) => setLvl(p => {
     if (!event?.ctrlKey && !event?.metaKey) return { ...p, [key]: !p[key] };
@@ -449,7 +461,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
             </button>
           </div>
 
-          <ExtraSearches searches={extraSearches} onChange={setExtraSearches} validity={extraSearchRegexValid} />
+          <ExtraSearches searches={extraSearches} onChange={setExtraSearches} validity={extraSearchRegexValid} onNavigate={jumpExtraMatch} />
 
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input

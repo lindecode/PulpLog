@@ -61,7 +61,7 @@ function Btn({ children, onClick, active, title, disabled, variant }) {
   );
 }
 
-function ExtraSearches({ searches, onChange, validity = [] }) {
+function ExtraSearches({ searches, onChange, validity = [], onNavigate }) {
   const t = useLang();
   const update = (index, patch) => onChange(searches.map((search, i) => i === index ? { ...search, ...patch } : search));
   const remove = index => onChange(searches.filter((_, i) => i !== index));
@@ -80,6 +80,11 @@ function ExtraSearches({ searches, onChange, validity = [] }) {
             <span aria-hidden="true" style={{ width:6, flexShrink:0, borderRadius:"6px 0 0 6px",
               background:`var(--pl-search-hit-${index + 2}-border)` }} />
             <input value={search.text} onChange={event => update(index, { text:event.target.value })}
+              onKeyDown={event => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                onNavigate?.(index, event.shiftKey ? "prev" : "next");
+              }}
               placeholder={search.useRegex ? t("search_regex_ph") : t("extra_search_ph", index + 2)}
               title={valid ? t("extra_search_title", index + 2) : t("search_regex_invalid_title")}
               style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",

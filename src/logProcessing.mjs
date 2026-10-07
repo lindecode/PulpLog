@@ -230,18 +230,21 @@ export function filterLogs(classified, filterText, filterUseRegex, levels, conte
   const visible = hidden.size ? classified.filter(item => !hidden.has(item.type)) : classified;
   const { items:timeVisible, valid:timeRangeValid } = applyTimeRange(visible, timeRange);
   if (!timeRangeValid) {
-    return { filtered:[], filterRegexValid:true, searchRegexValid:true, extraSearchRegexValid:extraSearches.map(() => true), timeRangeValid, matchOrigLines:[] };
+    return { filtered:[], filterRegexValid:true, searchRegexValid:true, extraSearchRegexValid:extraSearches.map(() => true), extraMatchOrigLines:extraSearches.map(() => []), timeRangeValid, matchOrigLines:[] };
   }
 
   const { match: filterMatch, valid: filterRegexValid } = buildMatcher(filterText, filterUseRegex);
   if (!filterRegexValid) {
-    return { filtered:[], filterRegexValid, searchRegexValid:true, extraSearchRegexValid:extraSearches.map(() => true), timeRangeValid, matchOrigLines:[] };
+    return { filtered:[], filterRegexValid, searchRegexValid:true, extraSearchRegexValid:extraSearches.map(() => true), extraMatchOrigLines:extraSearches.map(() => []), timeRangeValid, matchOrigLines:[] };
   }
   const afterFilter = filterMatch ? applyContext(timeVisible, filterMatch, context) : timeVisible;
 
   const { match: searchMatch, valid: searchRegexValid } = buildMatcher(searchText, searchUseRegex);
   const extraMatchers = extraSearches.slice(0, 3).map(search => buildMatcher(search?.text || "", !!search?.useRegex));
   const extraSearchRegexValid = extraMatchers.map(matcher => matcher.valid);
+  const extraMatchOrigLines = extraMatchers.map(matcher => matcher.match
+    ? afterFilter.filter(item => !item.separator && matcher.match(item)).map(item => item.origLine)
+    : []);
   const filtered = (searchMatch || extraMatchers.some(matcher => matcher.match))
     ? afterFilter.map(item => {
         if (searchMatch?.(item)) return { ...item, matched:true, searchHighlight:0 };
@@ -257,5 +260,5 @@ export function filterLogs(classified, filterText, filterUseRegex, levels, conte
     matchOrigLines = afterFilter.filter(x => !x.contextOnly).map(x => x.origLine);
   }
 
-  return { filtered, filterRegexValid, searchRegexValid, extraSearchRegexValid, timeRangeValid, matchOrigLines };
+  return { filtered, filterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines };
 }

@@ -75,6 +75,7 @@ test("highlights one primary search and up to three additional searches", () => 
 
   assert.deepEqual(result.filtered.map(item => item.searchHighlight), [0, 1, 2, 3, undefined]);
   assert.deepEqual(result.matchOrigLines, [1]);
+  assert.deepEqual(result.extraMatchOrigLines, [[2], [3], [4]]);
   assert.deepEqual(result.extraSearchRegexValid, [true, true, true]);
 });
 
