@@ -90,6 +90,29 @@ test("reports invalid regex in an additional search without hiding rows", () => 
   assert.deepEqual(result.extraSearchRegexValid, [false, true]);
   assert.deepEqual(result.filtered.map(item => item.searchHighlight), [undefined, 2]);
 });
+
+test("chains additional filters against the previous filter result", () => {
+  const items = classifyLines(["INFO api ready", "INFO worker ready", "ERROR api failed", "ERROR worker failed"]);
+  const levels = { error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true };
+  const result = filterLogs(items, "api", false, levels, 0, "", false, null, [], [
+    { text:"ERROR", useRegex:false },
+  ]);
+
+  assert.deepEqual(result.filtered.map(item => item.origLine), [3]);
+  assert.deepEqual(result.matchOrigLines, [3]);
+  assert.deepEqual(result.extraFilterRegexValid, [true]);
+});
+
+test("reports an invalid chained filter regex", () => {
+  const items = classifyLines(["INFO ready"]);
+  const levels = { error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true };
+  const result = filterLogs(items, "", false, levels, 0, "", false, null, [], [
+    { text:"[", useRegex:true },
+  ]);
+
+  assert.deepEqual(result.filtered, []);
+  assert.deepEqual(result.extraFilterRegexValid, [false]);
+});
 test("navigates selectable log rows and skips context separators", () => {
   const items = [
     { origLine:10 },

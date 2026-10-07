@@ -6,7 +6,7 @@ import { classifyLines, countLevels, appendRecentItems } from "../logProcessing.
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtBytes, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, TimeRangeFilter, ExtraSearches, Btn, Sep } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 
 function remoteDirname(value) {
@@ -646,7 +646,9 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
   const [ended, setEnded] = useState(false);
   const [filter,       setFilter]       = useRememberedState(tabKey, "filter", "");
   const [filterUseRegex, setFilterUseRegex] = useRememberedState(tabKey, "useRegex", false);
+  const [extraFilters, setExtraFilters] = useRememberedState(tabKey, "extraFilters", () => []);
   const filterDebounced = useDebouncedValue(filter);
+  const extraFiltersDebounced = useDebouncedValue(extraFilters);
   const [context,      setContext]      = useRememberedState(tabKey, "context", 0);
   const [timeRange,    setTimeRange]    = useRememberedState(tabKey, "timeRange", () => ({ enabled:false, date:"", from:"", to:"", includeUndated:true }));
   const [search,       setSearch]       = useRememberedState(tabKey, "search", "");
@@ -802,8 +804,8 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
     setReloadNonce(value => value + 1);
   }, [resetViewState]);
 
-  const { filtered, filterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines } =
-    useFilteredLogs("remote", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric, extraSearchesDebounced);
+  const { filtered, filterRegexValid, extraFilterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines } =
+    useFilteredLogs("remote", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric, extraSearchesDebounced, extraFiltersDebounced);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
   const availableDates = useAvailableLogDates(classified);
@@ -967,6 +969,18 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
 
           <ExtraSearches searches={extraSearches} onChange={setExtraSearches} validity={extraSearchRegexValid} onNavigate={jumpExtraMatch} />
 
+          {(filter || search || extraFilters.some(item => item.text)) && matchOrigLines.length > 0 && (
+            <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
+              <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
+              <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
+              <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
+                {(search ? t("match_source_search") : t("match_source_filter"))} {t("match_count", matchOrigLines.includes(selection.active) ? matchOrigLines.indexOf(selection.active) + 1 : 0, matchOrigLines.length)}
+              </span>
+            </div>
+          )}
+
+          <div style={{ flexBasis:"100%", height:0 }} />
+
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
               ref={filterInputRef}
@@ -997,18 +1011,11 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
             </button>
           </div>
 
+          <ExtraFilters filters={extraFilters} onChange={setExtraFilters} validity={extraFilterRegexValid} />
+
           <ContextInput value={context} onChange={setContext} />
           <TimeRangeFilter value={timeRange} onChange={setTimeRange} invalid={!timeRangeValid} availableDates={availableDates} />
 
-          {(filter || search) && matchOrigLines.length > 0 && (
-            <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0, whiteSpace:"nowrap" }}>
-              <Btn onClick={() => jumpMatch("prev")} title={t("match_prev_title")}>▲</Btn>
-              <Btn onClick={() => jumpMatch("next")} title={t("match_next_title")}>▼</Btn>
-              <span style={{ fontSize:10, color:"var(--pl-text-4)" }}>
-                {(search ? t("match_source_search") : t("match_source_filter"))} {t("match_count", matchOrigLines.includes(selection.active) ? matchOrigLines.indexOf(selection.active) + 1 : 0, matchOrigLines.length)}
-              </span>
-            </div>
-          )}
         </div>
 
         {/* row 3: level chips + bookmarks + actions */}

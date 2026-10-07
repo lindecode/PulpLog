@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React from "react";
 import { useLang } from "../i18n.jsx";
 
 /* ═══════════════════════════════════════════
@@ -6,35 +6,25 @@ import { useLang } from "../i18n.jsx";
 ═══════════════════════════════════════════ */
 function ContextInput({ value, onChange }) {
   const t = useLang();
-  const inputRef = useRef(null);
-  const [draft, setDraft] = useState(String(value ?? 0));
-  useEffect(() => {
-    if (document.activeElement !== inputRef.current) setDraft(String(value ?? 0));
-  }, [value]);
-  const update = event => {
-    const next = event.target.value;
-    setDraft(next);
-    if (next === "") return;
-    const parsed = Number(next);
-    if (Number.isFinite(parsed)) onChange(Math.max(0, Math.min(50, parsed)));
-  };
-  const commit = () => {
-    if (draft === "") {
-      setDraft("0");
-      onChange(0);
-    } else {
-      setDraft(String(Math.max(0, Math.min(50, Number(draft) || 0))));
-    }
-  };
+  const normalized = Math.max(0, Math.min(50, Number(value) || 0));
+  const buttonStyle = { background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+    color:"var(--pl-text-4)", fontFamily:"inherit", fontSize:13, width:25, height:25,
+    padding:0, cursor:"pointer" };
   return <label title={t("context_title")}
     style={{ display:"flex", alignItems:"center", gap:5, flex:"0 0 auto", minWidth:118, whiteSpace:"nowrap",
       color:"var(--pl-text-5)", fontSize:10 }}>
     <span>{t("context_label")} ±</span>
-    <input ref={inputRef} type="number" min={0} max={50} value={draft}
-      onChange={update} onBlur={commit}
-      style={{ width:48, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
-        borderRadius:6, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11,
-        padding:"3px 5px", textAlign:"center" }} />
+    <span style={{ display:"inline-flex", alignItems:"center" }}>
+      <button type="button" onClick={() => onChange(Math.max(0, normalized - 1))} disabled={normalized === 0}
+        aria-label={t("context_decrease")} style={{ ...buttonStyle, borderRadius:"6px 0 0 6px", opacity:normalized === 0 ? .4 : 1 }}>−</button>
+      <input type="number" min={0} max={50} value={normalized}
+        onChange={event => onChange(Math.max(0, Math.min(50, Number(event.target.value) || 0)))}
+        style={{ width:38, height:25, boxSizing:"border-box", appearance:"textfield", background:"var(--pl-bg-input)",
+          border:"0.5px solid var(--pl-border)", borderLeft:"none", borderRight:"none", color:"var(--pl-text-2)",
+          fontFamily:"inherit", fontSize:11, padding:"3px 4px", textAlign:"center", outline:"none" }} />
+      <button type="button" onClick={() => onChange(Math.min(50, normalized + 1))} disabled={normalized === 50}
+        aria-label={t("context_increase")} style={{ ...buttonStyle, borderRadius:"0 6px 6px 0", opacity:normalized === 50 ? .4 : 1 }}>+</button>
+    </span>
   </label>;
 }
 
@@ -107,6 +97,42 @@ function ExtraSearches({ searches, onChange, validity = [], onNavigate }) {
   );
 }
 
+function ExtraFilters({ filters, onChange, validity = [] }) {
+  const t = useLang();
+  const update = (index, patch) => onChange(filters.map((filter, i) => i === index ? { ...filter, ...patch } : filter));
+  const remove = index => onChange(filters.filter((_, i) => i !== index));
+  const add = () => {
+    if (filters.length < 3) onChange([...filters, { text:"", useRegex:false }]);
+  };
+  return (
+    <>
+      <Btn onClick={add} disabled={filters.length >= 3} title={filters.length >= 3 ? t("extra_filter_limit") : t("extra_filter_add_title")}>
+        + {t("extra_filter_add")}
+      </Btn>
+      {filters.map((filter, index) => {
+        const valid = validity[index] !== false;
+        return <div key={index} style={{ display:"flex", flex:"1 1 180px", minWidth:150, maxWidth:320 }}>
+          <input value={filter.text} onChange={event => update(index, { text:event.target.value })}
+            placeholder={filter.useRegex ? t("regex_ph") : t("extra_filter_ph", index + 2)}
+            title={valid ? t("extra_filter_title", index + 2) : t("regex_invalid")}
+            style={{ flex:1, minWidth:0, background:"var(--pl-bg-input)",
+              border:`0.5px solid ${valid ? "var(--pl-border)" : "var(--pl-error-border)"}`, borderRadius:"6px 0 0 6px",
+              color:valid ? "var(--pl-text-2)" : "var(--pl-error-text)", fontFamily:"inherit", fontSize:12,
+              padding:"4px 8px", outline:"none" }} />
+          <button onClick={() => update(index, { useRegex:!filter.useRegex })} title={t("regex_btn_title")}
+            style={{ background:filter.useRegex ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+              border:`0.5px solid ${filter.useRegex ? "var(--pl-border-focus)" : "var(--pl-border)"}`, borderLeft:"none",
+              color:filter.useRegex ? "var(--pl-accent-hover)" : "var(--pl-text-5)", fontFamily:"monospace",
+              fontSize:11, padding:"4px 7px", cursor:"pointer", fontWeight:filter.useRegex ? 700 : 400 }}>.*</button>
+          <button onClick={() => remove(index)} title={t("extra_filter_remove")} aria-label={t("extra_filter_remove")}
+            style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderLeft:"none",
+              borderRadius:"0 6px 6px 0", color:"var(--pl-text-5)", fontSize:14, padding:"2px 7px", cursor:"pointer" }}>×</button>
+        </div>;
+      })}
+    </>
+  );
+}
+
 function TimeRangeFilter({ value, onChange, invalid, availableDates = [] }) {
   const t = useLang();
   const enabled = !!value?.enabled;
@@ -169,4 +195,4 @@ function Sep() {
 }
 
 
-export { ContextInput, TimeRangeFilter, ExtraSearches, Btn, Sep };
+export { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep };

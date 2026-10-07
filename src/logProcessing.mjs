@@ -220,7 +220,7 @@ function applyTimeRange(classified, timeRange) {
   return { items, valid:true };
 }
 
-export function filterLogs(classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange, extraSearches = []) {
+export function filterLogs(classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange, extraSearches = [], extraFilters = []) {
   const hidden = new Set();
   if (!levels.error) { hidden.add("error"); hidden.add("exception"); }
   if (!levels.stack) { hidden.add("stack"); hidden.add("causedby"); }
@@ -230,14 +230,20 @@ export function filterLogs(classified, filterText, filterUseRegex, levels, conte
   const visible = hidden.size ? classified.filter(item => !hidden.has(item.type)) : classified;
   const { items:timeVisible, valid:timeRangeValid } = applyTimeRange(visible, timeRange);
   if (!timeRangeValid) {
-    return { filtered:[], filterRegexValid:true, searchRegexValid:true, extraSearchRegexValid:extraSearches.map(() => true), extraMatchOrigLines:extraSearches.map(() => []), timeRangeValid, matchOrigLines:[] };
+    return { filtered:[], filterRegexValid:true, extraFilterRegexValid:extraFilters.map(() => true), searchRegexValid:true, extraSearchRegexValid:extraSearches.map(() => true), extraMatchOrigLines:extraSearches.map(() => []), timeRangeValid, matchOrigLines:[] };
   }
 
   const { match: filterMatch, valid: filterRegexValid } = buildMatcher(filterText, filterUseRegex);
-  if (!filterRegexValid) {
-    return { filtered:[], filterRegexValid, searchRegexValid:true, extraSearchRegexValid:extraSearches.map(() => true), extraMatchOrigLines:extraSearches.map(() => []), timeRangeValid, matchOrigLines:[] };
+  const extraFilterMatchers = extraFilters.slice(0, 3).map(filter => buildMatcher(filter?.text || "", !!filter?.useRegex));
+  const extraFilterRegexValid = extraFilterMatchers.map(matcher => matcher.valid);
+  if (!filterRegexValid || extraFilterRegexValid.some(valid => !valid)) {
+    return { filtered:[], filterRegexValid, extraFilterRegexValid, searchRegexValid:true, extraSearchRegexValid:extraSearches.map(() => true), extraMatchOrigLines:extraSearches.map(() => []), timeRangeValid, matchOrigLines:[] };
   }
-  const afterFilter = filterMatch ? applyContext(timeVisible, filterMatch, context) : timeVisible;
+  const activeFilterMatchers = [filterMatch, ...extraFilterMatchers.map(matcher => matcher.match)].filter(Boolean);
+  const combinedFilterMatch = activeFilterMatchers.length
+    ? item => activeFilterMatchers.every(match => match(item))
+    : null;
+  const afterFilter = combinedFilterMatch ? applyContext(timeVisible, combinedFilterMatch, context) : timeVisible;
 
   const { match: searchMatch, valid: searchRegexValid } = buildMatcher(searchText, searchUseRegex);
   const extraMatchers = extraSearches.slice(0, 3).map(search => buildMatcher(search?.text || "", !!search?.useRegex));
@@ -256,9 +262,9 @@ export function filterLogs(classified, filterText, filterUseRegex, levels, conte
   let matchOrigLines = [];
   if (searchMatch) {
     matchOrigLines = filtered.filter(x => x.matched).map(x => x.origLine);
-  } else if (filterMatch) {
+  } else if (combinedFilterMatch) {
     matchOrigLines = afterFilter.filter(x => !x.contextOnly).map(x => x.origLine);
   }
 
-  return { filtered, filterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines };
+  return { filtered, filterRegexValid, extraFilterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines };
 }

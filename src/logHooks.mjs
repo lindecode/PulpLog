@@ -79,16 +79,16 @@ export function useBatchedLines(onBatch, delay = 75, maxBufferedLines = Number.P
 
   return enqueue;
 }
-export function useFilteredLogs(kind, classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange, reportMetric, extraSearches = []) {
+export function useFilteredLogs(kind, classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange, reportMetric, extraSearches = [], extraFilters = []) {
   return useMemo(() => {
     const started = performance.now();
-    const result = filterLogs(classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange, extraSearches);
+    const result = filterLogs(classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange, extraSearches, extraFilters);
     const duration = performance.now() - started;
     if (duration >= 4) {
       queueMicrotask(() => reportMetric("search", duration, `${kind}: ${classified.length} lines`));
     }
     return result;
-  }, [kind, classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange, reportMetric, extraSearches]);
+  }, [kind, classified, filterText, filterUseRegex, levels, context, searchText, searchUseRegex, timeRange, reportMetric, extraSearches, extraFilters]);
 }
 
 export function useAvailableLogDates(classified) {

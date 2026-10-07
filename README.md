@@ -74,6 +74,7 @@ sesión gráfica puede requerir una pantalla virtual.
 |---------|---------|
 | Filtro por texto | En tiempo real, sin distinguir mayúsculas/minúsculas |
 | Filtro por regex | Botón `.*` con validación en vivo |
+| Filtros encadenados | Un filtro principal y hasta 3 filtros adicionales; cada filtro reduce el resultado producido por el anterior |
 | Búsquedas simultáneas | Una búsqueda principal navegable y hasta 3 resaltados adicionales con colores distintos; cada búsqueda admite texto o regex |
 | Filtro por hora | Rango opcional con control de reloj (`HH:mm:ss`) y selector de día cuando el log trae fechas; las líneas continuadas heredan la última hora detectada |
 | Filtro por nivel | Toggles para ERROR, WARN, INFO, DEBUG, TRACE, STACK y PLAIN. Ctrl+clic (Cmd+clic en macOS) aísla ese nivel; Ctrl+clic de nuevo restaura todos |
