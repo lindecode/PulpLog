@@ -298,4 +298,5 @@ archivos que puedan contener datos reales de logs.
 
 ## Licencia
 
-PulpLog se distribuye bajo la licencia [MIT](LICENSE).
+PulpLog es desarrollado por [LindeCode](https://lindecode.cloud) y se distribuye
+bajo la licencia [MIT](LICENSE).

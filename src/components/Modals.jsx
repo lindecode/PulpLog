@@ -291,6 +291,11 @@ function AboutModal({ onClose }) {
         <div style={{ width:40, height:"0.5px", background:"var(--pl-border-strong)", margin:"0 auto 20px" }} />
         <div style={{ fontSize:13, color:"var(--pl-text-3)", marginBottom:6 }}>{t("developed_by")}</div>
         <div style={{ fontSize:16, color:"var(--pl-accent)", fontWeight:700, letterSpacing:1 }}>LindeCode</div>
+        <a href="https://lindecode.cloud" target="_blank" rel="noreferrer"
+          style={{ display:"inline-block", marginTop:8, fontSize:11, color:"var(--pl-text-4)",
+                   textDecoration:"none", borderBottom:"0.5px solid var(--pl-border-strong)" }}>
+          lindecode.cloud ↗
+        </a>
         <div style={{ marginTop:20, fontSize:11, color:"var(--pl-text-7)" }}>{t("license")}</div>
         <button
           onClick={onClose}
