@@ -6,7 +6,7 @@ import { classifyLines, countLevels, splitTextChunk } from "../logProcessing.mjs
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, getCachedFile, cacheFile, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtSize, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep } from "./SharedUI.jsx";
+import { CollapsibleToolbarRow, ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 import { RotationBanner } from "./Modals.jsx";
 
@@ -407,7 +407,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
                     flexShrink:0 }}>
 
         {/* row 1: source + result actions */}
-        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+        <CollapsibleToolbarRow label={t("toolbar_file")}>
           <span title={sourceLabel}
             style={{ fontSize:11, color:"var(--pl-source-file)", background:"var(--pl-file-badge-bg)",
                      border:"0.5px solid var(--pl-file-badge-border)", borderRadius:6, padding:"3px 8px",
@@ -423,10 +423,10 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           <Sep />
           <Btn onClick={clearVisibleLog} disabled={!classified.length} title={t("clear_log_title")}>{t("clear_log")}</Btn>
           <Btn onClick={reloadLog} disabled={!filePath && !webFile} title={t("reload_log_title")}>{t("reload_log")}</Btn>
-        </div>
+        </CollapsibleToolbarRow>
 
         {/* row 2: filter + search + context + match nav */}
-        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+        <CollapsibleToolbarRow label={t("toolbar_search")}>
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
               ref={searchInputRef}
@@ -471,7 +471,9 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
             </div>
           )}
 
-          <div style={{ flexBasis:"100%", height:0 }} />
+        </CollapsibleToolbarRow>
+
+        <CollapsibleToolbarRow label={t("toolbar_filter")}>
 
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
@@ -509,10 +511,10 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           <ContextInput value={context} onChange={setContext} />
           <TimeRangeFilter value={timeRange} onChange={setTimeRange} invalid={!timeRangeValid} availableDates={availableDates} />
 
-        </div>
+        </CollapsibleToolbarRow>
 
         {/* row 3: level chips + bookmarks + actions */}
-        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+        <CollapsibleToolbarRow label={t("toolbar_levels")}>
 
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
           <span key={key} onClick={event => toggle(key, event)} title={t("level_toggle_title")}
@@ -569,7 +571,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
         </Btn>
         <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
-        </div>
+        </CollapsibleToolbarRow>
       </div>
 
       {analysisOpen && (

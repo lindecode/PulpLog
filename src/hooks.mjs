@@ -25,11 +25,10 @@ export function useSearchShortcuts(searchInputRef, filterInputRef, isActive) {
       const isCmdOrCtrl = event.metaKey || event.ctrlKey;
       if (isCmdOrCtrl && event.key.toLowerCase() === "f") {
         event.preventDefault();
-        if (event.shiftKey) {
-          filterInputRef.current?.focus();
-        } else {
-          searchInputRef.current?.focus();
-        }
+        const input = event.shiftKey ? filterInputRef.current : searchInputRef.current;
+        const row = input?.closest("details.pl-toolbar-row");
+        if (row) row.open = true;
+        input?.focus();
       }
     };
     document.addEventListener("keydown", onKey);
@@ -62,4 +61,3 @@ export function useRowSelection(tabKey, classified) {
   }, [classified, selection, setSelection]);
   return { selection, setSelection, selectionRef };
 }
-

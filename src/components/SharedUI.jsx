@@ -4,6 +4,20 @@ import { useLang } from "../i18n.jsx";
 /* ═══════════════════════════════════════════
    Small helpers
 ═══════════════════════════════════════════ */
+function CollapsibleToolbarRow({ label, children }) {
+  const t = useLang();
+  return (
+    <details open className="pl-toolbar-row" style={{ position:"relative", paddingLeft:28, minHeight:24 }}>
+      <summary title={t("toolbar_toggle", label)} aria-label={t("toolbar_toggle", label)}
+        style={{ position:"absolute", top:0, left:0, width:24, height:24, padding:"4px 5px",
+          color:"var(--pl-text-3)", cursor:"pointer", borderRadius:4, fontSize:12 }} />
+      <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", minWidth:0 }}>
+        {children}
+      </div>
+    </details>
+  );
+}
+
 function ContextInput({ value, onChange }) {
   const t = useLang();
   const normalized = Math.max(0, Math.min(50, Number(value) || 0));
@@ -195,4 +209,4 @@ function Sep() {
 }
 
 
-export { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep };
+export { CollapsibleToolbarRow, ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep };

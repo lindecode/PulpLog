@@ -6,7 +6,7 @@ import { classifyLines, countLevels, appendRecentItems } from "../logProcessing.
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtBytes, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep } from "./SharedUI.jsx";
+import { CollapsibleToolbarRow, ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 
 function remoteDirname(value) {
@@ -916,7 +916,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
                     flexShrink:0 }}>
 
         {/* row 1: source + result actions */}
-        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+        <CollapsibleToolbarRow label={t("toolbar_file")}>
           <span title={sourceLabel}
             style={{ fontSize:11, color:"var(--pl-source-remote)", background:"var(--pl-remote-badge-bg)",
                          border:"0.5px solid var(--pl-remote-badge-border)", borderRadius:6, padding:"3px 8px",
@@ -932,10 +932,10 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
           <Sep />
           <Btn onClick={clearVisibleLog} disabled={!classified.length} title={t("clear_log_title")}>{t("clear_log")}</Btn>
           <Btn onClick={reloadLog} title={t("reload_log_title")}>{t("reload_log")}</Btn>
-        </div>
+        </CollapsibleToolbarRow>
 
         {/* row 2: filter + search + context + match nav */}
-        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+        <CollapsibleToolbarRow label={t("toolbar_search")}>
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
               ref={searchInputRef}
@@ -979,7 +979,9 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
             </div>
           )}
 
-          <div style={{ flexBasis:"100%", height:0 }} />
+        </CollapsibleToolbarRow>
+
+        <CollapsibleToolbarRow label={t("toolbar_filter")}>
 
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
@@ -1016,10 +1018,10 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
           <ContextInput value={context} onChange={setContext} />
           <TimeRangeFilter value={timeRange} onChange={setTimeRange} invalid={!timeRangeValid} availableDates={availableDates} />
 
-        </div>
+        </CollapsibleToolbarRow>
 
         {/* row 3: level chips + bookmarks + actions */}
-        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+        <CollapsibleToolbarRow label={t("toolbar_levels")}>
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
           <span key={key} onClick={event => toggle(key, event)} title={t("level_toggle_title")}
             style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:11,
@@ -1048,7 +1050,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
         }} title={t("autoscroll_title")}>{t("autoscroll_btn")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
-        </div>
+        </CollapsibleToolbarRow>
       </div>
 
       {analysisOpen && (

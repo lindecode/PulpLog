@@ -1964,7 +1964,7 @@ function normalizeRemoteProfiles(value) {
 function normalizeSettings(value) {
   const s = value && typeof value === "object" ? value : {};
   const language = ["es", "en"].includes(s.language) ? s.language : "es";
-  const theme = ["classic", "light", "vscode", "ember", "blue"].includes(s.theme) ? s.theme : "classic";
+  const theme = ["classic", "light", "vscode", "ember", "blue", "lindecode"].includes(s.theme) ? s.theme : "classic";
   const skippedUpdateVersion = parseReleaseVersion(s.skippedUpdateVersion) ? String(s.skippedUpdateVersion).trim() : "";
 
   let panes;

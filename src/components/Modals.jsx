@@ -178,8 +178,8 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
         <div style={{ fontSize:10, color:"var(--pl-text-6)", fontWeight:700, letterSpacing:1, marginBottom:10 }}>
           {t("theme_h")}
         </div>
-        <div style={{ display:"flex", gap:8, marginBottom:24 }}>
-          {["classic","light","vscode","ember","blue"].map(th => (
+        <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:24 }}>
+          {["classic","light","vscode","ember","blue","lindecode"].map(th => (
             <button key={th} onClick={() => onTogglePref("theme", th)}
               style={{ background: theme === th ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
                        border:`0.5px solid ${theme === th ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
