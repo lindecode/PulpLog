@@ -2133,6 +2133,13 @@ function registerShortcuts(win) {
 
 /* ─── lifecycle ─── */
 app.whenReady().then(async () => {
+  const { session } = require("electron");
+  if (session?.defaultSession) {
+    session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+      callback(false);
+    });
+    session.defaultSession.setPermissionCheckHandler(() => false);
+  }
   currentLanguage = (await loadSettings().catch(() => null))?.language || "es";
   const splash = IS_SMOKE_TEST ? null : createSplashWindow();
   const win = createWindow(splash);
