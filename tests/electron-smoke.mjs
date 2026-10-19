@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import process from "node:process";

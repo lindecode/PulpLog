@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import { classifyLines, countLevels } from "./logProcessing.mjs";
 
 self.onmessage = ({ data }) => {

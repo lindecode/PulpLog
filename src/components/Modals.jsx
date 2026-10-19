@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import React, { useState, useEffect, useRef } from "react";
 import { useLang, GUIDE, GUIDE_SHORTCUTS } from "../i18n.jsx";
 import { useEscapeToClose } from "../hooks.mjs";

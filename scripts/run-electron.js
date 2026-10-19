@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 "use strict";
 const { spawn } = require("child_process");
 const electronPath = require("electron");

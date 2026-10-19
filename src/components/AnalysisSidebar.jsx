@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import React, { useMemo, useState } from "react";
 import { useLang } from "../i18n.jsx";
 import { buildResultText, copyResultText, fmtBytes, fmtNum } from "../utils.mjs";

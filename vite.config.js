@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 

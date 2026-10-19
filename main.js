@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut, clipboard } = require("electron");
 const path = require("path");
 const fs   = require("fs");

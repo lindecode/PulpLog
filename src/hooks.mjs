@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRememberedState } from "./logHooks.mjs";
 

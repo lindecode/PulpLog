@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import React, { memo } from "react";
 import { useLang } from "../i18n.jsx";
 import { ROW_H } from "../utils.mjs";

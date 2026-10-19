@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useLang } from "../i18n.jsx";
 import { getRememberedScroll, setRememberedScroll } from "../logHooks.mjs";

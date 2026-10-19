@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { collectLogDates, filterLogs } from "./logProcessing.mjs";
 

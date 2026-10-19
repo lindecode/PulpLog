@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 export const ROW_H = 22;
 export const OVERSCAN = 40;
 export const IS_ELECTRON = typeof window !== "undefined" && !!window.electronAPI;

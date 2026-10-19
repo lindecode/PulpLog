@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import { createContext, useContext } from "react";
 import { fmtNum, fmtBytes } from "./utils.mjs";
 

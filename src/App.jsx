@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { LangCtx, T } from "./i18n.jsx";
 import { IS_ELECTRON, reportMetric, RENDERER_STARTED_AT } from "./utils.mjs";

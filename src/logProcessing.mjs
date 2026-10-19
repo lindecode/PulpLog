@@ -1,3 +1,4 @@
+// Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 export const MAX_LIVE_LINES = 500_000;
 
 // Loggers that don't shout their level in uppercase (pino/winston/bunyan-style
