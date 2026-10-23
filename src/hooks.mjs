@@ -26,10 +26,11 @@ export function useSearchShortcuts(searchInputRef, filterInputRef, isActive) {
       const isCmdOrCtrl = event.metaKey || event.ctrlKey;
       if (isCmdOrCtrl && event.key.toLowerCase() === "f") {
         event.preventDefault();
-        const input = event.shiftKey ? filterInputRef.current : searchInputRef.current;
-        const row = input?.closest("details.pl-toolbar-row");
-        if (row) row.open = true;
-        input?.focus();
+        if (event.shiftKey) {
+          filterInputRef.current?.focus();
+        } else {
+          searchInputRef.current?.focus();
+        }
       }
     };
     document.addEventListener("keydown", onKey);

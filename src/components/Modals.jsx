@@ -134,6 +134,16 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
   const lang = settings.language || "es";
   const theme = settings.theme || "classic";
   const appIconSrc = `${import.meta.env.BASE_URL}pulplog-iso.png`;
+  const [ollamaUrlDraft, setOllamaUrlDraft] = useState(settings.ollamaUrl || "http://127.0.0.1:11434");
+  useEffect(() => { setOllamaUrlDraft(settings.ollamaUrl || "http://127.0.0.1:11434"); }, [settings.ollamaUrl]);
+  const commitOllamaUrl = () => {
+    const next = ollamaUrlDraft.trim().replace(/\/+$/, "") || "http://127.0.0.1:11434";
+    setOllamaUrlDraft(next);
+    if (next !== settings.ollamaUrl) onTogglePref("ollamaUrl", next);
+  };
+  const ollamaUrlRemote = (() => {
+    try { return !/^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/i.test(new URL(ollamaUrlDraft).hostname); } catch { return false; }
+  })();
   useEscapeToClose(onClose);
 
   return (
@@ -266,12 +276,30 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
             <span style={{ flex:1 }}>{t("pref_ollama_url")}</span>
             <input
               type="text"
-              value={settings.ollamaUrl ?? "http://127.0.0.1:11434"}
+              value={ollamaUrlDraft}
               placeholder="http://127.0.0.1:11434"
-              onChange={e => onTogglePref("ollamaUrl", e.target.value.trim())}
+              onChange={e => setOllamaUrlDraft(e.target.value)}
+              onBlur={commitOllamaUrl}
+              onKeyDown={e => { if (e.key === "Enter") commitOllamaUrl(); }}
               style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:5,
                        color:"var(--pl-text-3)", fontFamily:"inherit", fontSize:11, padding:"4px 8px", width:180 }}
             />
+          </label>
+          {ollamaUrlRemote && (
+            <div style={{ color:"var(--pl-status-warn)", fontSize:10, lineHeight:1.4, marginTop:-6 }}>
+              {t("pref_ollama_remote_warning")}
+            </div>
+          )}
+          <label style={{ display:"flex", alignItems:"center", gap:10, color:"var(--pl-text-4)", fontSize:11 }}>
+            <span style={{ flex:1 }} title={t("pref_ollama_context_title")}>{t("pref_ollama_context")}</span>
+            <select value={settings.ollamaContextTokens || 16384}
+              onChange={e => onTogglePref("ollamaContextTokens", Number(e.target.value))}
+              style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:5,
+                       color:"var(--pl-text-3)", fontFamily:"inherit", fontSize:11, padding:"4px 8px" }}>
+              {[4096, 8192, 16384, 32768, 65536, 131072].map(value => (
+                <option key={value} value={value}>{`${value / 1024}K tokens`}</option>
+              ))}
+            </select>
           </label>
         </div>
 

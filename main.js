@@ -1991,6 +1991,9 @@ function normalizeSettings(value) {
     ? s.ollamaUrl.trim().replace(/\/+$/, "")
     : "http://127.0.0.1:11434";
   const ollamaModel = typeof s.ollamaModel === "string" ? s.ollamaModel.trim() : "";
+  const ollamaContextTokens = [4096, 8192, 16384, 32768, 65536, 131072].includes(s.ollamaContextTokens)
+    ? s.ollamaContextTokens
+    : 16384;
 
   return {
     recentFiles: Array.isArray(s.recentFiles) ? s.recentFiles.filter(f => typeof f === "string") : [],
@@ -2007,6 +2010,7 @@ function normalizeSettings(value) {
     skippedUpdateVersion,
     ollamaUrl,
     ollamaModel,
+    ollamaContextTokens,
   };
 }
 async function loadSettings() {
@@ -2058,71 +2062,116 @@ ipcMain.handle("recentfiles:remove", (_event, fp) => updateSettings(current => (
   return settings.recentFiles;
 }));
 /* ─── Local AI (Ollama) integration ─── */
+const OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434";
+const OLLAMA_CONTEXT_SIZES = [4096, 8192, 16384, 32768, 65536, 131072];
+const OLLAMA_MAX_MESSAGES = 200;
+const OLLAMA_MAX_PAYLOAD_CHARS = 2_000_000;
+
 function normalizeOllamaUrl(rawUrl) {
-  const fallback = "http://127.0.0.1:11434";
-  if (!rawUrl || typeof rawUrl !== "string") return fallback;
-  const trimmed = rawUrl.trim();
+  if (!rawUrl || typeof rawUrl !== "string") return OLLAMA_DEFAULT_URL;
   try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return fallback;
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return OLLAMA_DEFAULT_URL;
     return `${parsed.protocol}//${parsed.host}`;
   } catch {
-    return fallback;
+    return OLLAMA_DEFAULT_URL;
   }
 }
 
-function fetchOllamaTags(baseUrl) {
-  return new Promise((resolve) => {
-    try {
-      const targetUrl = new URL("/api/tags", baseUrl);
-      const transport = targetUrl.protocol === "https:" ? https : http;
-      const req = transport.get(targetUrl, {
-        headers: { Accept: "application/json" },
-        timeout: 3000,
-      }, (res) => {
-        let body = "";
-        res.setEncoding("utf8");
-        res.on("data", chunk => {
-          body += chunk;
-          if (body.length > 1024 * 1024) req.destroy(new Error("Response too large"));
-        });
-        res.on("end", () => {
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            return resolve({ available: false, error: `HTTP ${res.statusCode}`, models: [], url: baseUrl });
-          }
-          try {
-            const data = JSON.parse(body);
-            const rawModels = Array.isArray(data?.models) ? data.models : [];
-            const models = rawModels.map(m => {
-              if (typeof m === "string") return { name: m, model: m, size: 0, details: {}, capabilities: [] };
-              return {
-                name: m.name || m.model || "",
-                model: m.model || m.name || "",
-                size: Number(m.size) || 0,
-                details: m.details || {},
-                capabilities: Array.isArray(m.capabilities) ? m.capabilities : [],
-              };
-            }).filter(m => Boolean(m.name));
-            resolve({ available: true, models, url: baseUrl });
-          } catch (e) {
-            resolve({ available: false, error: "JSON inválido de Ollama", models: [], url: baseUrl });
-          }
-        });
+function normalizeOllamaContext(value) {
+  const n = Number(value);
+  return OLLAMA_CONTEXT_SIZES.includes(n) ? n : 16384;
+}
+
+// Ollama answers errors as {"error":"..."}; surface that text instead of a bare status code.
+function ollamaErrorText(statusCode, body) {
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed?.error) return String(parsed.error);
+  } catch {}
+  return `HTTP ${statusCode}${body ? `: ${String(body).slice(0, 300)}` : ""}`;
+}
+
+function ollamaJson(baseUrl, apiPath, { body = null, timeout = 3000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const targetUrl = new URL(apiPath, baseUrl);
+    const transport = targetUrl.protocol === "https:" ? https : http;
+    const data = body ? JSON.stringify(body) : null;
+    const req = transport.request(targetUrl, {
+      method: data ? "POST" : "GET",
+      headers: {
+        Accept: "application/json",
+        ...(data ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } : {}),
+      },
+      timeout,
+    }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", chunk => {
+        text += chunk;
+        if (text.length > 4 * 1024 * 1024) req.destroy(new Error("Response too large"));
       });
-      req.on("timeout", () => {
-        req.destroy();
-        resolve({ available: false, error: "Timeout", models: [], url: baseUrl });
+      res.on("end", () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error(ollamaErrorText(res.statusCode, text)));
+        try { resolve(JSON.parse(text)); } catch { reject(new Error("Invalid JSON from Ollama")); }
       });
-      req.on("error", (err) => {
-        resolve({ available: false, error: err.code || err.message, models: [], url: baseUrl });
-      });
-    } catch (err) {
-      resolve({ available: false, error: err.message, models: [], url: baseUrl });
-    }
+    });
+    req.on("timeout", () => req.destroy(Object.assign(new Error("Timeout"), { code: "Timeout" })));
+    req.on("error", reject);
+    if (data) req.write(data);
+    req.end();
   });
 }
 
-const activeAiStreams = new Map(); // streamId → { req, stopped }
+// Older /api/tags lists models without capabilities; /api/show adds them plus the trained context length.
+async function describeOllamaModel(baseUrl, raw) {
+  const name = typeof raw === "string" ? raw : (raw?.name || raw?.model || "");
+  const model = {
+    name,
+    model: typeof raw === "string" ? raw : (raw?.model || name),
+    size: Number(raw?.size) || 0,
+    details: raw?.details || {},
+    capabilities: Array.isArray(raw?.capabilities) ? raw.capabilities : [],
+    contextLength: Number(raw?.details?.context_length) || 0,
+  };
+  // Recent Ollama versions already include both in /api/tags.
+  if (model.capabilities.length && model.contextLength) return model;
+  try {
+    const info = await ollamaJson(baseUrl, "/api/show", { body: { model: name }, timeout: 4000 });
+    if (Array.isArray(info?.capabilities)) model.capabilities = info.capabilities;
+    const contextKey = Object.keys(info?.model_info || {}).find(key => key.endsWith(".context_length"));
+    if (contextKey) model.contextLength = Number(info.model_info[contextKey]) || 0;
+  } catch {}
+  return model;
+}
+
+async function fetchOllamaStatus(baseUrl) {
+  try {
+    const data = await ollamaJson(baseUrl, "/api/tags");
+    const rawModels = (Array.isArray(data?.models) ? data.models : [])
+      .filter(m => typeof m === "string" ? m : (m?.name || m?.model));
+    const models = await Promise.all(rawModels.slice(0, 50).map(m => describeOllamaModel(baseUrl, m)));
+    return { available: true, models, url: baseUrl };
+  } catch (err) {
+    return { available: false, error: err.code || err.message, models: [], url: baseUrl };
+  }
+}
+
+function normalizeChatMessages(value) {
+  if (!Array.isArray(value) || !value.length || value.length > OLLAMA_MAX_MESSAGES) throw new Error("Invalid messages");
+  let total = 0;
+  const messages = value.map(message => {
+    const role = message?.role;
+    const content = message?.content;
+    if (!["system", "user", "assistant"].includes(role) || typeof content !== "string") throw new Error("Invalid message");
+    total += content.length;
+    return { role, content };
+  });
+  if (total > OLLAMA_MAX_PAYLOAD_CHARS) throw new Error("Conversation too large");
+  return messages;
+}
+
+const activeAiStreams = new Map(); // streamId → { req, stopped, finished, sender }
 
 function stopAiStream(streamId) {
   const entry = activeAiStreams.get(streamId);
@@ -2133,131 +2182,130 @@ function stopAiStream(streamId) {
   }
 }
 
-ipcMain.handle("ollama:status", async (event, customUrl) => {
-  assertTrustedSender(event);
-  const settings = await loadSettings();
-  const url = normalizeOllamaUrl(customUrl || settings.ollamaUrl);
-  return fetchOllamaTags(url);
-});
-
-ipcMain.handle("ollama:generate:start", async (event, payload) => {
-  assertTrustedSender(event);
-  const streamId = normalizeIdentifier(payload?.streamId, "stream id");
-  const settings = await loadSettings();
-  const baseUrl = normalizeOllamaUrl(payload?.url || settings.ollamaUrl);
-  const model = typeof payload?.model === "string" && payload.model.trim() ? payload.model.trim() : (settings.ollamaModel || "");
-  const prompt = typeof payload?.prompt === "string" ? payload.prompt : "";
-  const system = typeof payload?.system === "string" ? payload.system : "Eres un analista senior de sistemas y bitácoras de software. Sé conciso, preciso, enfócate en diagnosticar causas y proponer soluciones prácticas.";
-
-  if (!model) throw new Error("No model specified");
-  if (!prompt) throw new Error("No prompt specified");
-
-  stopAiStream(streamId);
+function startOllamaChat(sender, streamId, baseUrl, request, withThink) {
+  const send = (ch, ...args) => { if (!sender.isDestroyed()) sender.send(ch, ...args); };
+  const entry = { req: null, stopped: false, finished: false, sender };
+  const finish = (ch, arg) => {
+    if (entry.stopped || entry.finished) return;
+    entry.finished = true;
+    if (activeAiStreams.get(streamId) === entry) activeAiStreams.delete(streamId);
+    send(ch, streamId, arg);
+  };
 
   const postData = JSON.stringify({
-    model,
-    prompt,
-    system,
-    think: false,
+    model: request.model,
+    messages: request.messages,
     stream: true,
+    ...(withThink ? { think: false } : {}),
+    keep_alive: "15m",
+    options: { num_ctx: request.numCtx, temperature: 0.2 },
   });
-
-  const targetUrl = new URL("/api/generate", baseUrl);
+  const targetUrl = new URL("/api/chat", baseUrl);
   const transport = targetUrl.protocol === "https:" ? https : http;
 
-  function send(ch, ...args) {
-    if (!event.sender.isDestroyed()) event.sender.send(ch, ...args);
-  }
+  const handleLine = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let parsed;
+    try { parsed = JSON.parse(trimmed); } catch { return; }
+    if (parsed.error) return finish("ollama:error", String(parsed.error));
+    const text = parsed.message?.content;
+    if (text) send("ollama:chunk", streamId, text);
+    if (parsed.done) {
+      finish("ollama:done", {
+        doneReason: parsed.done_reason || "",
+        promptEvalCount: parsed.prompt_eval_count || 0,
+        evalCount: parsed.eval_count || 0,
+        evalDuration: parsed.eval_duration || 0,
+        totalDuration: parsed.total_duration || 0,
+        numCtx: request.numCtx,
+      });
+    }
+  };
 
   const req = transport.request(targetUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(postData),
-      Accept: "application/json",
+      Accept: "application/x-ndjson",
     },
     timeout: 300000,
   }, (res) => {
     if (res.statusCode < 200 || res.statusCode >= 300) {
       let errBody = "";
+      res.setEncoding("utf8");
       res.on("data", c => { errBody += c; });
       res.on("end", () => {
-        send("ollama:error", streamId, `HTTP ${res.statusCode}: ${errBody || res.statusMessage}`);
-        activeAiStreams.delete(streamId);
+        const message = ollamaErrorText(res.statusCode, errBody);
+        // Models without a thinking mode (e.g. granite) reject `think`; retry once without it.
+        if (withThink && /think/i.test(message) && !entry.stopped) {
+          entry.finished = true;
+          startOllamaChat(sender, streamId, baseUrl, request, false);
+          return;
+        }
+        finish("ollama:error", message);
       });
       return;
     }
-
     let buffer = "";
     res.setEncoding("utf8");
     res.on("data", (chunk) => {
-      if (entry.stopped) return;
+      if (entry.stopped || entry.finished) return;
       buffer += chunk;
       const lines = buffer.split("\n");
       buffer = lines.pop();
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const parsed = JSON.parse(trimmed);
-          const chunkText = parsed.response || parsed.thinking;
-          if (chunkText) {
-            send("ollama:chunk", streamId, chunkText);
-          }
-          if (parsed.done) {
-            send("ollama:done", streamId, {
-              totalDuration: parsed.total_duration,
-              evalCount: parsed.eval_count,
-            });
-            activeAiStreams.delete(streamId);
-          }
-        } catch {
-          // ignore partial JSON
-        }
-      }
+      lines.forEach(handleLine);
     });
-
     res.on("end", () => {
-      if (!entry.stopped) {
-        if (buffer.trim()) {
-          try {
-            const parsed = JSON.parse(buffer.trim());
-            const chunkText = parsed.response || parsed.thinking;
-            if (chunkText) send("ollama:chunk", streamId, chunkText);
-          } catch {}
-        }
-        send("ollama:done", streamId, {});
-      }
-      activeAiStreams.delete(streamId);
+      if (buffer) handleLine(buffer);
+      finish("ollama:done", { numCtx: request.numCtx });
     });
   });
-
-  const entry = { req, stopped: false };
+  entry.req = req;
   activeAiStreams.set(streamId, entry);
 
+  req.on("timeout", () => req.destroy(new Error("Tiempo de espera agotado al consultar Ollama")));
   req.on("error", (err) => {
-    if (!entry.stopped) {
-      logEntry("WARN", "ollama", `Error en stream ${streamId}: ${err.message}`);
-      send("ollama:error", streamId, err.message || "Error al conectar con Ollama");
-    }
-    activeAiStreams.delete(streamId);
+    if (!entry.stopped && !entry.finished) logEntry("WARN", "ollama", `Error en stream ${streamId}: ${err.message}`);
+    finish("ollama:error", err.code === "ECONNREFUSED" ? `ECONNREFUSED ${baseUrl}` : (err.message || "Error al conectar con Ollama"));
   });
-
-  req.on("timeout", () => {
-    req.destroy();
-    if (!entry.stopped) {
-      send("ollama:error", streamId, "Tiempo de espera agotado al consultar Ollama");
-    }
-    activeAiStreams.delete(streamId);
-  });
-
   req.write(postData);
   req.end();
+}
 
-  return { ok: true, streamId };
+const aiCleanupSenders = new WeakSet();
+
+ipcMain.handle("ollama:status", async (event) => {
+  assertTrustedSender(event);
+  const settings = await loadSettings();
+  return fetchOllamaStatus(normalizeOllamaUrl(settings.ollamaUrl));
 });
 
-ipcMain.handle("ollama:generate:stop", (event, streamId) => {
+ipcMain.handle("ollama:chat:start", async (event, payload) => {
+  assertTrustedSender(event);
+  const streamId = normalizeIdentifier(payload?.streamId, "stream id");
+  const model = normalizeIdentifier(typeof payload?.model === "string" ? payload.model.trim() : "", "model");
+  const messages = normalizeChatMessages(payload?.messages);
+  const settings = await loadSettings();
+  const baseUrl = normalizeOllamaUrl(settings.ollamaUrl);
+  // Never ask for more context than the model was trained with; Ollama would only waste memory.
+  const maxContext = Number(payload?.maxContext) >= 2048 ? Number(payload.maxContext) : Infinity;
+  const numCtx = Math.min(normalizeOllamaContext(settings.ollamaContextTokens), maxContext);
+
+  stopAiStream(streamId);
+  const sender = event.sender;
+  if (!aiCleanupSenders.has(sender)) {
+    aiCleanupSenders.add(sender);
+    sender.once("destroyed", () => {
+      for (const [id, entry] of activeAiStreams) if (entry.sender === sender) stopAiStream(id);
+    });
+  }
+  startOllamaChat(sender, streamId, baseUrl, { model, messages, numCtx }, true);
+  return { ok: true, streamId, numCtx };
+});
+
+ipcMain.handle("ollama:chat:stop", (event, streamId) => {
   assertTrustedSender(event);
   stopAiStream(streamId);
   return { ok: true };

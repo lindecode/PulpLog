@@ -1,9 +1,10 @@
 // Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { LangCtx, T } from "./i18n.jsx";
 import { IS_ELECTRON, reportMetric, RENDERER_STARTED_AT } from "./utils.mjs";
 import { Pane, usePaneTabs } from "./components/Pane.jsx";
 import { DiagPanel, SettingsModal, AboutModal, HelpGuideModal } from "./components/Modals.jsx";
+import { AiSettingsCtx } from "./components/AnalysisSidebar.jsx";
 
 export default function App() {
   const [about,        setAbout]       = useState(false);
@@ -99,6 +100,13 @@ export default function App() {
     setSettings(prev => ({ ...prev, [key]: val }));
     if (IS_ELECTRON) window.electronAPI.setSettings({ [key]: val });
   }, []);
+
+  const aiSettings = useMemo(() => ({
+    ollamaUrl: settings.ollamaUrl || "",
+    ollamaModel: settings.ollamaModel || "",
+    ollamaContextTokens: settings.ollamaContextTokens || 16384,
+    savePref,
+  }), [settings.ollamaUrl, settings.ollamaModel, settings.ollamaContextTokens, savePref]);
 
   const removeRecent = useCallback(async (fp) => {
     const recent = await window.electronAPI.removeRecentFile(fp);
@@ -243,6 +251,7 @@ export default function App() {
 
   return (
     <LangCtx.Provider value={t}>
+    <AiSettingsCtx.Provider value={aiSettings}>
       <div style={{ display:"flex", flexDirection:"column", height:"100vh",
                     background:"var(--pl-bg-app)", color:"var(--pl-text-1)", overflow:"hidden",
                     fontFamily:"'JetBrains Mono','Fira Code','Cascadia Code',monospace" }}>
@@ -358,6 +367,7 @@ export default function App() {
           </div>
         )}
       </div>
+    </AiSettingsCtx.Provider>
     </LangCtx.Provider>
   );
 }

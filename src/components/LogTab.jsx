@@ -7,7 +7,7 @@ import { classifyLines, countLevels, splitTextChunk } from "../logProcessing.mjs
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, getCachedFile, cacheFile, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtSize, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { CollapsibleToolbarRow, ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 import { RotationBanner } from "./Modals.jsx";
 
@@ -39,6 +39,9 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   const [searchUseRegex, setSearchUseRegex] = useRememberedState(tabKey, "searchUseRegex", false);
   const [extraSearches, setExtraSearches] = useRememberedState(tabKey, "extraSearches", () => []);
   const [analysisOpen, setAnalysisOpen] = useRememberedState(tabKey, "analysisOpen", false);
+  const [analysisMounted, setAnalysisMounted] = useState(analysisOpen);
+  const toolbarRef = useRef(null);
+  useEffect(() => { if (analysisOpen) setAnalysisMounted(true); }, [analysisOpen]);
   const searchDebounced = useDebouncedValue(search);
   const extraSearchesDebounced = useDebouncedValue(extraSearches);
   const [filterRegexError, setFilterRegexError] = useState(false);
@@ -358,6 +361,12 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     }
   }, [matchOrigLines, selection.active, filtered, setSelection]);
 
+  const jumpToLine = useCallback(line => {
+    const index = filtered.findIndex(item => item.origLine === line);
+    if (index >= 0) listRef.current?.scrollToIndex(index);
+    setSelection({ lines:new Set([line]), active:line, anchor:line });
+  }, [filtered, setSelection]);
+
   const jumpExtraMatch = useCallback((searchIndex, direction) => {
     const matches = extraMatchOrigLines[searchIndex] || [];
     if (!matches.length) return;
@@ -403,12 +412,12 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     <div style={{ display:"flex", flexDirection:"column", flex:1, minHeight:0, overflow:"hidden", position:"relative" }}>
 
       {/* toolbar */}
-      <div style={{ display:"flex", flexDirection:"column", gap:6, padding:"7px 10px",
+      <div ref={toolbarRef} style={{ display:"flex", flexDirection:"column", gap:6, padding:"7px 10px",
                     background:"var(--pl-bg-panel)", borderBottom:"0.5px solid var(--pl-border-soft)",
                     flexShrink:0 }}>
 
         {/* row 1: source + result actions */}
-        <CollapsibleToolbarRow label={t("toolbar_file")}>
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
           <span title={sourceLabel}
             style={{ fontSize:11, color:"var(--pl-source-file)", background:"var(--pl-file-badge-bg)",
                      border:"0.5px solid var(--pl-file-badge-border)", borderRadius:6, padding:"3px 8px",
@@ -424,10 +433,10 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           <Sep />
           <Btn onClick={clearVisibleLog} disabled={!classified.length} title={t("clear_log_title")}>{t("clear_log")}</Btn>
           <Btn onClick={reloadLog} disabled={!filePath && !webFile} title={t("reload_log_title")}>{t("reload_log")}</Btn>
-        </CollapsibleToolbarRow>
+        </div>
 
         {/* row 2: filter + search + context + match nav */}
-        <CollapsibleToolbarRow label={t("toolbar_search")}>
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
               ref={searchInputRef}
@@ -472,9 +481,9 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
             </div>
           )}
 
-        </CollapsibleToolbarRow>
+        </div>
 
-        <CollapsibleToolbarRow label={t("toolbar_filter")}>
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
 
           <div style={{ display:"flex", flex:"1 1 120px", minWidth:60 }}>
             <input
@@ -512,10 +521,10 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
           <ContextInput value={context} onChange={setContext} />
           <TimeRangeFilter value={timeRange} onChange={setTimeRange} invalid={!timeRangeValid} availableDates={availableDates} />
 
-        </CollapsibleToolbarRow>
+        </div>
 
         {/* row 3: level chips + bookmarks + actions */}
-        <CollapsibleToolbarRow label={t("toolbar_levels")}>
+        <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
 
         {BADGES.map(({ key, label, bg, fg, cnt }) => (
           <span key={key} onClick={event => toggle(key, event)} title={t("level_toggle_title")}
@@ -572,20 +581,25 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
         </Btn>
         <Btn onClick={() => listRef.current?.scrollToTop()}>{t("scroll_top")}</Btn>
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
-        </CollapsibleToolbarRow>
+        </div>
       </div>
 
-      {analysisOpen && (
+      {analysisMounted && (
         <AnalysisSidebar
+          open={analysisOpen}
+          anchorRef={toolbarRef}
           sourceLabel={sourceLabel}
           filter={filter}
+          extraFilters={extraFilters}
           search={search}
+          extraSearches={extraSearches}
           timeRange={timeRange}
           visibleItems={filtered}
           sourceItems={classified}
           selection={selection}
           stats={stats}
           onClose={() => setAnalysisOpen(false)}
+          onJumpToLine={jumpToLine}
         />
       )}
 

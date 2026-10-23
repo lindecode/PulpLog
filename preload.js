@@ -140,8 +140,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   /* ── Local AI (Ollama) integration ── */
-  getOllamaStatus: (url) => ipcRenderer.invoke("ollama:status", url),
-  streamOllama(options, { onChunk, onDone, onError }) {
+  getOllamaStatus: () => ipcRenderer.invoke("ollama:status"),
+  // options: { model, messages:[{ role, content }], maxContext }
+  streamOllamaChat(options, { onChunk, onDone, onError }) {
     const streamId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const chunkH = (_e, id, text) => { if (id === streamId) onChunk?.(text); };
     const doneH  = (_e, id, meta) => { if (id === streamId) { cleanup(); onDone?.(meta); } };
@@ -149,7 +150,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("ollama:chunk", chunkH);
     ipcRenderer.on("ollama:done",  doneH);
     ipcRenderer.on("ollama:error", errH);
-    ipcRenderer.invoke("ollama:generate:start", { ...options, streamId }).catch(e => {
+    ipcRenderer.invoke("ollama:chat:start", { ...options, streamId }).catch(e => {
       cleanup();
       onError?.(e?.message ?? String(e));
     });
@@ -160,7 +161,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     }
     return () => {
       cleanup();
-      ipcRenderer.invoke("ollama:generate:stop", streamId);
+      ipcRenderer.invoke("ollama:chat:stop", streamId);
     };
   },
 
