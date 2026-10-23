@@ -1987,6 +1987,10 @@ function normalizeSettings(value) {
     ? Math.min(Math.max(Math.round(s.maxLiveLines), 50_000), 2_000_000)
     : 500_000;
   const sshAgentPollingEnabled = s.sshAgentPollingEnabled === true;
+  const ollamaUrl = typeof s.ollamaUrl === "string" && s.ollamaUrl.trim()
+    ? s.ollamaUrl.trim().replace(/\/+$/, "")
+    : "http://127.0.0.1:11434";
+  const ollamaModel = typeof s.ollamaModel === "string" ? s.ollamaModel.trim() : "";
 
   return {
     recentFiles: Array.isArray(s.recentFiles) ? s.recentFiles.filter(f => typeof f === "string") : [],
@@ -2001,6 +2005,8 @@ function normalizeSettings(value) {
     language,
     theme,
     skippedUpdateVersion,
+    ollamaUrl,
+    ollamaModel,
   };
 }
 async function loadSettings() {
@@ -2051,6 +2057,200 @@ ipcMain.handle("recentfiles:remove", (_event, fp) => updateSettings(current => (
   refreshApplicationMenu(settings);
   return settings.recentFiles;
 }));
+/* ─── Local AI (Ollama) integration ─── */
+function normalizeOllamaUrl(rawUrl) {
+  const fallback = "http://127.0.0.1:11434";
+  if (!rawUrl || typeof rawUrl !== "string") return fallback;
+  const trimmed = rawUrl.trim();
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return fallback;
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return fallback;
+  }
+}
+
+function fetchOllamaTags(baseUrl) {
+  return new Promise((resolve) => {
+    try {
+      const targetUrl = new URL("/api/tags", baseUrl);
+      const transport = targetUrl.protocol === "https:" ? https : http;
+      const req = transport.get(targetUrl, {
+        headers: { Accept: "application/json" },
+        timeout: 3000,
+      }, (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", chunk => {
+          body += chunk;
+          if (body.length > 1024 * 1024) req.destroy(new Error("Response too large"));
+        });
+        res.on("end", () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            return resolve({ available: false, error: `HTTP ${res.statusCode}`, models: [], url: baseUrl });
+          }
+          try {
+            const data = JSON.parse(body);
+            const rawModels = Array.isArray(data?.models) ? data.models : [];
+            const models = rawModels.map(m => (typeof m === "string" ? m : m?.name)).filter(Boolean);
+            resolve({ available: true, models, url: baseUrl });
+          } catch (e) {
+            resolve({ available: false, error: "JSON inválido de Ollama", models: [], url: baseUrl });
+          }
+        });
+      });
+      req.on("timeout", () => {
+        req.destroy();
+        resolve({ available: false, error: "Timeout", models: [], url: baseUrl });
+      });
+      req.on("error", (err) => {
+        resolve({ available: false, error: err.code || err.message, models: [], url: baseUrl });
+      });
+    } catch (err) {
+      resolve({ available: false, error: err.message, models: [], url: baseUrl });
+    }
+  });
+}
+
+const activeAiStreams = new Map(); // streamId → { req, stopped }
+
+function stopAiStream(streamId) {
+  const entry = activeAiStreams.get(streamId);
+  if (entry) {
+    entry.stopped = true;
+    try { entry.req?.destroy(); } catch {}
+    activeAiStreams.delete(streamId);
+  }
+}
+
+ipcMain.handle("ollama:status", async (event, customUrl) => {
+  assertTrustedSender(event);
+  const settings = await loadSettings();
+  const url = normalizeOllamaUrl(customUrl || settings.ollamaUrl);
+  return fetchOllamaTags(url);
+});
+
+ipcMain.handle("ollama:generate:start", async (event, payload) => {
+  assertTrustedSender(event);
+  const streamId = normalizeIdentifier(payload?.streamId, "stream id");
+  const settings = await loadSettings();
+  const baseUrl = normalizeOllamaUrl(payload?.url || settings.ollamaUrl);
+  const model = typeof payload?.model === "string" && payload.model.trim() ? payload.model.trim() : (settings.ollamaModel || "");
+  const prompt = typeof payload?.prompt === "string" ? payload.prompt : "";
+  const system = typeof payload?.system === "string" ? payload.system : "Eres un analista senior de sistemas y bitácoras de software. Sé conciso, preciso, enfócate en diagnosticar causas y proponer soluciones prácticas.";
+
+  if (!model) throw new Error("No model specified");
+  if (!prompt) throw new Error("No prompt specified");
+
+  stopAiStream(streamId);
+
+  const postData = JSON.stringify({
+    model,
+    prompt,
+    system,
+    stream: true,
+  });
+
+  const targetUrl = new URL("/api/generate", baseUrl);
+  const transport = targetUrl.protocol === "https:" ? https : http;
+
+  function send(ch, ...args) {
+    if (!event.sender.isDestroyed()) event.sender.send(ch, ...args);
+  }
+
+  const req = transport.request(targetUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(postData),
+      Accept: "application/json",
+    },
+    timeout: 300000,
+  }, (res) => {
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      let errBody = "";
+      res.on("data", c => { errBody += c; });
+      res.on("end", () => {
+        send("ollama:error", streamId, `HTTP ${res.statusCode}: ${errBody || res.statusMessage}`);
+        activeAiStreams.delete(streamId);
+      });
+      return;
+    }
+
+    let buffer = "";
+    res.setEncoding("utf8");
+    res.on("data", (chunk) => {
+      if (entry.stopped) return;
+      buffer += chunk;
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed.response) {
+            send("ollama:chunk", streamId, parsed.response);
+          }
+          if (parsed.done) {
+            send("ollama:done", streamId, {
+              totalDuration: parsed.total_duration,
+              evalCount: parsed.eval_count,
+            });
+            activeAiStreams.delete(streamId);
+          }
+        } catch {
+          // ignore partial JSON
+        }
+      }
+    });
+
+    res.on("end", () => {
+      if (!entry.stopped) {
+        if (buffer.trim()) {
+          try {
+            const parsed = JSON.parse(buffer.trim());
+            if (parsed.response) send("ollama:chunk", streamId, parsed.response);
+          } catch {}
+        }
+        send("ollama:done", streamId, {});
+      }
+      activeAiStreams.delete(streamId);
+    });
+  });
+
+  const entry = { req, stopped: false };
+  activeAiStreams.set(streamId, entry);
+
+  req.on("error", (err) => {
+    if (!entry.stopped) {
+      logEntry("WARN", "ollama", `Error en stream ${streamId}: ${err.message}`);
+      send("ollama:error", streamId, err.message || "Error al conectar con Ollama");
+    }
+    activeAiStreams.delete(streamId);
+  });
+
+  req.on("timeout", () => {
+    req.destroy();
+    if (!entry.stopped) {
+      send("ollama:error", streamId, "Tiempo de espera agotado al consultar Ollama");
+    }
+    activeAiStreams.delete(streamId);
+  });
+
+  req.write(postData);
+  req.end();
+
+  return { ok: true, streamId };
+});
+
+ipcMain.handle("ollama:generate:stop", (event, streamId) => {
+  assertTrustedSender(event);
+  stopAiStream(streamId);
+  return { ok: true };
+});
+
 /* ─── IPC: app diagnostics log ─── */
 ipcMain.handle("applog:get",   () => [...appLogEntries]);
 ipcMain.handle("applog:clear", () => { appLogEntries.length = 0; });

@@ -262,6 +262,17 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
               ))}
             </select>
           </label>
+          <label style={{ display:"flex", alignItems:"center", gap:10, color:"var(--pl-text-4)", fontSize:11 }}>
+            <span style={{ flex:1 }}>{t("pref_ollama_url")}</span>
+            <input
+              type="text"
+              value={settings.ollamaUrl ?? "http://127.0.0.1:11434"}
+              placeholder="http://127.0.0.1:11434"
+              onChange={e => onTogglePref("ollamaUrl", e.target.value.trim())}
+              style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:5,
+                       color:"var(--pl-text-3)", fontFamily:"inherit", fontSize:11, padding:"4px 8px", width:180 }}
+            />
+          </label>
         </div>
 
         <button onClick={onClose}

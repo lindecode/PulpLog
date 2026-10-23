@@ -139,6 +139,31 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("applog:new", h);
   },
 
+  /* ── Local AI (Ollama) integration ── */
+  getOllamaStatus: (url) => ipcRenderer.invoke("ollama:status", url),
+  streamOllama(options, { onChunk, onDone, onError }) {
+    const streamId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const chunkH = (_e, id, text) => { if (id === streamId) onChunk?.(text); };
+    const doneH  = (_e, id, meta) => { if (id === streamId) { cleanup(); onDone?.(meta); } };
+    const errH   = (_e, id, msg)  => { if (id === streamId) { cleanup(); onError?.(msg); } };
+    ipcRenderer.on("ollama:chunk", chunkH);
+    ipcRenderer.on("ollama:done",  doneH);
+    ipcRenderer.on("ollama:error", errH);
+    ipcRenderer.invoke("ollama:generate:start", { ...options, streamId }).catch(e => {
+      cleanup();
+      onError?.(e?.message ?? String(e));
+    });
+    function cleanup() {
+      ipcRenderer.removeListener("ollama:chunk", chunkH);
+      ipcRenderer.removeListener("ollama:done",  doneH);
+      ipcRenderer.removeListener("ollama:error", errH);
+    }
+    return () => {
+      cleanup();
+      ipcRenderer.invoke("ollama:generate:stop", streamId);
+    };
+  },
+
   /* ── Settings & recent files ── */
   getSettings:      () => ipcRenderer.invoke("settings:get"),
   setSettings:      (d) => ipcRenderer.invoke("settings:set", d),
