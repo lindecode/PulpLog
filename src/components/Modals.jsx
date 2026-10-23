@@ -132,7 +132,7 @@ function PrefToggle({ label, value, onChange }) {
 function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearRecent, onTogglePref }) {
   const t = useLang();
   const lang = settings.language || "es";
-  const theme = settings.theme || "classic";
+  const theme = settings.theme || "lindecode";
   const appIconSrc = `${import.meta.env.BASE_URL}pulplog-iso.png`;
   const [ollamaUrlDraft, setOllamaUrlDraft] = useState(settings.ollamaUrl || "http://127.0.0.1:11434");
   useEffect(() => { setOllamaUrlDraft(settings.ollamaUrl || "http://127.0.0.1:11434"); }, [settings.ollamaUrl]);
@@ -190,7 +190,7 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
           {t("theme_h")}
         </div>
         <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:24 }}>
-          {["classic","light","vscode","ember","blue","lindecode"].map(th => (
+          {["lindecode","classic","light","vscode","ember","blue","forest"].map(th => (
             <button key={th} onClick={() => onTogglePref("theme", th)}
               style={{ background: theme === th ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
                        border:`0.5px solid ${theme === th ? "var(--pl-border-focus)" : "var(--pl-border)"}`,

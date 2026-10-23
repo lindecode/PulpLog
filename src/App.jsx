@@ -14,7 +14,7 @@ export default function App() {
   const [capabilities, setCapabilities]= useState(null);
   const [settings,     setSettings]    = useState({
     recentFiles:[], remoteProfiles:[], autoScrollDefault:false, showNumsDefault:true,
-    sshAgentPollingEnabled:false, maxLiveLines:500000, language:"es", theme:"classic"
+    sshAgentPollingEnabled:false, maxLiveLines:500000, language:"es", theme:"lindecode"
   });
   const [splitDirection, setSplitDirection] = useState(null); // null | "row" | "column"
   const [splitRatio,     setSplitRatio]     = useState(0.5);
@@ -50,7 +50,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = settings.theme || "classic";
+    document.documentElement.dataset.theme = settings.theme || "lindecode";
   }, [settings.theme]);
 
   useEffect(() => {
