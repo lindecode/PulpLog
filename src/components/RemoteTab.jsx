@@ -102,7 +102,7 @@ function RemoteFileBrowser({ config, initialDir, onPick, onClose }) {
         onKeyDown={e => {
           if (e.key === "Enter") e.stopPropagation();
         }}
-        role="dialog" aria-modal="true" aria-label={t("remote_browser_title")}
+        data-float role="dialog" aria-modal="true" aria-label={t("remote_browser_title")}
         style={{ width:"min(760px, calc(100vw - 44px))", maxHeight:"min(680px, calc(100vh - 44px))",
           display:"flex", flexDirection:"column", background:"var(--pl-bg-panel)",
           border:"0.5px solid var(--pl-border-strong)", borderRadius:10, boxShadow:"0 12px 50px rgba(0,0,0,.75)",
@@ -326,7 +326,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     <div onClick={onClose}
       style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
-      <form onSubmit={submit} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("remote_title")}
+      <form data-float onSubmit={submit} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("remote_title")}
         style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                  padding:"24px", width:"min(620px, calc(100vw - 32px))", maxHeight:"90vh", overflowY:"auto", fontFamily:"inherit",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>

@@ -150,7 +150,7 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
     <div onClick={onClose}
          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                   display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
-      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("settings_title")}
+      <div data-float onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("settings_title")}
            style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                     padding:"28px 32px", minWidth:500, maxWidth:620,
                     boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
@@ -327,7 +327,7 @@ function AboutModal({ onClose }) {
       style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
       <div
-        onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("about_title")}
+        data-float onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("about_title")}
         style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                  padding:"32px 40px", minWidth:300, textAlign:"center",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
@@ -368,7 +368,7 @@ function HelpGuideModal({ lang, onClose }) {
     <div onClick={onClose}
          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                   display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
-      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("help_guide_title")}
+      <div data-float onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("help_guide_title")}
            style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                     padding:"26px 30px", width:"min(640px, calc(100vw - 32px))", maxHeight:"85vh",
                     overflowY:"auto", boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>

@@ -205,7 +205,7 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
       </div>
       {contextMenu && (
         <div onPointerDown={event => event.stopPropagation()} onContextMenu={event => event.preventDefault()}
-          style={{ position:"fixed", left:contextMenu.x, top:contextMenu.y, zIndex:1000,
+          data-float style={{ position:"fixed", left:contextMenu.x, top:contextMenu.y, zIndex:1000,
                    minWidth:210, padding:"5px 0", background:"var(--pl-bg-panel)",
                    border:"1px solid var(--pl-border-strong)", borderRadius:7,
                    boxShadow:"0 8px 28px rgba(0,0,0,.38)" }}>

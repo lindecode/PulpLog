@@ -361,7 +361,7 @@ function AnalysisSidebar({ open = true, anchorRef, sourceLabel, filter, extraFil
     : t("analysis_ollama_offline_short");
 
   return (
-    <aside ref={asideRef} aria-hidden={!open}
+    <aside data-float ref={asideRef} aria-hidden={!open}
       style={{ position:"absolute", top, right:10, bottom:32, left: maximized ? 10 : "auto",
         width: maximized ? "auto" : `min(${width}px, calc(100% - 20px))`,
         zIndex:20, display: open ? "flex" : "none", flexDirection:"column", gap:8, padding:"10px 12px 12px",

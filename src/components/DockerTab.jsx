@@ -28,7 +28,7 @@ function DockerPicker({ onSelect, onClose }) {
     <div onClick={onClose}
       style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
                display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
-      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("docker_title")}
+      <div data-float onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("docker_title")}
         style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
                  padding:"24px", minWidth:440, maxWidth:580, fontFamily:"inherit",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
