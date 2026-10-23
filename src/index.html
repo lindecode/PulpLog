@@ -303,54 +303,67 @@
         --pl-search-hit-4-bg: rgba(138,218,96,.18); --pl-search-hit-4-border: rgba(138,218,96,.58);
       }
 
-      /* LindeCode: brand palette from lindecode.cloud. Navy surfaces (#111720 / #19222c / #303945),
-         cream text (#fbfaf4) and the green, blue, coral and yellow brand accents. */
+      /* LindeCode: palette from lindecode.cloud. Bone surfaces (#fbfaf4 / #f3f0e5), ink text (#17201f),
+         brand green / blue / coral / yellow accents, and a navy header like the site's (see [data-chrome]). */
       html[data-theme="lindecode"] {
-        --pl-bg-app: #0c1118; --pl-bg-panel: #111720; --pl-bg-input: #19222c;
-        --pl-bg-footer: #0e131b; --pl-bg-hover: #222c38; --pl-bg-tabbar: #0e141c;
-        --pl-border: #303945; --pl-border-soft: #1f2833; --pl-border-strong: #3e4957; --pl-border-focus: #65bd3d;
+        --pl-bg-app: #fbfaf4; --pl-bg-panel: #f3f0e5; --pl-bg-input: #fffef9;
+        --pl-bg-footer: #efece0; --pl-bg-hover: #e7e5da; --pl-bg-tabbar: #111720f0;
+        --pl-border: #d9ddd3; --pl-border-soft: #e7e5da; --pl-border-strong: #cfd3ca; --pl-border-focus: #2f722c;
+        --pl-text-1: #17201f; --pl-text-2: #2b3633; --pl-text-3: #3f4b47; --pl-text-4: #53605c;
+        --pl-text-5: #66716e; --pl-text-6: #828c88; --pl-text-7: #aeb8b2; --pl-text-8: #cfd3ca;
+        --pl-accent: #2f722c; --pl-accent-hover: #3f8f37; --pl-accent-alt: #2f6f92;
+        --pl-status-live: #2f722c; --pl-status-stopped: #828c88; --pl-status-warn: #9a6b00;
+        --pl-bookmark: #c99a12; --pl-error-text: #c4513a; --pl-error-bg: #fbe9e4; --pl-error-border: #e3a596;
+        --pl-cat-docker: #a8641c; --pl-cat-file: #2f6f92; --pl-cat-remote: #2a7a70;
+        --pl-source-file: #2f6f92; --pl-source-docker: #a8641c; --pl-source-remote: #2a7a70;
+        --pl-cat-system: #2f722c; --pl-cat-performance: #9a6b00; --pl-cat-settings: #2a7a70;
+        --pl-toggle-on-bg: #dff2ce; --pl-toggle-on-knob: #2f722c; --pl-toggle-off-bg: #e7e5da; --pl-toggle-off-knob: #aeb8b2;
+        --pl-scroll-track: #f3f0e5; --pl-scroll-thumb: #cfd3ca; --pl-scroll-thumb-hover: #65bd3d; --pl-scroll-thumb-active: #2f722c;
+        --pl-hairline: rgba(23,32,31,.05); --pl-badge-overlay: rgba(23,32,31,.08);
+        --pl-icon-close: #c4513a; --pl-icon-diag: #2f722c;
+        --pl-syn-fallback: #66716e; --pl-syn-dim: #828c88; --pl-syn-bracket: #2a7a70; --pl-syn-match: #2f722c;
+        --pl-lvl-error-bg: #fbe9e4; --pl-lvl-error-bar: #c4513a; --pl-lvl-error-txt: #9c3a26;
+        --pl-lvl-exception-bg: #fbe9e4; --pl-lvl-exception-bar: #a8402d; --pl-lvl-exception-txt: #8a2f1e;
+        --pl-lvl-causedby-bg: #fdf0e3; --pl-lvl-causedby-bar: #d07a3a; --pl-lvl-causedby-txt: #8f5218;
+        --pl-lvl-stack-bg: #e8f3f1; --pl-lvl-stack-bar: #2a7a70; --pl-lvl-stack-txt: #1f5c55;
+        --pl-lvl-warn-bg: #fbf3d9; --pl-lvl-warn-bar: #e0ac2a; --pl-lvl-warn-txt: #7d5a00;
+        --pl-lvl-info-bg: #f6f6ef; --pl-lvl-info-bar: #72afd0; --pl-lvl-info-txt: #255a78;
+        --pl-lvl-debug-bg: #eaf4df; --pl-lvl-debug-bar: #65bd3d; --pl-lvl-debug-txt: #2f722c;
+        --pl-lvl-trace-bg: #fbfaf4; --pl-lvl-trace-bar: #cfd3ca; --pl-lvl-trace-txt: #828c88;
+        --pl-lvl-plain-txt: #2b3633;
+        --pl-chip-error-bg: #f8d8d1; --pl-chip-error-fg: #8a2f1e;
+        --pl-chip-warn-bg: #f8e5b6; --pl-chip-warn-fg: #6b4d00;
+        --pl-chip-info-bg: #cfe5f1; --pl-chip-info-fg: #255a78;
+        --pl-chip-debug-bg: #dff2ce; --pl-chip-debug-fg: #2f722c;
+        --pl-chip-stack-bg: #cfe9e4; --pl-chip-stack-fg: #1f5c55;
+        --pl-chip-plain-bg: #e7e5da; --pl-chip-plain-fg: #3f4b47;
+        --pl-stat-warn: #7d5a00; --pl-stat-info: #255a78; --pl-stat-debug: #2f722c;
+        --pl-banner-rotated-bg: #fbefcc; --pl-banner-truncated-bg: #e3eff6; --pl-banner-recreated-bg: #eaf5e1;
+        --pl-diag-error-bg: #fbe4de; --pl-diag-warn-bg: #fbf1d8;
+        --pl-btn-active-bg: #dff2ce; --pl-btn-active-border: #65bd3d; --pl-btn-active-text: #1f4f1d;
+        --pl-docker-row-hover: #f6ead9;
+        --pl-file-badge-bg: #e8f2f8; --pl-file-badge-border: #a9cde2;
+        --pl-docker-badge-bg: #fbefe0; --pl-docker-badge-border: #e2b98a;
+        --pl-remote-badge-bg: #e6f3f0; --pl-remote-badge-border: #9fcfc6;
+        --pl-split-active-bg: #e3eff6; --pl-diag-active-bg: #eaf5e1; --pl-settings-active-bg: #e6f3f0;
+        --pl-chip-trace-bg: #eef0ea; --pl-chip-trace-fg: #53605c;
+        --pl-search-hit-1-bg: rgba(245,200,91,.32); --pl-search-hit-1-border: rgba(201,154,18,.65);
+        --pl-search-hit-2-bg: rgba(114,175,208,.26); --pl-search-hit-2-border: rgba(47,111,146,.55);
+        --pl-search-hit-3-bg: rgba(239,132,109,.22); --pl-search-hit-3-border: rgba(196,81,58,.55);
+        --pl-search-hit-4-bg: rgba(101,189,61,.22); --pl-search-hit-4-border: rgba(47,114,44,.55);
+      }
+
+      /* LindeCode header: the window chrome and tab bars are navy, like lindecode.cloud's header. */
+      html[data-theme="lindecode"] [data-chrome] {
+        --pl-bg-tabbar: #111720f0; --pl-bg-panel: #1b2530; --pl-bg-input: #222c38; --pl-bg-hover: #222c38;
+        --pl-border: #303945; --pl-border-soft: #263040;
         --pl-text-1: #fbfaf4; --pl-text-2: #e8ece8; --pl-text-3: #ccd3cf; --pl-text-4: #aeb8b2;
-        --pl-text-5: #9aa49f; --pl-text-6: #86918c; --pl-text-7: #5b6561; --pl-text-8: #39413e;
+        --pl-text-5: #aeb8b2; --pl-text-6: #9aa49f; --pl-text-7: #6b7570;
         --pl-accent: #65bd3d; --pl-accent-hover: #8ada60; --pl-accent-alt: #72afd0;
-        --pl-status-live: #8ada60; --pl-status-stopped: #9aa49f; --pl-status-warn: #f5c85b;
-        --pl-bookmark: #f5c85b; --pl-error-text: #ef846d; --pl-error-bg: #2b1a1d; --pl-error-border: #8c4a41;
-        --pl-cat-docker: #f0a07f; --pl-cat-file: #72afd0; --pl-cat-remote: #9fd3c7;
-        --pl-source-file: #72afd0; --pl-source-docker: #f0a07f; --pl-source-remote: #9fd3c7;
-        --pl-cat-system: #8ada60; --pl-cat-performance: #f5c85b; --pl-cat-settings: #9fd3c7;
-        --pl-toggle-on-bg: #2f722c; --pl-toggle-on-knob: #dff2ce; --pl-toggle-off-bg: #222c38; --pl-toggle-off-knob: #86918c;
-        --pl-scroll-track: #111720; --pl-scroll-thumb: #303945; --pl-scroll-thumb-hover: #65bd3d; --pl-scroll-thumb-active: #8ada60;
-        --pl-hairline: rgba(251,250,244,.04); --pl-badge-overlay: rgba(223,242,206,.16);
+        --pl-cat-docker: #f0a07f; --pl-cat-remote: #9fd3c7; --pl-status-live: #8ada60;
+        --pl-split-active-bg: #1b2b3a; --pl-diag-active-bg: #1a2b1d; --pl-settings-active-bg: #1a2b2a;
         --pl-icon-close: #ef846d; --pl-icon-diag: #8ada60;
-        --pl-syn-fallback: #ccd3cf; --pl-syn-dim: #86918c; --pl-syn-bracket: #9fd3c7; --pl-syn-match: #8ada60;
-        --pl-lvl-error-bg: #2b1a1d; --pl-lvl-error-bar: #ef846d; --pl-lvl-error-txt: #f6a692;
-        --pl-lvl-exception-bg: #2b1a1d; --pl-lvl-exception-bar: #d96b56; --pl-lvl-exception-txt: #ef846d;
-        --pl-lvl-causedby-bg: #2a211b; --pl-lvl-causedby-bar: #f0a07f; --pl-lvl-causedby-txt: #f4bea3;
-        --pl-lvl-stack-bg: #16222a; --pl-lvl-stack-bar: #5fa59a; --pl-lvl-stack-txt: #9fd3c7;
-        --pl-lvl-warn-bg: #29251a; --pl-lvl-warn-bar: #f5c85b; --pl-lvl-warn-txt: #f5c85b;
-        --pl-lvl-info-bg: #132232; --pl-lvl-info-bar: #72afd0; --pl-lvl-info-txt: #9cc8e0;
-        --pl-lvl-debug-bg: #15231b; --pl-lvl-debug-bar: #65bd3d; --pl-lvl-debug-txt: #a0d884;
-        --pl-lvl-trace-bg: #0e141c; --pl-lvl-trace-bar: #303945; --pl-lvl-trace-txt: #9aa49f;
-        --pl-lvl-plain-txt: #e8ece8;
-        --pl-chip-error-bg: #7a3b33; --pl-chip-error-fg: #ffe1d8;
-        --pl-chip-warn-bg: #6b5620; --pl-chip-warn-fg: #fff0c2;
-        --pl-chip-info-bg: #2f6f92; --pl-chip-info-fg: #e3f2fa;
-        --pl-chip-debug-bg: #2f722c; --pl-chip-debug-fg: #dff2ce;
-        --pl-chip-stack-bg: #2c5a55; --pl-chip-stack-fg: #dcf3ee;
-        --pl-chip-plain-bg: #2a3440; --pl-chip-plain-fg: #e8ece8;
-        --pl-stat-warn: #f5c85b; --pl-stat-info: #72afd0; --pl-stat-debug: #a0d884;
-        --pl-banner-rotated-bg: #29251a; --pl-banner-truncated-bg: #132232; --pl-banner-recreated-bg: #15231b;
-        --pl-diag-error-bg: #2b1a1d; --pl-diag-warn-bg: #29251a;
-        --pl-btn-active-bg: #1d3a1c; --pl-btn-active-border: #65bd3d; --pl-btn-active-text: #dff2ce;
-        --pl-docker-row-hover: #2a211b;
-        --pl-file-badge-bg: #132232; --pl-file-badge-border: #2f6f92;
-        --pl-docker-badge-bg: #2a211b; --pl-docker-badge-border: #7a4f3a;
-        --pl-remote-badge-bg: #16262a; --pl-remote-badge-border: #2f6a63;
-        --pl-split-active-bg: #132232; --pl-diag-active-bg: #15231b; --pl-settings-active-bg: #1d3a1c;
-        --pl-chip-trace-bg: #222c38; --pl-chip-trace-fg: #ccd3cf;
-        --pl-search-hit-1-bg: rgba(245,200,91,.18); --pl-search-hit-1-border: rgba(245,200,91,.58);
-        --pl-search-hit-2-bg: rgba(114,175,208,.18); --pl-search-hit-2-border: rgba(114,175,208,.58);
-        --pl-search-hit-3-bg: rgba(239,132,109,.18); --pl-search-hit-3-border: rgba(239,132,109,.58);
-        --pl-search-hit-4-bg: rgba(138,218,96,.18); --pl-search-hit-4-border: rgba(138,218,96,.58);
+        --pl-scroll-track: #111720; --pl-scroll-thumb: #303945;
       }
 
       * { scrollbar-width: thin; scrollbar-color: var(--pl-scroll-thumb) var(--pl-scroll-track); }
@@ -364,7 +377,9 @@
       /* global button hover & click */
       button { transition: filter 0.15s ease, transform 0.05s ease; }
       button:hover:not(:disabled) { filter: brightness(1.2); }
-      html[data-theme="light"] button:hover:not(:disabled) { filter: brightness(0.92); }
+      html[data-theme="light"] button:hover:not(:disabled),
+      html[data-theme="lindecode"] button:hover:not(:disabled) { filter: brightness(0.92); }
+      html[data-theme="lindecode"] [data-chrome] button:hover:not(:disabled) { filter: brightness(1.2); }
       button:active:not(:disabled) { filter: brightness(0.8); transform: scale(0.97); transition: none; }
       html[data-theme="light"] button:active:not(:disabled) { filter: brightness(0.85); }
     </style>

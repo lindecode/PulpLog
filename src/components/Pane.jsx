@@ -308,7 +308,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
          style={{ display:"flex", flexDirection:"column", flex:1, minWidth:0, minHeight:0, overflow:"hidden" }}>
 
       {/* tab bar */}
-      <div style={{ display:"flex", alignItems:"stretch", background:"var(--pl-bg-tabbar)",
+      <div data-chrome style={{ display:"flex", alignItems:"stretch", background:"var(--pl-bg-tabbar)",
                     borderBottom:"0.5px solid var(--pl-border-soft)", flexShrink:0, overflowX:"auto" }}>
         {tabs.map((tab, idx) => (
           <div key={tab.id} style={{ display:"flex", alignItems:"stretch" }}>

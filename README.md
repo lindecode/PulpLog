@@ -198,7 +198,7 @@ El límite de líneas vivas configurado en PulpLog continúa protegiendo la memo
 | Función | Detalle |
 |---------|---------|
 | Idioma | Interfaz en español o inglés |
-| Tema | LindeCode (por defecto; azul marino con los colores de la marca), Clásica, Blanca, Oscura, Brasa (fuego/carmesí), Azul (oscuro, tonalidad azul) o Bosque (verde grisáceo) |
+| Tema | LindeCode (por defecto; color hueso con cabecera oscura, como lindecode.cloud), Clásica, Blanca, Oscura, Brasa (fuego/carmesí), Azul (oscuro, tonalidad azul) o Bosque (verde grisáceo) |
 | Preferencias | Auto-scroll por defecto y números de línea por defecto |
 | Bitácora interna | Panel de diagnóstico con eventos de archivos, Docker y atajos |
 | Acerca de | Modal con información de la app, autor y licencia |

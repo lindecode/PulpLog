@@ -257,7 +257,7 @@ export default function App() {
                     fontFamily:"'JetBrains Mono','Fira Code','Cascadia Code',monospace" }}>
 
         {/* chrome bar */}
-        <div style={{ display:"flex", alignItems:"stretch", background:"var(--pl-bg-tabbar)",
+        <div data-chrome style={{ display:"flex", alignItems:"stretch", background:"var(--pl-bg-tabbar)",
                       borderBottom:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}>
           <button onClick={() => setSplitDirection("row")}
             style={{ background: splitDirection==="row" ? "var(--pl-split-active-bg)" : "transparent",
