@@ -58,6 +58,29 @@ export const fmtBytes = value => {
 
 export const safeFileName = s => String(s || "pulplog-results").replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").slice(0, 80);
 
+export const getModelName = m => (typeof m === "string" ? m : m?.name || m?.model || "");
+
+export const getModelLabel = m => {
+  const name = getModelName(m);
+  if (!name) return "";
+  const param = (typeof m === "object" && m?.details?.parameter_size)
+    || (typeof m === "object" && (m?.size_bytes || m?.size) ? fmtBytes(m.size_bytes || m.size) : "");
+  return param ? `${name} (${param})` : name;
+};
+
+export const isChatModel = m => {
+  if (!m) return false;
+  if (typeof m === "string") {
+    const lower = m.toLowerCase();
+    return !lower.includes("embed") && !lower.includes("minilm") && !lower.includes("bge-");
+  }
+  if (Array.isArray(m.capabilities) && m.capabilities.length > 0) {
+    return m.capabilities.includes("completion");
+  }
+  const name = (m.name || m.model || "").toLowerCase();
+  return !name.includes("embed") && !name.includes("minilm") && !name.includes("bge-");
+};
+
 export function buildResultText({ source, filter, timeRange, items, total }) {
   const realRows = items.filter(x => !x.separator).length;
   const timeFilter = timeRange?.enabled

@@ -2093,7 +2093,16 @@ function fetchOllamaTags(baseUrl) {
           try {
             const data = JSON.parse(body);
             const rawModels = Array.isArray(data?.models) ? data.models : [];
-            const models = rawModels.map(m => (typeof m === "string" ? m : m?.name)).filter(Boolean);
+            const models = rawModels.map(m => {
+              if (typeof m === "string") return { name: m, model: m, size: 0, details: {}, capabilities: [] };
+              return {
+                name: m.name || m.model || "",
+                model: m.model || m.name || "",
+                size: Number(m.size) || 0,
+                details: m.details || {},
+                capabilities: Array.isArray(m.capabilities) ? m.capabilities : [],
+              };
+            }).filter(m => Boolean(m.name));
             resolve({ available: true, models, url: baseUrl });
           } catch (e) {
             resolve({ available: false, error: "JSON inválido de Ollama", models: [], url: baseUrl });
@@ -2149,6 +2158,7 @@ ipcMain.handle("ollama:generate:start", async (event, payload) => {
     model,
     prompt,
     system,
+    think: false,
     stream: true,
   });
 
@@ -2190,8 +2200,9 @@ ipcMain.handle("ollama:generate:start", async (event, payload) => {
         if (!trimmed) continue;
         try {
           const parsed = JSON.parse(trimmed);
-          if (parsed.response) {
-            send("ollama:chunk", streamId, parsed.response);
+          const chunkText = parsed.response || parsed.thinking;
+          if (chunkText) {
+            send("ollama:chunk", streamId, chunkText);
           }
           if (parsed.done) {
             send("ollama:done", streamId, {
@@ -2211,7 +2222,8 @@ ipcMain.handle("ollama:generate:start", async (event, payload) => {
         if (buffer.trim()) {
           try {
             const parsed = JSON.parse(buffer.trim());
-            if (parsed.response) send("ollama:chunk", streamId, parsed.response);
+            const chunkText = parsed.response || parsed.thinking;
+            if (chunkText) send("ollama:chunk", streamId, chunkText);
           } catch {}
         }
         send("ollama:done", streamId, {});

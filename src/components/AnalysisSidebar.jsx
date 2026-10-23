@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLang } from "../i18n.jsx";
-import { buildResultText, copyResultText, fmtBytes, fmtNum } from "../utils.mjs";
+import { buildResultText, copyResultText, fmtBytes, fmtNum, getModelLabel, getModelName, isChatModel } from "../utils.mjs";
 import { selectedLogRows } from "./LogRow.jsx";
 import { Btn } from "./SharedUI.jsx";
 
@@ -113,8 +113,9 @@ function AnalysisSidebar({ sourceLabel, filter, search, timeRange, visibleItems,
       setOllamaStatus(status);
       if (status?.available && Array.isArray(status.models) && status.models.length > 0) {
         setSelectedModel(prev => {
-          if (prev && status.models.some(m => m.name === prev)) return prev;
-          return status.models[0].name;
+          if (prev && status.models.some(m => getModelName(m) === prev)) return prev;
+          const preferred = status.models.find(isChatModel) || status.models[0];
+          return getModelName(preferred);
         });
       }
     } catch (err) {
@@ -135,14 +136,16 @@ function AnalysisSidebar({ sourceLabel, filter, search, timeRange, visibleItems,
   }, [refreshOllama]);
 
   const handleStartAnalysis = useCallback(() => {
-    if (!selectedModel || !window.electronAPI?.streamOllama) return;
+    const effectiveModel = selectedModel || getModelName(ollamaStatus.models?.find(isChatModel) || ollamaStatus.models?.[0]);
+    if (!effectiveModel || !window.electronAPI?.streamOllama) return;
+    if (selectedModel !== effectiveModel) setSelectedModel(effectiveModel);
     setDiagnosisText("");
     setGenerationError(null);
     setIsGenerating(true);
     setTab("diagnosis");
 
     const stopFn = window.electronAPI.streamOllama(
-      { model: selectedModel, prompt },
+      { model: effectiveModel, prompt },
       {
         onChunk: chunk => {
           setDiagnosisText(prev => prev + chunk);
@@ -160,7 +163,7 @@ function AnalysisSidebar({ sourceLabel, filter, search, timeRange, visibleItems,
     );
 
     stopStreamRef.current = stopFn;
-  }, [selectedModel, prompt]);
+  }, [selectedModel, prompt, ollamaStatus.models]);
 
   const handleStopAnalysis = useCallback(() => {
     if (stopStreamRef.current) {
@@ -212,9 +215,12 @@ function AnalysisSidebar({ sourceLabel, filter, search, timeRange, visibleItems,
               disabled={isGenerating}
               style={{ flex:1, background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border)",
                 borderRadius:4, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11, padding:"3px 6px" }}>
-              {ollamaStatus.models.map(m => (
-                <option key={m.name} value={m.name}>{m.name} ({m.details?.parameter_size || fmtBytes(m.size)})</option>
-              ))}
+              {ollamaStatus.models.map((m, idx) => {
+                const name = getModelName(m);
+                return (
+                  <option key={name || idx} value={name}>{getModelLabel(m)}</option>
+                );
+              })}
             </select>
           </div>
         ) : (
