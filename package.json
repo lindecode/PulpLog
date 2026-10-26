@@ -37,6 +37,7 @@
     "files": [
       "dist/**/*",
       "main.js",
+      "remoteDocker.cjs",
       "preload.js",
       "assets/**/*"
     ],

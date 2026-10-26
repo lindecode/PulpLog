@@ -80,7 +80,7 @@ function usePaneTabs(setSettings, notifyFileMissing) {
     const prefix = config.mode === "wsl" ? "WSL2" : config.mode === "ssh-wsl" ? "SSH WSL2" : config.mode === "ssh-native" ? "SSH directo" : "SSH";
     setTabs(p => [...p, {
       id,
-      label: `${prefix} ${name}`,
+      label: config.source === "docker" ? `Docker ${config.containerName || config.containerId} · ${name}` : `${prefix} ${name}`,
       filePath: null,
       fileSize: null,
       remote: config,

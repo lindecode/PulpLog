@@ -128,6 +128,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
   testRemoteConnection: (config) => ipcRenderer.invoke("remote:test", config),
   listRemoteDirectory: (config) => ipcRenderer.invoke("remote:list-dir", config),
+  listRemoteDocker: (config) => ipcRenderer.invoke("remote:docker-list", config),
 
   getAppLog:   () => ipcRenderer.invoke("applog:get"),
   clearAppLog: () => ipcRenderer.invoke("applog:clear"),

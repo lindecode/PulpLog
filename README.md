@@ -113,6 +113,19 @@ PulpLog puede seguir una bitácora remota mediante `tail -F`. Para archivos `.gz
 
 Las rutas remotas `.gz` requieren que el host remoto, WSL2 o la distribución Linux tenga `gzip` disponible. Al ser archivos comprimidos cerrados, se muestran como una lectura puntual y no activan seguimiento en vivo.
 
+#### Docker por SSH
+
+En **SSH / WSL**, configura la conexion y selecciona **Origen > Docker por SSH**.
+Pulsa **Consultar contenedores**, elige uno y abre sus logs. La consulta incluye
+contenedores detenidos y permite cargar las ultimas 500 o 5000 lineas antes de
+seguir las nuevas. Se muestran tanto stdout como stderr.
+
+No requiere Docker instalado en el equipo local: el servidor remoto debe tener
+Docker disponible y el usuario SSH debe poder consultarlo sin un prompt de sudo.
+Funciona con SSH del sistema, SSH desde WSL2 y SSH con credenciales. Este ultimo
+requiere verificar la huella del servidor antes de consultar contenedores.
+Los perfiles guardan la conexion y el contenedor, pero no contrasenas ni passphrases.
+
 #### SSH config y aliases
 
 PulpLog lee automáticamente los bloques `Host` de:

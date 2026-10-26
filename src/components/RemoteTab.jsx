@@ -196,6 +196,16 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const [trustHostForSession, setTrustHostForSession] = useState(false);
   const [distro, setDistro] = useState(initialConfig?.distro || "");
   const [filePath, setFilePath] = useState(initialConfig?.filePath || "");
+  const [source, setSource] = useState(initialConfig?.source === "docker" ? "docker" : "file");
+  const [containerId, setContainerId] = useState(initialConfig?.containerId || "");
+  const [containerName, setContainerName] = useState(initialConfig?.containerName || "");
+  const [containers, setContainers] = useState([]);
+  const [loadingContainers, setLoadingContainers] = useState(false);
+  const [containerError, setContainerError] = useState(null);
+  const containerRequestRef = useRef(0);
+  const connectionKey = JSON.stringify([mode, target, user, port, identityFile, proxyJump, password, passphrase,
+    fingerprint, trustHostForSession, distro, source]);
+  const previousConnectionRef = useRef(connectionKey);
   const [tailLines, setTailLines] = useState(initialConfig?.tailLines || 500);
   const [historyPreset, setHistoryPreset] = useState(() => initialConfig?.historyMode === "full" ? "full:100"
     : initialConfig?.historyMode === "bytes" ? `bytes:${initialConfig?.maxInitialMb || 50}`
@@ -220,9 +230,11 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const hasNativeAuth = mode !== "ssh-native" || (user.trim() && (password || identityFile.trim()));
   const hostAccepted = mode !== "ssh-native" || Boolean(fingerprint.trim() && trustHostForSession);
   const discoveringHost = mode === "ssh-native" && !fingerprint.trim();
-  const canTest = modeAvailable && mode !== "wsl" && target.trim() && (discoveringHost || filePath.trim())
+  const hasSource = source === "docker" ? Boolean(containerId) : Boolean(filePath.trim());
+  const canTest = modeAvailable && mode !== "wsl" && target.trim() && (discoveringHost || hasSource)
     && (mode !== "ssh-native" || discoveringHost || hasNativeAuth);
-  const canSubmit = modeAvailable && filePath.trim() && (mode === "wsl" || target.trim()) && hasNativeAuth && hostAccepted;
+  const canSubmit = modeAvailable && hasSource && (mode === "wsl" || target.trim()) && hasNativeAuth && hostAccepted
+    && !(source === "docker" && mode === "wsl");
   const canBrowse = IS_ELECTRON && modeAvailable && (mode === "wsl" || target.trim())
     && (mode !== "ssh-native" || (hasNativeAuth && hostAccepted));
   const selectedModeHelp = mode === "ssh" ? t("remote_mode_ssh_help")
@@ -231,6 +243,16 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const authenticationHelp = mode === "ssh" ? t("remote_auth_system")
     : mode === "ssh-wsl" ? t("remote_auth_wsl")
     : mode === "ssh-native" ? t("remote_auth_native") : t("remote_auth_local");
+
+  useEffect(() => {
+    if (previousConnectionRef.current === connectionKey) return;
+    previousConnectionRef.current = connectionKey;
+    containerRequestRef.current++;
+    setContainers([]); setContainerId(""); setContainerName("");
+    setContainerError(null); setLoadingContainers(false);
+    if (mode === "wsl") setSource("file");
+  }, [connectionKey, mode]);
+  useEffect(() => () => { containerRequestRef.current++; }, []);
 
   useEffect(() => {
     if (!capabilities) return;
@@ -259,7 +281,8 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
 
   const connectionConfig = () => ({ mode, target:target.trim(), user:user.trim(), port:String(port).trim(),
     identityFile:identityFile.trim(), proxyJump:proxyJump.trim(), password, passphrase, fingerprint:fingerprint.trim(),
-    trustHostForSession, distro:distro.trim(), filePath:filePath.trim(), tailLines,
+    trustHostForSession, distro:distro.trim(), filePath:source === "docker" ? "" : filePath.trim(), tailLines,
+    source, containerId:source === "docker" ? containerId : "", containerName:source === "docker" ? containerName : "",
     historyMode:historyPreset.split(":")[0], maxInitialMb:Number(historyPreset.split(":")[1]) || 100 });
 
   const loadProfile = (id) => {
@@ -268,10 +291,12 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     const profile = profiles.find(item => item.id === id);
     if (!profile) return;
     setMode(profile.mode || "ssh"); setTarget(profile.target || ""); setUser(profile.user || "");
+    setAdvanced(profile.mode === "ssh-native");
     setPort(profile.port || ""); setIdentityFile(profile.identityFile || "");
     setProxyJump(profile.proxyJump || "");
     setFingerprint(profile.fingerprint || ""); setDistro(profile.distro || "");
     setFilePath(profile.filePath || ""); setTailLines(profile.tailLines || 500);
+    setSource(profile.source === "docker" ? "docker" : "file");
     setHistoryPreset(profile.historyMode === "full" ? "full:100"
       : profile.historyMode === "bytes" ? `bytes:${profile.maxInitialMb || 50}`
       : `lines:${profile.tailLines || 500}`);
@@ -313,6 +338,23 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     } catch (error) {
       setTestResult({ ok:false, message:error?.message ?? String(error) });
     } finally { setTesting(false); }
+  };
+
+  const refreshContainers = async () => {
+    const request = ++containerRequestRef.current;
+    setLoadingContainers(true); setContainerError(null);
+    setContainers([]); setContainerId(""); setContainerName("");
+    try {
+      const result = await window.electronAPI.listRemoteDocker(connectionConfig());
+      if (request !== containerRequestRef.current) return;
+      if (!result?.ok) throw new Error(result?.error || t("remote_docker_failed"));
+      setContainers(result.containers || []);
+      if (!result.containers?.length) setContainerError(t("remote_docker_empty"));
+    } catch (error) {
+      if (request === containerRequestRef.current) setContainerError(error?.message ?? String(error));
+    } finally {
+      if (request === containerRequestRef.current) setLoadingContainers(false);
+    }
   };
 
   const inputStyle = {
@@ -392,7 +434,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
           </select>
           <input style={inputStyle} value={profileName} onChange={e => setProfileName(e.target.value)}
             placeholder={t("remote_profile_name")} />
-          <button type="button" onClick={saveProfile} disabled={!filePath.trim() || (mode !== "wsl" && !target.trim())}
+          <button type="button" onClick={saveProfile} disabled={!hasSource || (mode !== "wsl" && !target.trim())}
             style={{ ...inputStyle, width:"auto", cursor:"pointer" }}>{t("remote_profile_save")}</button>
         </div>
         {selectedProfile && (
@@ -558,7 +600,43 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
           </div>
         )}
 
-        <div style={{ display:"grid", gridTemplateColumns:"1fr auto minmax(190px, 240px)", gap:10, marginBottom:12 }}>
+        <label style={{ display:"flex", alignItems:"center", gap:10, color:"var(--pl-text-3)", fontSize:11, marginBottom:10 }}>
+          {t("remote_source")}
+          <select style={{ ...inputStyle, width:"auto" }} value={source} onChange={event => setSource(event.target.value)}>
+            <option value="file">{t("remote_source_file")}</option>
+            <option value="docker" disabled={mode === "wsl"}>{t("remote_source_docker")}</option>
+          </select>
+        </label>
+
+        {source === "docker" && <div style={{ marginBottom:12 }}>
+          <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+            <button type="button" onClick={refreshContainers} disabled={!canBrowse || loadingContainers}
+              style={{ ...inputStyle, width:"auto", cursor:canBrowse && !loadingContainers ? "pointer" : "not-allowed" }}>
+              {loadingContainers ? t("remote_testing") : t("remote_docker_list")}
+            </button>
+            <select style={{ ...inputStyle, flex:1, minWidth:180 }} value={containerId}
+              aria-label={t("remote_docker_container")} disabled={!containers.length || loadingContainers}
+              onChange={event => {
+                setContainerId(event.target.value);
+                setContainerName(containers.find(item => item.id === event.target.value)?.name || "");
+              }}>
+              <option value="">{t("remote_docker_container")}</option>
+              {containers.map(item => <option key={item.id} value={item.id}>
+                {item.name} · {item.image} · {item.status}
+              </option>)}
+            </select>
+            <select style={{ ...inputStyle, width:"auto" }} value={tailLines}
+              aria-label={t("remote_docker_history")} onChange={event => setTailLines(Number(event.target.value))}>
+              <option value={500}>{t("remote_history_500")}</option>
+              <option value={5000}>{t("remote_history_5000")}</option>
+            </select>
+          </div>
+          {containerError && <div role="alert" style={{ color:"var(--pl-error-text)", fontSize:11, marginTop:8, overflowWrap:"anywhere" }}>
+            {containerError}
+          </div>}
+        </div>}
+
+        {source === "file" && <div style={{ display:"grid", gridTemplateColumns:"1fr auto minmax(190px, 240px)", gap:10, marginBottom:12 }}>
           <input style={inputStyle} value={filePath} onChange={e => setFilePath(e.target.value)}
             placeholder={`${t("remote_path")} (/var/log/app.log)`} />
           <button type="button" onClick={() => setBrowserOpen(true)} disabled={!canBrowse}
@@ -578,10 +656,10 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
             <option value="bytes:50">{t("remote_history_50mb")}</option>
             <option value="full:100">{t("remote_history_full")}</option>
           </select>
-        </div>
+        </div>}
 
         <div style={{ color:"var(--pl-text-5)", fontSize:10, lineHeight:1.5, marginBottom:18 }}>
-          {t("remote_hint")}
+          {source === "file" && t("remote_hint")}
           {!modeAvailable && (
             <div style={{ color:"var(--pl-error-border)", marginTop:6 }}>
               {mode === "wsl" || mode === "ssh-wsl" ? (wslCap?.reason || t("capability_unavailable")) : (sshCap?.reason || t("capability_unavailable"))}
@@ -632,9 +710,10 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
   const searchInputRef = useRef(null);
   const filterInputRef = useRef(null);
   useSearchShortcuts(searchInputRef, filterInputRef, isActive);
-  const compressed = isGzipFilePath(config.filePath);
+  const remoteDocker = config.source === "docker";
+  const compressed = !remoteDocker && isGzipFilePath(config.filePath);
 
-  const selectionSource = `${config.mode || "remote"}-${config.filePath || "logs"}`;
+  const selectionSource = `${config.mode || "remote"}-${remoteDocker ? config.containerName || config.containerId : config.filePath || "logs"}`;
   const [classified, setClassified] = useState([]);
   const [spawned,    setSpawned]   = useState(false);
   const [connected,  setConnected] = useState(false);
@@ -733,7 +812,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
       },
       onEnd() {
         if (!isCurrentStream()) return;
-        if (compressed) {
+        if (compressed || remoteDocker) {
           setConnected(false);
           setEnded(true);
           return;
@@ -896,7 +975,9 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
     : config.mode === "ssh-wsl" && config.distro
       ? `${config.distro} → ${sshTarget}:${config.filePath}`
       : `${sshTarget}:${config.filePath}`;
-  const sourceLabel = `${modeLabel} ${targetLabel}`;
+  const sourceLabel = remoteDocker
+    ? `Docker · ${sshTarget} · ${config.containerName || config.containerId} (${String(config.containerId).slice(0, 12)})`
+    : `${modeLabel} ${targetLabel}`;
 
   const BADGES = [
     { key:"error", label:"ERROR", bg:"var(--pl-chip-error-bg)", fg:"var(--pl-chip-error-fg)", cnt:stats.error },
@@ -928,8 +1009,9 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
         {/* row 1: source + result actions */}
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
           <span title={sourceLabel}
-            style={{ fontSize:11, color:"var(--pl-source-remote)", background:"var(--pl-remote-badge-bg)",
-                         border:"0.5px solid var(--pl-remote-badge-border)", borderRadius:6, padding:"3px 8px",
+            style={{ fontSize:11, color:remoteDocker ? "var(--pl-source-docker)" : "var(--pl-source-remote)",
+                         background:remoteDocker ? "var(--pl-docker-badge-bg)" : "var(--pl-remote-badge-bg)",
+                         border:`0.5px solid ${remoteDocker ? "var(--pl-docker-badge-border)" : "var(--pl-remote-badge-border)"}`, borderRadius:6, padding:"3px 8px",
                          fontWeight:700, minWidth:0, flex:"1 1 220px", overflow:"hidden",
                          textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
             {compressed ? "GZ " : ""}{sourceLabel}
@@ -1118,7 +1200,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
           </div>
           {historyInfo && <span style={{ fontSize:10 }}>{fmtBytes(Math.min(historyInfo.size, historyInfo.limit))}</span>}
         </div>
-      ) : compressed && ended && classified.length === 0 && !error ? (
+      ) : (compressed || remoteDocker) && ended && classified.length === 0 && !error ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
                       color:"var(--pl-text-7)", fontSize:13 }}>
           {t("no_lines")}

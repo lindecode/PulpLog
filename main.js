@@ -9,6 +9,7 @@ const https          = require("https");
 const zlib           = require("zlib");
 const { execFile, spawn } = require("child_process");
 const { Client: SshClient } = require("ssh2");
+const { dockerListScript, dockerReadCheck, dockerLogsScript, parseDockerContainers } = require("./remoteDocker.cjs");
 
 const IS_SMOKE_TEST = process.env.PULPLOG_SMOKE_TEST === "1";
 const IS_DEV = !IS_SMOKE_TEST && (process.env.NODE_ENV === "development" || !app.isPackaged);
@@ -136,6 +137,12 @@ const MENU_STRINGS = {
     update_error:"No se pudo consultar GitHub Releases.",
     err_docker:"Error de Docker", err_docker_logs:"Error en logs Docker",
     err_remote:"Error remoto", err_ssh:"Error SSH",
+    remote_docker_unavailable:"Docker no esta disponible en el servidor remoto",
+    remote_docker_ssh:"Docker requiere una conexion SSH",
+    remote_docker_trust:"Acepta la huella del servidor SSH primero",
+    remote_docker_failed:"No se pudo consultar Docker por SSH",
+    remote_request_timeout:"Tiempo de espera agotado en la consulta SSH",
+    remote_response_limit:"La respuesta remota supera 4 MB",
     gzip_read_error:"No se pudo descomprimir el archivo gzip",
     shortcut_open_file:"Abrir archivo", shortcut_new_tab:"Nueva pestaña",
     shortcut_close_tab:"Cerrar pestaña activa", shortcut_reopen_tab:"Reabrir última pestaña",
@@ -171,6 +178,12 @@ const MENU_STRINGS = {
     update_error:"Could not check GitHub Releases.",
     err_docker:"Docker error", err_docker_logs:"Docker logs error",
     err_remote:"Remote error", err_ssh:"SSH error",
+    remote_docker_unavailable:"Docker is unavailable on the remote server",
+    remote_docker_ssh:"Docker requires an SSH connection",
+    remote_docker_trust:"Accept the SSH host fingerprint first",
+    remote_docker_failed:"Could not query Docker over SSH",
+    remote_request_timeout:"SSH request timed out",
+    remote_response_limit:"Remote response exceeds 4 MB",
     gzip_read_error:"Could not decompress gzip file",
     shortcut_open_file:"Open file", shortcut_new_tab:"New tab",
     shortcut_close_tab:"Close active tab", shortcut_reopen_tab:"Reopen last tab",
@@ -1212,6 +1225,7 @@ function normalizeRemoteHistory(config) {
 }
 
 function buildRemoteTailScript(config, filePath) {
+  if (config?.source === "docker") return dockerLogsScript(config, REMOTE_READY_MARKER, mt("remote_docker_unavailable"));
   const history = normalizeRemoteHistory(config);
   const quotedPath = quotePosixArg(filePath);
   if (isGzipPath(filePath)) {
@@ -1234,7 +1248,8 @@ function buildRemoteTailScript(config, filePath) {
     + `printf '${REMOTE_READY_MARKER}\\n'; exec tail -c ${history.maxBytes} -F -- ${quotedPath}`;
 }
 
-function buildRemoteReadCheck(filePath) {
+function buildRemoteReadCheck(filePath, config) {
+  if (config?.source === "docker") return dockerReadCheck(config, mt("remote_docker_unavailable"));
   const quotedPath = quotePosixArg(filePath);
   const toolCheck = isGzipPath(filePath)
     ? "command -v gzip >/dev/null"
@@ -1349,7 +1364,7 @@ function buildRemoteCommand(config) {
   const mode = ["wsl", "ssh-wsl"].includes(config?.mode) ? config.mode : "ssh";
   const filePath = String(config?.filePath || "").trim();
   const tailScript = buildRemoteTailScript(config, filePath);
-  if (!filePath) throw new Error("La ruta de la bitácora es obligatoria");
+  if (!filePath && config?.source !== "docker") throw new Error("La ruta de la bitácora es obligatoria");
 
   if (mode === "wsl") {
     if (process.platform !== "win32") throw new Error("WSL2 solo esta disponible en Windows");
@@ -1394,10 +1409,10 @@ function buildRemoteCommand(config) {
   return { command: "ssh", args, label: `${sshTarget}:${filePath}` };
 }
 
-function buildRemoteListCommand(config) {
+function buildRemoteListCommand(config, script = null) {
   const mode = ["wsl", "ssh-wsl"].includes(config?.mode) ? config.mode : "ssh";
   const dirPath = validateRemoteDirectoryPath(config?.dirPath);
-  const listScript = buildRemoteListScript(dirPath);
+  const listScript = script || buildRemoteListScript(dirPath);
 
   if (mode === "wsl") {
     if (process.platform !== "win32") throw new Error("WSL2 solo está disponible en Windows");
@@ -1449,7 +1464,7 @@ function listSystemRemoteDirectory(config) {
 
 function testSystemSsh(config) {
   const filePath = String(config?.filePath || "").trim();
-  if (!filePath) return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
+  if (!filePath && config?.source !== "docker") return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
   const { target, user, port, identityFile } = { ...validateSshTarget(config), user:String(config?.user || "").trim(), port:String(config?.port || "").trim() };
   const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new"];
   if (port) args.push("-p", port);
@@ -1460,7 +1475,7 @@ function testSystemSsh(config) {
     args.push("-J", proxyJump);
   }
   const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
-  args.push(sshTarget, buildRemoteReadCheck(filePath));
+  args.push(sshTarget, buildRemoteReadCheck(filePath, config));
   let command = "ssh";
   let commandArgs = args;
   if (config?.mode === "ssh-wsl") {
@@ -1478,26 +1493,30 @@ function testSystemSsh(config) {
   });
 }
 
-function testNativeSsh(config) {
+function testNativeSsh(config, command = null) {
   const filePath = String(config?.filePath || "").trim();
   const { host, username:requestedUsername, port, identityFile } = validateSshTarget(config);
   const expectedFingerprint = normalizeFingerprint(config?.fingerprint);
   const trustHostForSession = Boolean(config?.trustHostForSession);
   const discoveringHost = !expectedFingerprint && !trustHostForSession;
-  if (!discoveringHost && !filePath) return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
+  if (!discoveringHost && !filePath && config?.source !== "docker" && !command) return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
   const username = requestedUsername || (discoveringHost ? (process.env.USERNAME || "pulplog") : "");
   if (!username) return Promise.reject(new Error("El usuario SSH es obligatorio para validar el acceso"));
   const password = String(config?.password || "");
   const passphrase = String(config?.passphrase || "");
   if (!discoveringHost && !password && !identityFile)
     return Promise.reject(new Error("Ingresa contraseña o llave privada para validar el acceso"));
+  const remoteCheck = command || (discoveringHost ? "true" : buildRemoteReadCheck(filePath, config));
   return new Promise((resolve, reject) => {
     const client = new SshClient();
     let settled = false;
     let seenFingerprint = "";
+    let stdout = "";
+    const timer = setTimeout(() => finish(new Error(mt("remote_request_timeout"))), 20000);
     const finish = (error, result) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       try { client.end(); } catch {}
       error ? reject(error) : resolve(result);
     };
@@ -1511,18 +1530,18 @@ function testNativeSsh(config) {
         return trustHostForSession;
       },
     };
-    if (identityFile) {
-      connection.privateKey = fs.readFileSync(identityFile);
-      if (passphrase) connection.passphrase = passphrase;
-    }
     client.once("ready", () => client.exec(
-      buildRemoteReadCheck(filePath),
+      remoteCheck,
       (error, channel) => {
         if (error) return finish(error);
         let stderr = "";
-        channel.stderr.on("data", data => { stderr += data.toString("utf8"); });
+        channel.on("data", data => {
+          stdout += data.toString("utf8");
+          if (stdout.length > 4 * 1024 * 1024) finish(new Error(mt("remote_response_limit")));
+        });
+        channel.stderr.on("data", data => { stderr = (stderr + data.toString("utf8")).slice(-32768); });
         channel.on("close", code => code === 0
-          ? finish(null, { ok:true, fingerprint:seenFingerprint })
+          ? finish(null, { ok:true, fingerprint:seenFingerprint, stdout })
           : finish(new Error(stderr.trim() || `Validación remota terminó con código ${code}`)));
       }
     ));
@@ -1531,7 +1550,13 @@ function testNativeSsh(config) {
         ? ` Huella (fingerprint) del servidor: ${seenFingerprint}` : "";
       finish(new Error(`${error.message}${hint}`));
     });
-    client.connect(connection);
+    try {
+      if (identityFile) {
+        connection.privateKey = fs.readFileSync(identityFile);
+        if (passphrase) connection.passphrase = passphrase;
+      }
+      client.connect(connection);
+    } catch (error) { finish(error); }
   });
 }
 
@@ -1611,7 +1636,7 @@ function startNativeSshStream(event, payload) {
   const streamId = payload?.streamId;
   const filePath = String(payload?.filePath || "").trim();
   const tailScript = buildRemoteTailScript(payload, filePath);
-  if (!filePath) throw new Error("La ruta de la bitácora es obligatoria");
+  if (!filePath && payload?.source !== "docker") throw new Error("La ruta de la bitácora es obligatoria");
 
   const { host, username, port, identityFile, target } = validateSshTarget(payload);
   if (!username) throw new Error("El usuario SSH es obligatorio para credenciales");
@@ -1620,6 +1645,8 @@ function startNativeSshStream(event, payload) {
   const passphrase = String(payload?.passphrase || "");
   const expectedFingerprint = normalizeFingerprint(payload?.fingerprint);
   const trustHostForSession = Boolean(payload?.trustHostForSession);
+  if (payload.source === "docker" && (!expectedFingerprint || !trustHostForSession))
+    throw new Error(mt("remote_docker_trust"));
   let seenFingerprint = "";
   const config = {
     host,
@@ -1712,7 +1739,10 @@ function startNativeSshStream(event, payload) {
       stream.channel = channel;
       send("remote:spawned", streamId);
       channel.on("data", flushLines);
-      channel.stderr.on("data", data => { stderrBuf += data.toString("utf8"); });
+      channel.stderr.on("data", data => {
+        stderrBuf = (stderrBuf + data.toString("utf8")).slice(-32768);
+        if (payload.source === "docker") flushLines(data);
+      });
       channel.on("close", (code) => {
         remoteStreams.delete(streamId);
         client.end();
@@ -1848,7 +1878,10 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
   }
 
   proc.stdout.on("data", flushLines);
-  proc.stderr.on("data", data => { stderrBuf += data.toString("utf8"); });
+  proc.stderr.on("data", data => {
+    stderrBuf = (stderrBuf + data.toString("utf8")).slice(-32768);
+    if (payload.source === "docker") flushLines(data);
+  });
 
   proc.on("spawn", () => {
     logEntry("INFO", "remote", `Proceso iniciado: ${spec.label}`);
@@ -1891,6 +1924,30 @@ ipcMain.handle("remote:test", async (event, payload) => {
     return payload?.mode === "ssh-native"
       ? await testNativeSsh(payload)
       : await testSystemSsh(payload);
+  } catch (error) {
+    return { ok:false, error:error?.message ?? String(error) };
+  }
+});
+
+ipcMain.handle("remote:docker-list", async (event, payload) => {
+  assertTrustedSender(event);
+  try {
+    if (!["ssh", "ssh-wsl", "ssh-native"].includes(payload?.mode)) throw new Error(mt("remote_docker_ssh"));
+    const script = dockerListScript(mt("remote_docker_unavailable"));
+    let stdout;
+    if (payload.mode === "ssh-native") {
+      if (!payload.fingerprint || !payload.trustHostForSession) throw new Error(mt("remote_docker_trust"));
+      stdout = (await testNativeSsh(payload, script)).stdout;
+    } else {
+      const spec = buildRemoteListCommand(payload, script);
+      stdout = await new Promise((resolve, reject) => {
+        execFile(spec.command, spec.args, { timeout:20000, windowsHide:true, maxBuffer:4 * 1024 * 1024 }, (error, output, stderr) => {
+          if (error) return reject(new Error(String(stderr || mt("remote_docker_failed")).trim()));
+          resolve(output);
+        });
+      });
+    }
+    return { ok:true, containers:parseDockerContainers(stdout) };
   } catch (error) {
     return { ok:false, error:error?.message ?? String(error) };
   }
@@ -1956,6 +2013,9 @@ function normalizeRemoteProfiles(value) {
     proxyJump: typeof profile.proxyJump === "string" ? profile.proxyJump.slice(0, 255) : "",
     distro: typeof profile.distro === "string" ? profile.distro.slice(0, 160) : "",
     filePath: typeof profile.filePath === "string" ? profile.filePath.slice(0, 4096) : "",
+    source: profile.source === "docker" ? "docker" : "file",
+    containerId: typeof profile.containerId === "string" ? profile.containerId.slice(0, 128) : "",
+    containerName: typeof profile.containerName === "string" ? profile.containerName.slice(0, 128) : "",
     tailLines: normalizeTailLines(profile.tailLines),
     historyMode: ["lines", "bytes", "full"].includes(profile.historyMode) ? profile.historyMode : "lines",
     maxInitialMb: normalizeRemoteHistory(profile).maxMb,
