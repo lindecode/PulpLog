@@ -102,11 +102,14 @@ export default function App() {
   }, []);
 
   const aiSettings = useMemo(() => ({
+    aiProvider: settings.aiProvider || "ollama",
+    vllmUrl: settings.vllmUrl || "http://127.0.0.1:8000/v1",
+    vllmModel: settings.vllmModel || "",
     ollamaUrl: settings.ollamaUrl || "",
     ollamaModel: settings.ollamaModel || "",
     ollamaContextTokens: settings.ollamaContextTokens || 16384,
     savePref,
-  }), [settings.ollamaUrl, settings.ollamaModel, settings.ollamaContextTokens, savePref]);
+  }), [settings.aiProvider, settings.vllmUrl, settings.vllmModel, settings.ollamaUrl, settings.ollamaModel, settings.ollamaContextTokens, savePref]);
 
   const removeRecent = useCallback(async (fp) => {
     const recent = await window.electronAPI.removeRecentFile(fp);

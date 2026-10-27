@@ -100,6 +100,26 @@ sesión gráfica puede requerir una pantalla virtual.
 | Filtros y marcadores | Los logs de Docker usan las mismas herramientas de búsqueda, niveles y marcadores |
 | Diagnóstico de errores | Informa si Docker no está corriendo o no es accesible |
 
+### Servidores de IA
+
+En **Configuracion > Proveedor de IA**, selecciona **Ollama** o **vLLM**.
+Cada proveedor conserva su URL y modelo preferido de forma independiente:
+
+| Proveedor | URL local predeterminada |
+|-----------|--------------------------|
+| Ollama | `http://127.0.0.1:11434` |
+| vLLM | `http://127.0.0.1:8000/v1` |
+
+PulpLog consulta los modelos que ofrece el servidor elegido y muestra las respuestas
+en streaming. El servidor debe estar en ejecucion; no se inicia ni instala desde
+PulpLog. Si no esta disponible o no ofrece modelos de chat, el panel abierto
+reintenta la consulta cada 10 segundos y se habilita al detectar el servicio.
+Se admiten HTTP, HTTPS y prefijos de ruta para proxies inversos.
+La conexion vLLM usa `/models` y `/chat/completions` sobre la URL base configurada.
+El presupuesto de contexto limita las filas enviadas; el contexto del motor vLLM
+se configura en el servidor. Cambiar de proveedor o URL inicia una conversacion
+nueva y detiene la generacion anterior. Esta integracion no configura API keys.
+
 ### SSH y WSL2
 
 PulpLog puede seguir una bitácora remota mediante `tail -F`. Para archivos `.gz`, lee y descomprime con `gzip -cd` de forma estática. La ventana **SSH / WSL** detecta las herramientas disponibles en el ordenador y sólo muestra WSL2 en Windows.

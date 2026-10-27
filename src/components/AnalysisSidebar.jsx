@@ -117,10 +117,21 @@ const fmtCtx = tokens => `${Math.round(tokens / 1024)}K`;
 
 const QUICK_TASKS = ["summary", "root_cause", "searches", "report"];
 
-function AnalysisSidebar({ open = true, anchorRef, sourceLabel, filter, extraFilters, search, extraSearches, timeRange,
+function AnalysisSidebar(props) {
+  const settings = useContext(AiSettingsCtx);
+  const provider = settings.aiProvider || "ollama";
+  return <AnalysisSidebarContent key={`${provider}:${provider === "vllm" ? settings.vllmUrl : settings.ollamaUrl}`} {...props} />;
+}
+
+function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, extraFilters, search, extraSearches, timeRange,
   visibleItems, sourceItems, selection, stats, onClose, onJumpToLine }) {
   const t = useLang();
   const aiSettings = useContext(AiSettingsCtx);
+  const provider = aiSettings.aiProvider || "ollama";
+  const providerName = provider === "vllm" ? "vLLM" : "Ollama";
+  const modelSetting = provider === "vllm" ? "vllmModel" : "ollamaModel";
+  const preferredModel = aiSettings[modelSetting] || "";
+  const serverUrl = provider === "vllm" ? aiSettings.vllmUrl : aiSettings.ollamaUrl;
   const [redact, setRedact] = useState(true);
   const [tableFormat, setTableFormat] = useState(readStoredTableFormat);
   const [task, setTask] = useState("summary");
@@ -128,7 +139,8 @@ function AnalysisSidebar({ open = true, anchorRef, sourceLabel, filter, extraFil
 
   const [ollamaStatus, setOllamaStatus] = useState({ available:false, models:[], error:null, url:"" });
   const [checkingOllama, setCheckingOllama] = useState(false);
-  const [selectedModel, setSelectedModel] = useState(aiSettings.ollamaModel || "");
+  const statusRequestRef = useRef(false);
+  const [selectedModel, setSelectedModel] = useState(preferredModel);
   const [messages, setMessages] = useState([]); // { id, role, content, label?, streaming?, error?, stopped?, meta? }
   const [snapshot, setSnapshot] = useState(null);
   const [input, setInput] = useState("");
@@ -177,34 +189,42 @@ function AnalysisSidebar({ open = true, anchorRef, sourceLabel, filter, extraFil
   const contextTokens = effectiveContextTokens(aiSettings.ollamaContextTokens, activeModel?.contextLength);
   const canChat = ollamaStatus.available && !!activeModel && !!window.electronAPI?.streamOllamaChat;
 
-  const refreshOllama = useCallback(async () => {
-    if (!window.electronAPI?.getOllamaStatus) return;
-    setCheckingOllama(true);
+  const refreshOllama = useCallback(async ({ silent = false } = {}) => {
+    if (!window.electronAPI?.getOllamaStatus || statusRequestRef.current) return;
+    statusRequestRef.current = true;
+    if (!silent) setCheckingOllama(true);
     try {
       const status = await window.electronAPI.getOllamaStatus();
       setOllamaStatus(status);
       const usable = (status?.models || []).filter(isChatModel);
       if (status?.available && usable.length) {
         setSelectedModel(prev => {
-          const wanted = prev || aiSettings.ollamaModel;
+          const wanted = prev || preferredModel;
           if (wanted && usable.some(m => getModelName(m) === wanted)) return wanted;
           return getModelName(usable[0]);
         });
       }
     } catch (err) {
-      setOllamaStatus({ available:false, models:[], error:err.message, url:aiSettings.ollamaUrl });
+      setOllamaStatus({ available:false, models:[], error:err.message, url:serverUrl });
     } finally {
+      statusRequestRef.current = false;
       setCheckingOllama(false);
     }
-  }, [aiSettings.ollamaModel, aiSettings.ollamaUrl]);
+  }, [preferredModel, serverUrl]);
 
   // Re-check whenever the panel opens or the server URL changes in settings.
-  useEffect(() => { if (open) refreshOllama(); }, [open, aiSettings.ollamaUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open) refreshOllama(); }, [open, serverUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!open || (ollamaStatus.available && chatModels.length > 0)) return;
+    const timer = setTimeout(() => refreshOllama({ silent:true }), 10000);
+    return () => clearTimeout(timer);
+  }, [open, ollamaStatus, chatModels.length, refreshOllama]);
 
   const chooseModel = name => {
     setSelectedModel(name);
     if (name !== snapshot?.model) setSnapshot(null);
-    aiSettings.savePref?.("ollamaModel", name);
+    aiSettings.savePref?.(modelSetting, name);
   };
 
   /* ── streaming ── */
@@ -267,7 +287,7 @@ function AnalysisSidebar({ open = true, anchorRef, sourceLabel, filter, extraFil
     pendingRef.current = { id:assistantId, text:"" };
 
     stopStreamRef.current = window.electronAPI.streamOllamaChat(
-      { model:selectedModel, messages:buildChatMessages(snap, history), maxContext:activeModel?.contextLength || 0 },
+      { provider, serverUrl, model:selectedModel, messages:buildChatMessages(snap, history), maxContext:activeModel?.contextLength || 0 },
       {
         onChunk: chunk => {
           if (pendingRef.current.id !== assistantId) return;
@@ -278,7 +298,7 @@ function AnalysisSidebar({ open = true, anchorRef, sourceLabel, filter, extraFil
         onError: err => finishMessage(assistantId, { error:String(err || "") }),
       },
     );
-  }, [isGenerating, canChat, snapshot, contextTokens, selectedModel, makeSnapshot, messages, tableFormat, t, activeModel, flushPending, finishMessage]);
+  }, [provider, serverUrl, isGenerating, canChat, snapshot, contextTokens, selectedModel, makeSnapshot, messages, tableFormat, t, activeModel, flushPending, finishMessage]);
 
   const toggleTableFormat = value => {
     setTableFormat(value);
@@ -357,8 +377,8 @@ function AnalysisSidebar({ open = true, anchorRef, sourceLabel, filter, extraFil
     return (Array.isArray(list) ? list : []).filter(question => !asked.has(question));
   }, [t, selectedRows.length, messages]);
   const statusText = checkingOllama ? "…"
-    : ollamaStatus.available ? t("analysis_ollama_active")
-    : t("analysis_ollama_offline_short");
+    : ollamaStatus.available ? t("analysis_ai_active", providerName)
+    : t("analysis_ai_offline", providerName);
 
   return (
     <aside data-float ref={asideRef} aria-hidden={!open}
@@ -420,9 +440,9 @@ function AnalysisSidebar({ open = true, anchorRef, sourceLabel, filter, extraFil
           <div ref={scrollRef} onScroll={onScroll}
             style={{ flex:1, minHeight:0, overflowY:"auto", display:"flex", flexDirection:"column", gap:12, paddingRight:4 }}>
             {!ollamaStatus.available && !checkingOllama ? (
-              <OfflineNotice t={t} status={ollamaStatus} onRetry={refreshOllama} />
+              <OfflineNotice t={t} status={ollamaStatus} provider={provider} onRetry={refreshOllama} />
             ) : ollamaStatus.available && !chatModels.length ? (
-              <Notice>{t("analysis_ollama_no_chat_models")}<br />{t("analysis_ollama_hint")}</Notice>
+              <Notice>{t("analysis_ai_no_models", providerName)}</Notice>
             ) : messages.length === 0 ? (
               <EmptyChat t={t} disabled={!canChat || !baseRows.length} suggestions={pendingSuggestions}
                 onAsk={question => send(question)}
@@ -567,12 +587,12 @@ function Notice({ children, warn }) {
   );
 }
 
-function OfflineNotice({ t, status, onRetry }) {
+function OfflineNotice({ t, status, provider, onRetry }) {
   return (
     <Notice warn>
-      <div style={{ fontWeight:700, marginBottom:4 }}>{t("analysis_ollama_offline", status.url || "")}</div>
+      <div style={{ fontWeight:700, marginBottom:4 }}>{t("analysis_ai_connection", provider === "vllm" ? "vLLM" : "Ollama", status.url || "")}</div>
       {status.error && <div style={{ fontSize:10, opacity:.85, marginBottom:6 }}>{status.error}</div>}
-      <div style={{ color:"var(--pl-text-4)", marginBottom:8 }}>{t("analysis_ollama_hint")}</div>
+      <div style={{ color:"var(--pl-text-4)", marginBottom:8 }}>{t(provider === "vllm" ? "analysis_vllm_hint" : "analysis_ollama_hint")}</div>
       <Btn onClick={onRetry}>{t("analysis_ollama_refresh")}</Btn>
     </Notice>
   );

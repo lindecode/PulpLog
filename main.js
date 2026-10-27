@@ -10,6 +10,7 @@ const zlib           = require("zlib");
 const { execFile, spawn } = require("child_process");
 const { Client: SshClient } = require("ssh2");
 const { dockerListScript, dockerReadCheck, dockerLogsScript, parseDockerContainers } = require("./remoteDocker.cjs");
+const vllm = require("./vllm.cjs");
 
 const IS_SMOKE_TEST = process.env.PULPLOG_SMOKE_TEST === "1";
 const IS_DEV = !IS_SMOKE_TEST && (process.env.NODE_ENV === "development" || !app.isPackaged);
@@ -2069,6 +2070,9 @@ function normalizeSettings(value) {
     theme,
     skippedUpdateVersion,
     ollamaUrl,
+    aiProvider: s.aiProvider === "vllm" ? "vllm" : "ollama",
+    vllmUrl: typeof s.vllmUrl === "string" && s.vllmUrl.trim() ? s.vllmUrl.trim().replace(/\/+$/, "") : vllm.DEFAULT_URL,
+    vllmModel: typeof s.vllmModel === "string" ? s.vllmModel.trim() : "",
     ollamaModel,
     ollamaContextTokens,
   };
@@ -2132,7 +2136,8 @@ function normalizeOllamaUrl(rawUrl) {
   try {
     const parsed = new URL(rawUrl.trim());
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return OLLAMA_DEFAULT_URL;
-    return `${parsed.protocol}//${parsed.host}`;
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) return OLLAMA_DEFAULT_URL;
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "")}`;
   } catch {
     return OLLAMA_DEFAULT_URL;
   }
@@ -2154,7 +2159,7 @@ function ollamaErrorText(statusCode, body) {
 
 function ollamaJson(baseUrl, apiPath, { body = null, timeout = 3000 } = {}) {
   return new Promise((resolve, reject) => {
-    const targetUrl = new URL(apiPath, baseUrl);
+    const targetUrl = new URL(`${baseUrl}${apiPath}`);
     const transport = targetUrl.protocol === "https:" ? https : http;
     const data = body ? JSON.stringify(body) : null;
     const req = transport.request(targetUrl, {
@@ -2260,7 +2265,7 @@ function startOllamaChat(sender, streamId, baseUrl, request, withThink) {
     keep_alive: "15m",
     options: { num_ctx: request.numCtx, temperature: 0.2 },
   });
-  const targetUrl = new URL("/api/chat", baseUrl);
+  const targetUrl = new URL(`${baseUrl}/api/chat`);
   const transport = targetUrl.protocol === "https:" ? https : http;
 
   const handleLine = (line) => {
@@ -2338,7 +2343,9 @@ const aiCleanupSenders = new WeakSet();
 
 ipcMain.handle("ollama:status", async (event) => {
   assertTrustedSender(event);
+  await settingsWriteQueue;
   const settings = await loadSettings();
+  if (settings.aiProvider === "vllm") return vllm.status(settings.vllmUrl);
   return fetchOllamaStatus(normalizeOllamaUrl(settings.ollamaUrl));
 });
 
@@ -2347,8 +2354,14 @@ ipcMain.handle("ollama:chat:start", async (event, payload) => {
   const streamId = normalizeIdentifier(payload?.streamId, "stream id");
   const model = normalizeIdentifier(typeof payload?.model === "string" ? payload.model.trim() : "", "model");
   const messages = normalizeChatMessages(payload?.messages);
+  await settingsWriteQueue;
   const settings = await loadSettings();
-  const baseUrl = normalizeOllamaUrl(settings.ollamaUrl);
+  if (payload?.provider && payload.provider !== settings.aiProvider) throw new Error("AI provider changed; retry the request");
+  const baseUrl = settings.aiProvider === "vllm" ? vllm.normalizeUrl(settings.vllmUrl) : normalizeOllamaUrl(settings.ollamaUrl);
+  if (payload?.serverUrl) {
+    const requested = settings.aiProvider === "vllm" ? vllm.normalizeUrl(payload.serverUrl) : normalizeOllamaUrl(payload.serverUrl);
+    if (requested !== baseUrl) throw new Error("AI server changed; retry the request");
+  }
   // Never ask for more context than the model was trained with; Ollama would only waste memory.
   const maxContext = Number(payload?.maxContext) >= 2048 ? Number(payload.maxContext) : Infinity;
   const numCtx = Math.min(normalizeOllamaContext(settings.ollamaContextTokens), maxContext);
@@ -2361,7 +2374,24 @@ ipcMain.handle("ollama:chat:start", async (event, payload) => {
       for (const [id, entry] of activeAiStreams) if (entry.sender === sender) stopAiStream(id);
     });
   }
-  startOllamaChat(sender, streamId, baseUrl, { model, messages, numCtx }, true);
+  if (settings.aiProvider === "vllm") {
+    const entry = { req:null, stopped:false, finished:false, sender };
+    const send = (channel, value) => {
+      if (!entry.stopped && !sender.isDestroyed()) sender.send(channel, streamId, value);
+    };
+    const finish = (channel, value) => {
+      if (entry.stopped || entry.finished) return;
+      entry.finished = true;
+      if (activeAiStreams.get(streamId) === entry) activeAiStreams.delete(streamId);
+      send(channel, value);
+    };
+    entry.req = vllm.stream(baseUrl, { model, messages, numCtx }, {
+      onChunk:chunk => send("ollama:chunk", chunk),
+      onDone:meta => finish("ollama:done", meta),
+      onError:error => finish("ollama:error", error),
+    });
+    activeAiStreams.set(streamId, entry);
+  } else startOllamaChat(sender, streamId, baseUrl, { model, messages, numCtx }, true);
   return { ok: true, streamId, numCtx };
 });
 

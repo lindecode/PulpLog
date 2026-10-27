@@ -38,6 +38,7 @@
       "dist/**/*",
       "main.js",
       "remoteDocker.cjs",
+      "vllm.cjs",
       "preload.js",
       "assets/**/*"
     ],

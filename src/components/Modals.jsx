@@ -135,14 +135,29 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
   const theme = settings.theme || "lindecode";
   const appIconSrc = `${import.meta.env.BASE_URL}pulplog-iso.png`;
   const [ollamaUrlDraft, setOllamaUrlDraft] = useState(settings.ollamaUrl || "http://127.0.0.1:11434");
+  const [vllmUrlDraft, setVllmUrlDraft] = useState(settings.vllmUrl || "http://127.0.0.1:8000/v1");
+  useEffect(() => { setVllmUrlDraft(settings.vllmUrl || "http://127.0.0.1:8000/v1"); }, [settings.vllmUrl]);
+  const validAiUrl = value => {
+    try {
+      const url = new URL(value);
+      return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
+    } catch { return false; }
+  };
+  const commitVllmUrl = () => {
+    const next = vllmUrlDraft.trim().replace(/\/+$/, "") || "http://127.0.0.1:8000/v1";
+    if (!validAiUrl(next)) return;
+    setVllmUrlDraft(next);
+    if (next !== settings.vllmUrl) onTogglePref("vllmUrl", next);
+  };
   useEffect(() => { setOllamaUrlDraft(settings.ollamaUrl || "http://127.0.0.1:11434"); }, [settings.ollamaUrl]);
   const commitOllamaUrl = () => {
     const next = ollamaUrlDraft.trim().replace(/\/+$/, "") || "http://127.0.0.1:11434";
+    if (!validAiUrl(next)) return;
     setOllamaUrlDraft(next);
     if (next !== settings.ollamaUrl) onTogglePref("ollamaUrl", next);
   };
   const ollamaUrlRemote = (() => {
-    try { return !/^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/i.test(new URL(ollamaUrlDraft).hostname); } catch { return false; }
+    try { return !/^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/i.test(new URL(settings.aiProvider === "vllm" ? vllmUrlDraft : ollamaUrlDraft).hostname); } catch { return false; }
   })();
   useEscapeToClose(onClose);
 
@@ -152,7 +167,7 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
                   display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
       <div data-float onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("settings_title")}
            style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
-                    padding:"28px 32px", minWidth:500, maxWidth:620,
+                    padding:"28px 32px", minWidth:500, maxWidth:620, maxHeight:"calc(100vh - 32px)", overflowY:"auto",
                     boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
 
         <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:22 }}>
@@ -273,10 +288,21 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
             </select>
           </label>
           <label style={{ display:"flex", alignItems:"center", gap:10, color:"var(--pl-text-4)", fontSize:11 }}>
+            <span style={{ flex:1 }}>{t("pref_ai_provider")}</span>
+            <select value={settings.aiProvider || "ollama"} onChange={e => onTogglePref("aiProvider", e.target.value)}
+              style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:5,
+                color:"var(--pl-text-3)", fontFamily:"inherit", fontSize:11, padding:"4px 8px" }}>
+              <option value="ollama">Ollama</option>
+              <option value="vllm">vLLM</option>
+            </select>
+          </label>
+          <label style={{ display:"flex", alignItems:"center", gap:10, color:"var(--pl-text-4)", fontSize:11 }}>
             <span style={{ flex:1 }}>{t("pref_ollama_url")}</span>
             <input
               type="text"
               value={ollamaUrlDraft}
+              aria-invalid={Boolean(ollamaUrlDraft) && !validAiUrl(ollamaUrlDraft)}
+              title={ollamaUrlDraft && !validAiUrl(ollamaUrlDraft) ? t("pref_ai_url_invalid") : undefined}
               placeholder="http://127.0.0.1:11434"
               onChange={e => setOllamaUrlDraft(e.target.value)}
               onBlur={commitOllamaUrl}
@@ -284,6 +310,16 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
               style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:5,
                        color:"var(--pl-text-3)", fontFamily:"inherit", fontSize:11, padding:"4px 8px", width:180 }}
             />
+          </label>
+          <label style={{ display:"flex", alignItems:"center", gap:10, color:"var(--pl-text-4)", fontSize:11 }}>
+            <span style={{ flex:1 }}>{t("pref_vllm_url")}</span>
+            <input type="text" value={vllmUrlDraft} placeholder="http://127.0.0.1:8000/v1"
+              aria-invalid={Boolean(vllmUrlDraft) && !validAiUrl(vllmUrlDraft)}
+              title={vllmUrlDraft && !validAiUrl(vllmUrlDraft) ? t("pref_ai_url_invalid") : undefined}
+              onChange={e => setVllmUrlDraft(e.target.value)} onBlur={commitVllmUrl}
+              onKeyDown={e => { if (e.key === "Enter") commitVllmUrl(); }}
+              style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:5,
+                color:"var(--pl-text-3)", fontFamily:"inherit", fontSize:11, padding:"4px 8px", width:180 }} />
           </label>
           {ollamaUrlRemote && (
             <div style={{ color:"var(--pl-status-warn)", fontSize:10, lineHeight:1.4, marginTop:-6 }}>
