@@ -33,6 +33,8 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - name: Ensure Electron binary is installed
+        run: node -e "console.log(require('electron'))"
       - name: Configure Electron sandbox (Linux)
         if: runner.os == 'Linux'
         shell: bash

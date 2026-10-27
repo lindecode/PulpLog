@@ -11,6 +11,11 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+      react:
+        applies-to: version-updates
+        patterns:
+          - react
+          - react-dom
       npm-patches:
         applies-to: version-updates
         update-types:
