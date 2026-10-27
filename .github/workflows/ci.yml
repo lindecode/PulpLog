@@ -33,6 +33,14 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - name: Configure Electron sandbox (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sandbox="$GITHUB_WORKSPACE/node_modules/electron/dist/chrome-sandbox"
+          test -f "$sandbox"
+          sudo chown root:root "$sandbox"
+          sudo chmod 4755 "$sandbox"
       - name: Electron smoke test (Linux)
         if: runner.os == 'Linux'
         run: xvfb-run -a npm run test:integration
