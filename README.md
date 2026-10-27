@@ -6,18 +6,61 @@ Funciona en Windows, macOS y Linux.
 
 ## Instalación para usuarios
 
-Descarga el paquete correspondiente desde
-[GitHub Releases](https://github.com/lindecode/PulpLog/releases). En Windows el
-instalador NSIS permite elegir la carpeta de instalación y también se publica un
-ZIP; en macOS se genera un DMG y en Linux un AppImage y un paquete DEB.
+Descarga un paquete compilado para tu sistema y arquitectura desde los
+**Assets** de [GitHub Releases](https://github.com/lindecode/PulpLog/releases).
+Los archivos **Source code (zip)** y **Source code (tar.gz)** son el código
+fuente, no la aplicación lista para usar. Si un Release no tiene paquetes
+adjuntos para tu sistema, es necesario que el mantenedor los compile y publique.
+
+**Los usuarios no necesitan instalar Node.js, npm ni Electron.** Electron ya
+viene incluido en cada paquete. Tampoco se incluyen servidores ni modelos de IA.
+
+| Sistema | Paquete | Cómo utilizarlo |
+|---------|---------|----------------|
+| Windows | Instalador `.exe` NSIS | Ejecuta el instalador, elige la carpeta y abre PulpLog desde el acceso directo |
+| Windows | `.zip` sin instalación | Extrae todo el ZIP en una carpeta y ejecuta `PulpLog.exe`; conserva los demás archivos junto al ejecutable |
+| macOS | `.dmg` | Abre la imagen y copia PulpLog a Aplicaciones |
+| Linux | `.AppImage` | Dale permiso de ejecución y ábrelo, sin instalar un paquete del sistema |
+| Debian/Ubuntu | `.deb` | Instálalo con el gestor de paquetes y abre PulpLog desde el menú de aplicaciones |
+
+Ejemplo para AppImage, sustituyendo el nombre por el archivo descargado:
+
+```bash
+chmod +x ./PulpLog-4.0.0.AppImage
+./PulpLog-4.0.0.AppImage
+```
+
+Ejemplo para Debian/Ubuntu, desde la carpeta de la descarga:
+
+```bash
+sudo apt install ./pulplog_4.0.0_amd64.deb
+```
+
+Los nombres son ilustrativos: utiliza el nombre real del paquete. `x64`/`amd64`
+corresponde a equipos Intel/AMD de 64 bits; `arm64`, a equipos ARM de 64 bits,
+incluidos los Mac con Apple Silicon. En Linux pueden ser necesarias bibliotecas
+del sistema, como FUSE para AppImage, según la distribución.
+
+Un ZIP sin instalación no implica que todos los ajustes se guarden en esa
+carpeta: PulpLog conserva preferencias y credenciales en el perfil del usuario.
+No distribuyas esos datos personales junto con la aplicación.
+
+Para distribución pública, utiliza paquetes firmados y, en macOS, notarizados.
+Sin esa preparación, Windows o macOS pueden mostrar avisos o bloquear el
+arranque. No desactives las protecciones del sistema ni el sandbox como solución.
 
 PulpLog no necesita Docker, OpenSSH ni WSL2 para abrir archivos locales. Esas
 herramientas sólo son necesarias para la integración correspondiente.
 
-## Requisitos
+## Requisitos para desarrollar o compilar
 
-- Node.js 18+
-- npm 9+
+- Node.js 24 LTS y npm compatible; es la versión de Node usada en CI
+- Git, para clonar y actualizar el repositorio
+- Internet para descargar dependencias, Electron y herramientas de empaquetado;
+  algunos archivos se descargan la primera vez que se ejecuta cada herramienta
+
+Integraciones opcionales, también para usuarios de los paquetes compilados:
+
 - Docker instalado y accesible desde la terminal, solo si vas a usar logs de contenedores
 - OpenSSH (`ssh` y `ssh-add`) accesible desde la terminal, solo si vas a usar conexiones SSH automáticas
 - WSL2, únicamente en Windows y solo para conexiones o archivos dentro de una distribución Linux
@@ -26,22 +69,142 @@ herramientas sólo son necesarias para la integración correspondiente.
 ## Instalación y desarrollo
 
 ```bash
-npm install
+git clone https://github.com/lindecode/PulpLog.git
+cd PulpLog
+npm ci
+node -e "console.log(require('electron'))"
 npm run dev
 ```
 
-`npm run dev` levanta Vite y abre Electron automáticamente.
+Si ya tienes el repositorio, ejecuta los comandos desde la carpeta que contiene
+`package.json`; no necesitas clonarlo otra vez. Después de bajar cambios que
+actualicen dependencias, vuelve a ejecutar `npm ci`.
+
+`npm ci` instala las versiones exactas de `package-lock.json`. El comando con
+`require('electron')` asegura la descarga del binario antes de arrancar la app.
+Si muestra `Downloading Electron binary...`, espera a que termine; en redes
+restringidas revisa el acceso a GitHub y al registro npm. No compartas tokens
+ni desactives la validación HTTPS para resolver problemas de descarga.
+
+`npm run dev` levanta Vite y abre Electron automáticamente. No es necesario
+instalar Electron globalmente. El comando `npm run build` sólo genera el
+frontend en `dist/`: esa carpeta por sí sola no es el programa de escritorio
+ni un instalador.
 
 ## Compilar instaladores
 
+La forma recomendada es compilar Windows en Windows, macOS en macOS y Linux
+en Linux. Los comandos no garantizan compilación cruzada desde cualquier SO;
+la firma de macOS requiere macOS y las dependencias nativas pueden requerir
+herramientas de compilación del sistema de destino. Consulta las
+[limitaciones de electron-builder](https://www.electron.build/docs/features/multi-platform-build/).
+
+Antes de empaquetar, instala las dependencias y valida el código:
+
 ```bash
-npm run dist          # plataforma actual
-npm run dist:win      # .exe NSIS + portable
-npm run dist:mac      # .dmg
-npm run dist:linux    # .AppImage + .deb
+npm ci
+node -e "console.log(require('electron'))"
+npm test
+npm run build
+npm run test:integration
+npm audit --include=dev --audit-level=low
 ```
 
-Los instaladores se generan en `release/`.
+Después elige un comando en el sistema correspondiente:
+
+| Comando | Resultado configurado |
+|---------|-----------------------|
+| `npm run dist:win -- --publish never` | Instalador `.exe` NSIS y ZIP sin instalación |
+| `npm run dist:mac -- --publish never` | Imagen `.dmg` |
+| `npm run dist:linux -- --publish never` | `.AppImage` y `.deb` |
+| `npm run dist -- --publish never` | Los formatos configurados para el sistema actual |
+
+Estos comandos compilan el frontend y ejecutan electron-builder. Los paquetes
+terminados quedan en `release/`. La arquitectura predeterminada depende del
+equipo de compilación; puedes indicarla con `--x64` o `--arm64`, cuando el
+destino y las dependencias lo permitan. Por ejemplo, en Windows x64:
+
+```bash
+npm run dist:win -- --x64 --publish never
+```
+
+Distribuye los paquetes terminados, no sólo el `.exe` de `win-unpacked` ni
+carpetas internas como `dist/` o `node_modules/`. El ZIP debe extraerse completo.
+No hace falta enviar el código fuente para que el usuario ejecute la aplicación.
+
+### Windows: portable de un archivo y MSI opcionales
+
+La configuración predeterminada **no genera un MSI ni un `.exe` portable de
+un solo archivo**. Para solicitar esos formatos a electron-builder, desde
+Windows y con las dependencias ya instaladas:
+
+```bash
+npm run build
+npx --no-install electron-builder --win portable --x64 --publish never
+npx --no-install electron-builder --win msi --x64 --publish never
+```
+
+Son destinos adicionales de electron-builder, no scripts nuevos del proyecto.
+El primero genera un ejecutable sin asistente de instalación; el segundo,
+un instalador MSI para despliegues que lo requieran. Ambos dejan el resultado
+en `release/` y pueden descargar herramientas adicionales. Deben probarse por
+separado: el MSI no hereda necesariamente las opciones del instalador NSIS.
+La CI actual no verifica el empaquetado de estos formatos.
+
+### Publicar en GitHub Releases
+
+1. Elige la versión en `package.json` y mantén sincronizado `package-lock.json`.
+   Para incrementar el parche puedes usar `npm version patch --no-git-tag-version`.
+   No cambies una versión que ya publicaste para reutilizarla con otros binarios.
+2. Guarda los cambios con commit y push. Comprueba que CI y Dependency Audit
+   estén correctos para ese commit.
+3. Genera los paquetes de cada plataforma a partir del mismo commit y versión.
+   Prueba también los paquetes resultantes en equipos de destino, incluyendo
+   instalación, apertura de un log y desinstalación donde corresponda.
+4. En [Releases](https://github.com/lindecode/PulpLog/releases), elige
+   **Draft a new release**. Selecciona o crea la etiqueta `vX.Y.Z` sobre ese
+   commit; por ejemplo, `v4.0.0` para la versión `4.0.0`, sin punto entre `v` y `4`.
+5. Adjunta los archivos terminados de `release/`, indicando sistema y
+   arquitectura. No adjuntes logs, configuraciones personales, claves privadas,
+   API keys ni certificados de firma.
+6. Describe los cambios y publica el Release. Marca **Set as latest release**
+   para una versión estable; usa **pre-release** si todavía es de prueba.
+
+El aviso de actualizaciones de PulpLog consulta el último Release estable
+publicado. No instala automáticamente la nueva versión: el usuario descarga
+el paquete y lo instala o sustituye la carpeta extraída, con la app cerrada.
+Los borradores y las versiones preliminares no son el canal estable.
+
+**La CI actual sólo prueba, compila el frontend y audita dependencias. No genera
+instaladores, no firma paquetes y no publica Releases automáticamente.**
+`--publish never` evita que los comandos anteriores intenten publicar artefactos.
+Para automatizar la distribución haría falta un workflow de empaquetado y
+publicación independiente.
+
+La firma requiere certificados y configuración adicionales; nunca los guardes
+en el repositorio. Consulta la documentación de
+[firma de electron-builder](https://www.electron.build/v26/docs/features/code-signing/)
+y la guía de [publicación de Releases de GitHub](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository).
+
+### Problemas habituales
+
+- **`npm ci` indica que los manifiestos no coinciden:** sincroniza
+  `package.json` y `package-lock.json` en el cambio de dependencias. En un PR de
+  Dependabot, regenera o corrige ese PR; no cambies CI a `npm install` para
+  esconder el problema.
+- **React y React DOM incompatibles:** deben actualizarse juntos. Dependabot
+  tiene un grupo para proponer ambos en el mismo PR.
+- **Avisos de scripts de instalación de npm:** revisa el paquete y su script
+  antes de autorizarlo. No apruebes scripts desconocidos de forma indiscriminada.
+- **Descarga de Electron detenida:** cancela el comando y vuelve a intentar
+  `node -e "console.log(require('electron'))"` cuando la conectividad esté resuelta.
+  No se puede validar el arranque de Electron hasta completar esa descarga.
+- **Sandbox de Electron en Linux CI:** el workflow descarga primero Electron
+  y configura el helper `chrome-sandbox` sólo en el runner Linux. No uses
+  `--no-sandbox` para empaquetar o distribuir la aplicación.
+- **Falla una dependencia nativa al empaquetar:** revisa la salida de
+  electron-builder e instala el compilador y las herramientas requeridas por
+  esa dependencia para el SO y arquitectura de destino.
 
 ## Pruebas
 
