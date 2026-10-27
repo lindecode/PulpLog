@@ -54,6 +54,28 @@ npm run build            # valida el bundle de producción
 El smoke test necesita un entorno capaz de abrir Electron; en servidores sin
 sesión gráfica puede requerir una pantalla virtual.
 
+## Mantenimiento de dependencias
+
+Dependabot revisa semanalmente las dependencias npm y las acciones de GitHub.
+Los cambios se proponen mediante pull requests, sin integracion automatica.
+CI ejecuta pruebas, compilacion y smoke tests de Electron en Windows, macOS y
+Linux con Node.js 24. Una auditoria separada revisa todas las dependencias,
+incluidas las de desarrollo como Electron, en cada PR, al actualizar `main` y
+diariamente. Cualquier vulnerabilidad conocida hace fallar la auditoria.
+
+El propietario debe activar **Dependency graph**, **Dependabot alerts** y
+**Dependabot security updates** en los ajustes de seguridad del repositorio.
+El archivo `.github/dependabot.yml` configura las actualizaciones, pero no
+sustituye estos ajustes. Para recibir avisos de ejecuciones fallidas, configura
+las notificaciones de GitHub Actions de tu cuenta.
+
+Antes de publicar un parche, revisa el PR y los resultados de CI, actualiza la
+version y reconstruye los paquetes para cada plataforma. Publica el Release
+con una etiqueta `vX.Y.Z` y describe las correcciones de seguridad. PulpLog
+consulta Releases para avisar de nuevas versiones; no instala parches ni
+interpreta Issues como alertas de seguridad. Los ejecutables anteriores no
+se corrigen al actualizar las dependencias del repositorio.
+
 ## Funcionalidades
 
 ### Lectura de logs
