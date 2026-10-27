@@ -21,6 +21,7 @@ herramientas sólo son necesarias para la integración correspondiente.
 - Docker instalado y accesible desde la terminal, solo si vas a usar logs de contenedores
 - OpenSSH (`ssh` y `ssh-add`) accesible desde la terminal, solo si vas a usar conexiones SSH automáticas
 - WSL2, únicamente en Windows y solo para conexiones o archivos dentro de una distribución Linux
+- Un servidor Ollama o vLLM accesible, sólo para el chat de IA; puede ejecutarse en otro equipo
 
 ## Instalación y desarrollo
 
@@ -100,25 +101,212 @@ sesión gráfica puede requerir una pantalla virtual.
 | Filtros y marcadores | Los logs de Docker usan las mismas herramientas de búsqueda, niveles y marcadores |
 | Diagnóstico de errores | Informa si Docker no está corriendo o no es accesible |
 
-### Servidores de IA
+### Análisis con IA: Ollama y vLLM
 
-En **Configuracion > Proveedor de IA**, selecciona **Ollama** o **vLLM**.
-Cada proveedor conserva su URL y modelo preferido de forma independiente:
+La IA es opcional: PulpLog funciona como visor sin instalar motores ni modelos.
+Para analizar bitácoras, se conecta a un servidor externo al proceso de PulpLog,
+que puede estar en el mismo equipo o en otra máquina:
 
-| Proveedor | URL local predeterminada |
-|-----------|--------------------------|
-| Ollama | `http://127.0.0.1:11434` |
-| vLLM | `http://127.0.0.1:8000/v1` |
+```text
+PulpLog -> API HTTP/HTTPS -> Ollama o vLLM -> modelo -> CPU/GPU del servidor
+```
 
-PulpLog consulta los modelos que ofrece el servidor elegido y muestra las respuestas
-en streaming. El servidor debe estar en ejecucion; no se inicia ni instala desde
-PulpLog. Si no esta disponible o no ofrece modelos de chat, el panel abierto
-reintenta la consulta cada 10 segundos y se habilita al detectar el servicio.
-Se admiten HTTP, HTTPS y prefijos de ruta para proxies inversos.
-La conexion vLLM usa `/models` y `/chat/completions` sobre la URL base configurada.
-El presupuesto de contexto limita las filas enviadas; el contexto del motor vLLM
-se configura en el servidor. Cambiar de proveedor o URL inicia una conversacion
-nueva y detiene la generacion anterior. Esta integracion no configura API keys.
+PulpLog no instala ni inicia el motor, no descarga modelos y no busca archivos
+de modelos en el disco. Consulta los que ofrece el servidor elegido.
+
+#### Proveedores y modelos
+
+En **Configuración > Proveedor de IA**, selecciona **Ollama** o **vLLM**. Cada
+proveedor conserva su URL y modelo preferido de forma independiente.
+
+| Proveedor | URL local predeterminada | Detección y chat |
+|-----------|--------------------------|-----------------|
+| Ollama | `http://127.0.0.1:11434` | `/api/tags`, `/api/show` y `/api/chat` |
+| vLLM | `http://127.0.0.1:8000/v1` | `/models` y `/chat/completions` sobre la URL base |
+
+Se admiten otros modelos de conversación que soporte cada motor; no hay una
+lista cerrada en PulpLog. Estos son ejemplos para preparar el entorno:
+
+| Modelo | Proveedor | Ejemplo de uso |
+|--------|-----------|----------------|
+| [`qwen2.5-coder:1.5b`](https://ollama.com/library/qwen2.5-coder:1.5b) | Ollama | Primera prueba con un modelo de menor tamaño |
+| [`qwen2.5-coder:7b-instruct`](https://ollama.com/library/qwen2.5-coder:7b-instruct) | Ollama | Pruebas de análisis de código, errores y stack traces |
+| [`Qwen/Qwen2.5-Coder-7B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct) | vLLM | Servidor de conversación para análisis técnico |
+
+Los nombres de Ollama y los identificadores de Hugging Face no son intercambiables.
+Elige en PulpLog el nombre que publique tu servidor. Un modelo de embeddings no
+sirve para conversar. El consumo de RAM/VRAM depende del modelo, su cuantización,
+el contexto y las solicitudes simultáneas; el tamaño descargado no equivale a la
+memoria necesaria. Los ejemplos no garantizan compatibilidad con cualquier equipo.
+
+#### Preparar Ollama
+
+Obtén Ollama desde su [sitio oficial](https://ollama.com/download). Si no está
+ejecutándose en segundo plano, inicia el servidor en una terminal:
+
+```bash
+ollama serve
+```
+
+Déjala abierta. En otra terminal descarga un modelo y comprueba el listado:
+
+```bash
+ollama pull qwen2.5-coder:1.5b
+ollama list
+```
+
+Para usar el modelo de 7B, sustituye el nombre por `qwen2.5-coder:7b-instruct`.
+No necesitas mantener `ollama run` abierto: PulpLog utiliza la API del servidor.
+Si `ollama serve` indica que el puerto está ocupado, comprueba si Ollama ya está
+activo antes de iniciar una segunda instancia.
+
+Puedes comprobar la API desde PowerShell:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:11434/api/tags
+```
+
+O desde Linux/macOS:
+
+```bash
+curl http://127.0.0.1:11434/api/tags
+```
+
+Consulta la [referencia de comandos de Ollama](https://docs.ollama.com/cli).
+
+#### Ollama sin instalador en Windows
+
+La [distribución independiente de Ollama para Windows](https://docs.ollama.com/windows)
+permite usar el ZIP oficial con el ejecutable y sus bibliotecas, sin registrar un
+servicio del sistema. Conserva las bibliotecas del paquete y verifica las
+dependencias de GPU de tu equipo.
+
+Desde la carpeta donde descomprimiste el paquete, ejecuta en PowerShell:
+
+```powershell
+$env:OLLAMA_HOST = "127.0.0.1:11434"
+$env:OLLAMA_MODELS = Join-Path (Get-Location) "models"
+.\ollama.exe serve
+```
+
+En otra terminal situada en esa carpeta:
+
+```powershell
+$env:OLLAMA_HOST = "127.0.0.1:11434"
+.\ollama.exe pull qwen2.5-coder:1.5b
+.\ollama.exe list
+```
+
+`OLLAMA_MODELS` debe configurarse en el proceso del servidor **antes** de arrancarlo.
+La carpeta puede estar en otra ubicación; conserva su estructura completa de
+modelos y manifiestos al trasladarla. Un archivo `.gguf` suelto no se registra
+automáticamente en Ollama ni en PulpLog.
+
+Para trabajar sin Internet, prepara previamente los binarios, bibliotecas y
+modelos. Las políticas del equipo deben permitir ejecutar esos programas.
+Consulta cómo configurar rutas en la [FAQ de Ollama](https://docs.ollama.com/faq).
+
+#### Preparar vLLM
+
+PulpLog puede conectarse a vLLM desde Windows, macOS o Linux sin tenerlo instalado
+localmente. El siguiente ejemplo prepara **el servidor** en Linux con GPU NVIDIA
+compatible; en Windows, vLLM no tiene soporte nativo y requiere un entorno como
+WSL2 compatible o un servidor remoto. Revisa los
+[requisitos del backend y los controladores](https://docs.vllm.ai/en/stable/getting_started/installation/gpu/)
+antes de instalarlo. Para otras GPU o CPU, sigue la instalación específica de ese backend.
+
+Con [uv instalado](https://docs.astral.sh/uv/getting-started/installation/), crea
+un entorno independiente siguiendo el
+[inicio rápido de vLLM](https://docs.vllm.ai/en/stable/getting_started/quickstart/):
+
+```bash
+uv venv --python 3.12 --seed .venv-vllm
+source .venv-vllm/bin/activate
+uv pip install vllm --torch-backend=auto
+vllm download-kernels
+```
+
+Inicia el modelo de ejemplo y deja el proceso activo:
+
+```bash
+vllm serve Qwen/Qwen2.5-Coder-7B-Instruct \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --max-model-len 8192
+```
+
+El primer arranque puede descargar los archivos del modelo. También puedes pasar
+una ruta local con el modelo completo, su configuración y tokenizer, preparados
+previamente. PulpLog no necesita conocer esa ruta.
+
+Verifica que el servidor haya terminado de cargar:
+
+```bash
+curl http://127.0.0.1:8000/v1/models
+```
+
+En PowerShell usa `Invoke-RestMethod http://127.0.0.1:8000/v1/models`.
+Consulta la [API compatible de vLLM](https://docs.vllm.ai/en/stable/serving/openai_compatible_server/).
+La integración actual no configura API keys ni envía un token Bearer: un endpoint
+que exija autenticación responderá con un error hasta que se añada ese soporte.
+
+#### Conectar y analizar desde PulpLog
+
+1. Abre **Configuración** y selecciona el proveedor de IA.
+2. Configura su URL; pulsa Enter o sal del campo para guardarla. Para vLLM incluye
+   el prefijo `/v1`; no agregues `/models` ni `/chat/completions` al campo.
+3. Abre una bitácora local, Docker o SSH y pulsa **IA**.
+4. Selecciona un modelo del servidor y escribe una pregunta.
+5. Para acotar el análisis, selecciona filas o aplica filtros antes de comenzar.
+
+El chat utiliza las filas seleccionadas; si no hay selección, usa las visibles
+según los filtros. El presupuesto de contexto puede recortar el contenido y da
+prioridad a las filas más recientes. Usa **Contexto de IA (tokens)** para ajustar
+el presupuesto; cuando el servidor anuncia el límite del modelo, PulpLog lo
+respeta. En vLLM la capacidad del motor se configura en el servidor, por ejemplo
+con `--max-model-len`; aumentar el ajuste de PulpLog no amplía esa capacidad.
+
+Las respuestas se muestran en streaming y se pueden detener. Cambiar de proveedor
+o de URL detiene la generación anterior e inicia una conversación nueva.
+
+Al abrir el panel se comprueba el servicio. Si no responde o no ofrece modelos de
+chat, se reintenta cada 10 segundos, sin consultas simultáneas. Los reintentos
+se detienen al encontrar modelos disponibles o cerrar el panel. El botón de
+actualizar permite repetir la consulta manualmente.
+
+#### Servidor remoto y túnel SSH
+
+`127.0.0.1` siempre se refiere al equipo donde se ejecuta PulpLog. Para un servidor
+de otra máquina, configura una URL alcanzable o usa un túnel SSH. Por ejemplo,
+si vLLM escucha en `127.0.0.1:8000` **en el servidor**, ejecuta en tu equipo:
+
+```bash
+ssh -N -L 18000:127.0.0.1:8000 usuario@servidor
+```
+
+Mantén la terminal abierta y configura vLLM en PulpLog como
+`http://127.0.0.1:18000/v1`. Para Ollama, puedes usar
+`ssh -N -L 11435:127.0.0.1:11434 usuario@servidor` y la URL
+`http://127.0.0.1:11435`. El túnel se inicia externamente; no es una conexión
+del selector de bitácoras SSH de PulpLog. Los modelos se ejecutan en el servidor,
+sin requerir GPU ni archivos de modelos en el equipo del visor.
+
+#### Errores habituales de IA
+
+| Síntoma | Comprobación |
+|---------|--------------|
+| Servicio no disponible o `ECONNREFUSED` | Confirma que el proceso siga activo y que host, puerto y túnel sean correctos |
+| No aparecen modelos en Ollama | Ejecuta `ollama list` contra el mismo servidor y descarga un modelo de chat |
+| No aparecen modelos en vLLM | Espera a que termine de cargar y consulta `/v1/models` |
+| HTTP 404 | Revisa proveedor y URL base; Ollama no usa el prefijo `/v1` de esta integración |
+| HTTP 401 o 403 | El endpoint exige autorización; PulpLog todavía no permite configurar tokens de API |
+| Error de plantilla de chat | Comprueba que el modelo sea de conversación/Instruct y que vLLM tenga una plantilla compatible |
+| Contexto excedido o falta de memoria | Reduce el contexto y las filas enviadas; revisa modelo, cuantización y capacidad del servidor |
+| Puerto ocupado | Comprueba si ya existe un proceso activo o elige otro puerto y actualiza la URL |
+
+Verificar los endpoints con los comandos anteriores ayuda a distinguir un error
+del servidor de uno de configuración del visor. La ausencia de IA no impide
+abrir, filtrar ni exportar bitácoras.
 
 ### SSH y WSL2
 
@@ -255,10 +443,14 @@ En Windows 11 algunos atajos con `Super` pueden estar reservados por el sistema.
 - Los archivos locales se procesan en el equipo.
 - Las contraseñas y passphrases SSH manuales se conservan sólo durante la
   conexión y no se guardan en perfiles ni en la restauración de sesión.
-- El prompt preparado en el panel de análisis se redacta localmente cuando está
-  activa la opción de ocultar posibles secretos. PulpLog sólo lo copia al
-  portapapeles; no lo envía a ningún modelo. La redacción es una ayuda, no una
-  garantía: revísalo antes de pegarlo en servicios externos.
+- El chat de IA envía las filas incluidas en el contexto, los metadatos del origen
+  y la conversación al servidor Ollama o vLLM configurado. Si el servidor es remoto,
+  esos datos salen del equipo; utiliza un destino autorizado y HTTPS o un túnel SSH.
+- La opción de redactar posibles secretos se aplica localmente al contexto, pero
+  no garantiza eliminar todos los datos sensibles. Revisa también lo que escribes
+  manualmente en el chat.
+- Preparar y copiar un prompt para otro asistente sólo lo lleva al portapapeles;
+  esa acción no lo envía automáticamente a ningún modelo.
 - **Buscar actualizaciones** consulta la API pública de GitHub Releases; PulpLog
   no descarga ni instala una actualización automáticamente.
 - Docker, SSH y WSL ejecutan herramientas del sistema con los parámetros que
