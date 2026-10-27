@@ -1,6 +1,7 @@
 // Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 const http = require("http");
 const https = require("https");
+const { authHeaders, redactError } = require("./aiCredentials.cjs");
 const DEFAULT_URL = "http://127.0.0.1:8000/v1";
 const LIMIT = 4 * 1024 * 1024;
 
@@ -21,19 +22,19 @@ function errorText(status, body) {
   return `HTTP ${status}: ${String(body).slice(0, 300)}`;
 }
 
-async function status(rawUrl) {
+async function status(rawUrl, { apiKey = "" } = {}) {
   let baseUrl = rawUrl || DEFAULT_URL;
   try {
     baseUrl = normalizeUrl(baseUrl);
     const data = await new Promise((resolve, reject) => {
       const target = new URL(`${baseUrl}/models`);
-      const req = (target.protocol === "https:" ? https : http).get(target, { timeout:5000, headers:{ Accept:"application/json" } }, res => {
+      const req = (target.protocol === "https:" ? https : http).get(target, { timeout:5000, headers:{ Accept:"application/json", ...authHeaders(apiKey) } }, res => {
         let body = "";
         res.setEncoding("utf8");
         res.on("data", chunk => { body += chunk; if (body.length > LIMIT) req.destroy(new Error("Response too large")); });
         res.on("error", reject);
         res.on("end", () => {
-          if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error(errorText(res.statusCode, body)));
+          if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error(errorText(res.statusCode, redactError(body, apiKey))));
           try { resolve(JSON.parse(body)); } catch { reject(new Error("Invalid JSON from vLLM")); }
         });
       });
@@ -47,7 +48,7 @@ async function status(rawUrl) {
     }));
     return { available:true, models, url:baseUrl, provider:"vllm" };
   } catch (error) {
-    return { available:false, models:[], url:baseUrl, provider:"vllm", error:error.message };
+    return { available:false, models:[], url:baseUrl, provider:"vllm", error:redactError(error.message, apiKey) };
   }
 }
 
@@ -63,7 +64,7 @@ function stream(rawUrl, request, { onChunk, onDone, onError }) {
   const finish = (error) => {
     if (finished) return;
     finished = true;
-    if (error) onError(error.message);
+    if (error) onError(redactError(error.message, request.apiKey));
     else onDone({ numCtx:request.numCtx, doneReason, promptEvalCount:usage.prompt_tokens || 0, evalCount:usage.completion_tokens || 0 });
     response?.destroy();
     req.destroy();
@@ -81,7 +82,7 @@ function stream(rawUrl, request, { onChunk, onDone, onError }) {
   };
   const req = (target.protocol === "https:" ? https : http).request(target, {
     method:"POST", timeout:300000,
-    headers:{ "Content-Type":"application/json", Accept:"text/event-stream", "Content-Length":Buffer.byteLength(body) },
+    headers:{ "Content-Type":"application/json", Accept:"text/event-stream", "Content-Length":Buffer.byteLength(body), ...authHeaders(request.apiKey) },
   }, res => {
     response = res;
     res.setEncoding("utf8");
@@ -90,7 +91,7 @@ function stream(rawUrl, request, { onChunk, onDone, onError }) {
     if (res.statusCode < 200 || res.statusCode >= 300) {
       let errorBody = "";
       res.on("data", chunk => { errorBody += chunk; if (errorBody.length > LIMIT) req.destroy(new Error("Response too large")); });
-      res.on("end", () => finish(new Error(errorText(res.statusCode, errorBody))));
+      res.on("end", () => finish(new Error(errorText(res.statusCode, redactError(errorBody, request.apiKey)))));
       return;
     }
     res.on("data", chunk => {

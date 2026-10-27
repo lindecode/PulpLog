@@ -39,6 +39,7 @@
       "main.js",
       "remoteDocker.cjs",
       "vllm.cjs",
+      "aiCredentials.cjs",
       "preload.js",
       "assets/**/*"
     ],

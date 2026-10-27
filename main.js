@@ -1,5 +1,5 @@
 // Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut, clipboard } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut, clipboard, safeStorage } = require("electron");
 const path = require("path");
 const fs   = require("fs");
 const crypto = require("crypto");
@@ -11,6 +11,7 @@ const { execFile, spawn } = require("child_process");
 const { Client: SshClient } = require("ssh2");
 const { dockerListScript, dockerReadCheck, dockerLogsScript, parseDockerContainers } = require("./remoteDocker.cjs");
 const vllm = require("./vllm.cjs");
+const { createCredentialStore, authHeaders, redactError } = require("./aiCredentials.cjs");
 
 const IS_SMOKE_TEST = process.env.PULPLOG_SMOKE_TEST === "1";
 const IS_DEV = !IS_SMOKE_TEST && (process.env.NODE_ENV === "development" || !app.isPackaged);
@@ -2071,6 +2072,7 @@ function normalizeSettings(value) {
     skippedUpdateVersion,
     ollamaUrl,
     aiProvider: s.aiProvider === "vllm" ? "vllm" : "ollama",
+    aiCredentialRevision: Number.isSafeInteger(s.aiCredentialRevision) ? s.aiCredentialRevision : 0,
     vllmUrl: typeof s.vllmUrl === "string" && s.vllmUrl.trim() ? s.vllmUrl.trim().replace(/\/+$/, "") : vllm.DEFAULT_URL,
     vllmModel: typeof s.vllmModel === "string" ? s.vllmModel.trim() : "",
     ollamaModel,
@@ -2130,6 +2132,39 @@ const OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434";
 const OLLAMA_CONTEXT_SIZES = [4096, 8192, 16384, 32768, 65536, 131072];
 const OLLAMA_MAX_MESSAGES = 200;
 const OLLAMA_MAX_PAYLOAD_CHARS = 2_000_000;
+const aiCredentials = createCredentialStore({ filename:path.join(app.getPath("userData"), "ai-credentials.json"), safeStorage });
+
+function aiEndpoint(provider, value) {
+  if (!["ollama", "vllm"].includes(provider)) throw new Error("Invalid AI provider");
+  const url = new URL(value || (provider === "vllm" ? vllm.DEFAULT_URL : OLLAMA_DEFAULT_URL));
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash)
+    throw new Error("Invalid AI server URL");
+  return provider === "vllm" ? vllm.normalizeUrl(url.toString()) : normalizeOllamaUrl(url.toString());
+}
+
+async function fetchAiStatus(provider, endpoint) {
+  try {
+    const apiKey = await aiCredentials.get(provider, endpoint);
+    return provider === "vllm" ? vllm.status(endpoint, { apiKey }) : fetchOllamaStatus(endpoint, apiKey);
+  } catch (error) {
+    return { available:false, models:[], url:endpoint, error:error.message };
+  }
+}
+
+ipcMain.handle("ai:credential-state", (event, payload) => {
+  assertTrustedSender(event);
+  return aiCredentials.state(payload?.provider, aiEndpoint(payload?.provider, payload?.url));
+});
+ipcMain.handle("ai:credential-set", async (event, payload) => {
+  assertTrustedSender(event);
+  const result = await aiCredentials.set(payload?.provider, aiEndpoint(payload?.provider, payload?.url), payload?.key, payload?.remember === true);
+  const settings = await updateSettings(current => ({ ...current, aiCredentialRevision:current.aiCredentialRevision + 1 }));
+  return { ...result, revision:settings.aiCredentialRevision };
+});
+ipcMain.handle("ai:test", (event, payload) => {
+  assertTrustedSender(event);
+  return fetchAiStatus(payload?.provider, aiEndpoint(payload?.provider, payload?.url));
+});
 
 function normalizeOllamaUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== "string") return OLLAMA_DEFAULT_URL;
@@ -2149,7 +2184,8 @@ function normalizeOllamaContext(value) {
 }
 
 // Ollama answers errors as {"error":"..."}; surface that text instead of a bare status code.
-function ollamaErrorText(statusCode, body) {
+function ollamaErrorText(statusCode, body, apiKey = "") {
+  body = redactError(body, apiKey);
   try {
     const parsed = JSON.parse(body);
     if (parsed?.error) return String(parsed.error);
@@ -2157,7 +2193,7 @@ function ollamaErrorText(statusCode, body) {
   return `HTTP ${statusCode}${body ? `: ${String(body).slice(0, 300)}` : ""}`;
 }
 
-function ollamaJson(baseUrl, apiPath, { body = null, timeout = 3000 } = {}) {
+function ollamaJson(baseUrl, apiPath, { body = null, timeout = 3000, apiKey = "" } = {}) {
   return new Promise((resolve, reject) => {
     const targetUrl = new URL(`${baseUrl}${apiPath}`);
     const transport = targetUrl.protocol === "https:" ? https : http;
@@ -2166,6 +2202,7 @@ function ollamaJson(baseUrl, apiPath, { body = null, timeout = 3000 } = {}) {
       method: data ? "POST" : "GET",
       headers: {
         Accept: "application/json",
+        ...authHeaders(apiKey),
         ...(data ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } : {}),
       },
       timeout,
@@ -2177,7 +2214,7 @@ function ollamaJson(baseUrl, apiPath, { body = null, timeout = 3000 } = {}) {
         if (text.length > 4 * 1024 * 1024) req.destroy(new Error("Response too large"));
       });
       res.on("end", () => {
-        if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error(ollamaErrorText(res.statusCode, text)));
+        if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error(ollamaErrorText(res.statusCode, text, apiKey)));
         try { resolve(JSON.parse(text)); } catch { reject(new Error("Invalid JSON from Ollama")); }
       });
     });
@@ -2189,7 +2226,7 @@ function ollamaJson(baseUrl, apiPath, { body = null, timeout = 3000 } = {}) {
 }
 
 // Older /api/tags lists models without capabilities; /api/show adds them plus the trained context length.
-async function describeOllamaModel(baseUrl, raw) {
+async function describeOllamaModel(baseUrl, raw, apiKey) {
   const name = typeof raw === "string" ? raw : (raw?.name || raw?.model || "");
   const model = {
     name,
@@ -2202,7 +2239,7 @@ async function describeOllamaModel(baseUrl, raw) {
   // Recent Ollama versions already include both in /api/tags.
   if (model.capabilities.length && model.contextLength) return model;
   try {
-    const info = await ollamaJson(baseUrl, "/api/show", { body: { model: name }, timeout: 4000 });
+    const info = await ollamaJson(baseUrl, "/api/show", { body: { model: name }, timeout: 4000, apiKey });
     if (Array.isArray(info?.capabilities)) model.capabilities = info.capabilities;
     const contextKey = Object.keys(info?.model_info || {}).find(key => key.endsWith(".context_length"));
     if (contextKey) model.contextLength = Number(info.model_info[contextKey]) || 0;
@@ -2210,15 +2247,15 @@ async function describeOllamaModel(baseUrl, raw) {
   return model;
 }
 
-async function fetchOllamaStatus(baseUrl) {
+async function fetchOllamaStatus(baseUrl, apiKey = "") {
   try {
-    const data = await ollamaJson(baseUrl, "/api/tags");
+    const data = await ollamaJson(baseUrl, "/api/tags", { apiKey });
     const rawModels = (Array.isArray(data?.models) ? data.models : [])
       .filter(m => typeof m === "string" ? m : (m?.name || m?.model));
-    const models = await Promise.all(rawModels.slice(0, 50).map(m => describeOllamaModel(baseUrl, m)));
+    const models = await Promise.all(rawModels.slice(0, 50).map(m => describeOllamaModel(baseUrl, m, apiKey)));
     return { available: true, models, url: baseUrl };
   } catch (err) {
-    return { available: false, error: err.code || err.message, models: [], url: baseUrl };
+    return { available: false, error: redactError(err.code || err.message, apiKey), models: [], url: baseUrl };
   }
 }
 
@@ -2254,7 +2291,7 @@ function startOllamaChat(sender, streamId, baseUrl, request, withThink) {
     if (entry.stopped || entry.finished) return;
     entry.finished = true;
     if (activeAiStreams.get(streamId) === entry) activeAiStreams.delete(streamId);
-    send(ch, streamId, arg);
+    send(ch, streamId, ch === "ollama:error" ? redactError(arg, request.apiKey) : arg);
   };
 
   const postData = JSON.stringify({
@@ -2294,6 +2331,7 @@ function startOllamaChat(sender, streamId, baseUrl, request, withThink) {
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(postData),
       Accept: "application/x-ndjson",
+      ...authHeaders(request.apiKey),
     },
     timeout: 300000,
   }, (res) => {
@@ -2302,7 +2340,7 @@ function startOllamaChat(sender, streamId, baseUrl, request, withThink) {
       res.setEncoding("utf8");
       res.on("data", c => { errBody += c; });
       res.on("end", () => {
-        const message = ollamaErrorText(res.statusCode, errBody);
+        const message = ollamaErrorText(res.statusCode, errBody, request.apiKey);
         // Models without a thinking mode (e.g. granite) reject `think`; retry once without it.
         if (withThink && /think/i.test(message) && !entry.stopped) {
           entry.finished = true;
@@ -2332,7 +2370,7 @@ function startOllamaChat(sender, streamId, baseUrl, request, withThink) {
 
   req.on("timeout", () => req.destroy(new Error("Tiempo de espera agotado al consultar Ollama")));
   req.on("error", (err) => {
-    if (!entry.stopped && !entry.finished) logEntry("WARN", "ollama", `Error en stream ${streamId}: ${err.message}`);
+    if (!entry.stopped && !entry.finished) logEntry("WARN", "ollama", `Error en stream ${streamId}: ${redactError(err.message, request.apiKey)}`);
     finish("ollama:error", err.code === "ECONNREFUSED" ? `ECONNREFUSED ${baseUrl}` : (err.message || "Error al conectar con Ollama"));
   });
   req.write(postData);
@@ -2345,8 +2383,7 @@ ipcMain.handle("ollama:status", async (event) => {
   assertTrustedSender(event);
   await settingsWriteQueue;
   const settings = await loadSettings();
-  if (settings.aiProvider === "vllm") return vllm.status(settings.vllmUrl);
-  return fetchOllamaStatus(normalizeOllamaUrl(settings.ollamaUrl));
+  return fetchAiStatus(settings.aiProvider, aiEndpoint(settings.aiProvider, settings.aiProvider === "vllm" ? settings.vllmUrl : settings.ollamaUrl));
 });
 
 ipcMain.handle("ollama:chat:start", async (event, payload) => {
@@ -2365,6 +2402,7 @@ ipcMain.handle("ollama:chat:start", async (event, payload) => {
   // Never ask for more context than the model was trained with; Ollama would only waste memory.
   const maxContext = Number(payload?.maxContext) >= 2048 ? Number(payload.maxContext) : Infinity;
   const numCtx = Math.min(normalizeOllamaContext(settings.ollamaContextTokens), maxContext);
+  const apiKey = await aiCredentials.get(settings.aiProvider, baseUrl);
 
   stopAiStream(streamId);
   const sender = event.sender;
@@ -2385,13 +2423,13 @@ ipcMain.handle("ollama:chat:start", async (event, payload) => {
       if (activeAiStreams.get(streamId) === entry) activeAiStreams.delete(streamId);
       send(channel, value);
     };
-    entry.req = vllm.stream(baseUrl, { model, messages, numCtx }, {
+    entry.req = vllm.stream(baseUrl, { model, messages, numCtx, apiKey }, {
       onChunk:chunk => send("ollama:chunk", chunk),
       onDone:meta => finish("ollama:done", meta),
       onError:error => finish("ollama:error", error),
     });
     activeAiStreams.set(streamId, entry);
-  } else startOllamaChat(sender, streamId, baseUrl, { model, messages, numCtx }, true);
+  } else startOllamaChat(sender, streamId, baseUrl, { model, messages, numCtx, apiKey }, true);
   return { ok: true, streamId, numCtx };
 });
 

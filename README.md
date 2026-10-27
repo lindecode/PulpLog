@@ -247,17 +247,45 @@ curl http://127.0.0.1:8000/v1/models
 
 En PowerShell usa `Invoke-RestMethod http://127.0.0.1:8000/v1/models`.
 Consulta la [API compatible de vLLM](https://docs.vllm.ai/en/stable/serving/openai_compatible_server/).
-La integración actual no configura API keys ni envía un token Bearer: un endpoint
-que exija autenticación responderá con un error hasta que se añada ese soporte.
+Si el servidor exige autenticación, configura su API key en PulpLog. Se envía
+como `Authorization: Bearer ...` al consultar modelos y conversar. Esto también
+sirve para Ollama detrás de un proxy que acepte autenticación Bearer; el servidor
+local de Ollama normalmente no requiere clave.
+
+#### API keys y prueba de conexión
+
+En **Configuración**, elige el proveedor. Sólo se muestran su URL, API key y
+opciones de almacenamiento. Puedes restablecer la URL local con el botón de
+restablecer y usar **Probar conexión** para consultar los modelos disponibles.
+
+Para agregar o sustituir una clave, escríbela en **API key (Bearer)** y pulsa
+**Guardar clave** o **Guardar y probar**. La clave nueva permanece oculta salvo
+que actives **Mostrar nueva clave**. Después de guardarla se vacía el campo:
+la clave almacenada no se devuelve a la interfaz. **Eliminar clave** la borra.
+
+**Recordar en este equipo** utiliza el cifrado de `safeStorage` de Electron y
+guarda las credenciales fuera de los ajustes generales, en `ai-credentials.json`
+dentro de los datos de usuario de la aplicación. Si no hay almacenamiento seguro
+disponible, se conservan sólo en memoria durante la sesión; en Linux no se utiliza
+el backend `basic_text` para guardarlas. Las claves cifradas no deben considerarse
+portables entre usuarios o equipos.
+
+Las claves se asocian tanto al proveedor como a la URL exacta del servidor.
+Cambiar la URL no reenvía la clave guardada al nuevo destino: debes configurarla
+para ese destino. No se incluyen en URLs, ajustes generales ni exportaciones;
+los errores de las solicitudes ocultan la clave utilizada. Cambiar una clave
+reinicia el contexto del panel de IA. Para servidores remotos, utiliza HTTPS
+o un túnel SSH: una clave Bearer no cifra el tráfico.
 
 #### Conectar y analizar desde PulpLog
 
 1. Abre **Configuración** y selecciona el proveedor de IA.
 2. Configura su URL; pulsa Enter o sal del campo para guardarla. Para vLLM incluye
    el prefijo `/v1`; no agregues `/models` ni `/chat/completions` al campo.
-3. Abre una bitácora local, Docker o SSH y pulsa **IA**.
-4. Selecciona un modelo del servidor y escribe una pregunta.
-5. Para acotar el análisis, selecciona filas o aplica filtros antes de comenzar.
+3. Si requiere autenticación, guarda la API key y pulsa **Probar conexión**.
+4. Abre una bitácora local, Docker o SSH y pulsa **IA**.
+5. Selecciona un modelo del servidor y escribe una pregunta.
+6. Para acotar el análisis, selecciona filas o aplica filtros antes de comenzar.
 
 El chat utiliza las filas seleccionadas; si no hay selección, usa las visibles
 según los filtros. El presupuesto de contexto puede recortar el contenido y da
@@ -299,7 +327,7 @@ sin requerir GPU ni archivos de modelos en el equipo del visor.
 | No aparecen modelos en Ollama | Ejecuta `ollama list` contra el mismo servidor y descarga un modelo de chat |
 | No aparecen modelos en vLLM | Espera a que termine de cargar y consulta `/v1/models` |
 | HTTP 404 | Revisa proveedor y URL base; Ollama no usa el prefijo `/v1` de esta integración |
-| HTTP 401 o 403 | El endpoint exige autorización; PulpLog todavía no permite configurar tokens de API |
+| HTTP 401 o 403 | Revisa la API key del proveedor, su vigencia y la URL a la que está asociada; se admite autenticación Bearer |
 | Error de plantilla de chat | Comprueba que el modelo sea de conversación/Instruct y que vLLM tenga una plantilla compatible |
 | Contexto excedido o falta de memoria | Reduce el contexto y las filas enviadas; revisa modelo, cuantización y capacidad del servidor |
 | Puerto ocupado | Comprueba si ya existe un proceso activo o elige otro puerto y actualiza la URL |

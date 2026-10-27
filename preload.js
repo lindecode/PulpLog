@@ -142,6 +142,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   /* ── Local AI (Ollama) integration ── */
   getOllamaStatus: () => ipcRenderer.invoke("ollama:status"),
+  getAiCredentialState: config => ipcRenderer.invoke("ai:credential-state", config),
+  setAiCredential: config => ipcRenderer.invoke("ai:credential-set", config),
+  testAiConnection: config => ipcRenderer.invoke("ai:test", config),
   // options: { model, messages:[{ role, content }], maxContext }
   streamOllamaChat(options, { onChunk, onDone, onError }) {
     const streamId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;

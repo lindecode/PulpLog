@@ -96,3 +96,30 @@ test("cancels an active vLLM stream without late callbacks", async t => {
   await closed;
   assert.equal(callbacks, 0);
 });
+
+test("authenticates model and chat requests and redacts rejected credentials", async t => {
+  const apiKey = "test-auth-secret";
+  const url = await server(t, (req, res) => {
+    assert.equal(req.headers.authorization, `Bearer ${apiKey}`);
+    if (req.url.endsWith("models")) { res.end('{"data":[{"id":"test"}]}'); return; }
+    let body = "";
+    req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      assert.equal(body.includes(apiKey), false);
+      res.writeHead(401); res.end(JSON.stringify({ error:{ message:`Rejected ${apiKey}` } }));
+    });
+  });
+  assert.equal((await status(url, { apiKey })).available, true);
+  await assert.rejects(new Promise((resolve, reject) => stream(url,
+    { model:"test", messages:[], numCtx:4096, apiKey },
+    { onChunk() {}, onDone:resolve, onError:message => reject(new Error(message)) })), /Rejected \[REDACTED\]/);
+});
+
+test("redacts long API keys before truncating server errors", async t => {
+  const apiKey = "test-" + "x".repeat(1500);
+  const url = await server(t, (_req, res) => {
+    res.writeHead(401); res.end(JSON.stringify({ error:{ message:`Rejected ${apiKey}` } }));
+  });
+  const result = await status(url, { apiKey });
+  assert.equal(result.error, "Rejected [REDACTED]");
+});

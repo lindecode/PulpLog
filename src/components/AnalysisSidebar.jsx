@@ -120,7 +120,7 @@ const QUICK_TASKS = ["summary", "root_cause", "searches", "report"];
 function AnalysisSidebar(props) {
   const settings = useContext(AiSettingsCtx);
   const provider = settings.aiProvider || "ollama";
-  return <AnalysisSidebarContent key={`${provider}:${provider === "vllm" ? settings.vllmUrl : settings.ollamaUrl}`} {...props} />;
+  return <AnalysisSidebarContent key={`${provider}:${provider === "vllm" ? settings.vllmUrl : settings.ollamaUrl}:${settings.aiCredentialRevision || 0}`} {...props} />;
 }
 
 function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, extraFilters, search, extraSearches, timeRange,
