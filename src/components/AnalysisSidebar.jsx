@@ -6,6 +6,7 @@ import { buildChatMessages, buildContextSnapshot, effectiveContextTokens } from 
 import { selectedLogRows } from "./LogRow.jsx";
 import { Btn } from "./SharedUI.jsx";
 import { Markdown } from "./Markdown.jsx";
+import { redactSecrets } from "../redaction.mjs";
 
 const MAX_PROMPT_LINES = 2000;
 const MAX_PROMPT_CHARS = 220000;
@@ -17,14 +18,6 @@ const MIN_WIDTH = 380;
 const DEFAULT_WIDTH = 680;
 
 const AiSettingsCtx = createContext({ ollamaUrl:"", ollamaModel:"", ollamaContextTokens:16384, savePref:() => {} });
-
-function redactSecrets(text) {
-  return String(text || "")
-    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gi, "[REDACTED_PRIVATE_KEY]")
-    .replace(/\b(authorization:\s*bearer\s+)[^\s]+/gi, "$1[REDACTED_TOKEN]")
-    .replace(/\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)(\s*[:=]\s*)([^\s,;]+)/gi, "$1$2[REDACTED]")
-    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED_JWT]");
-}
 
 const joinCriteria = (main, extras) => [main, ...(extras || []).map(item => item?.text)].filter(Boolean).join(" → ");
 
@@ -179,7 +172,7 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
     const rows = redact ? limitedRows.map(item => ({ ...item, raw: redactSecrets(item.raw) })) : limitedRows;
     return {
       rows, lineLimitHit, charLimitHit,
-      prompt: buildPrompt({ t, metadata, rows, task, lineLimitHit, charLimitHit }),
+      prompt: buildPrompt({ t, metadata:redact ? redactSecrets(metadata) : metadata, rows, task, lineLimitHit, charLimitHit }),
     };
   }, [open, tab, baseRows, redact, t, metadata, task]);
 
@@ -255,7 +248,7 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
     const rows = redact ? candidates.map(item => ({ ...item, raw: redactSecrets(item.raw) })) : candidates;
     const built = buildContextSnapshot({
       instructions: t("analysis_system"),
-      metadata,
+      metadata:redact ? redactSecrets(metadata) : metadata,
       rows,
       contextTokens,
       describeRows: included => `- ${t("analysis_prompt_rows")}: ${t("analysis_rows_included", fmtNum(included), fmtNum(baseRows.length))}`,

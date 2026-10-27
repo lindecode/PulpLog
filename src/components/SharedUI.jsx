@@ -195,5 +195,11 @@ function Sep() {
   return <span style={{ width:"0.5px", background:"var(--pl-text-8)", alignSelf:"stretch" }} />;
 }
 
+function FilterLimitNotice({ visible }) {
+  const t = useLang();
+  return visible ? <div role="alert" style={{ padding:"6px 10px", fontSize:11,
+    color:"var(--pl-error-text)", background:"var(--pl-error-bg)" }}>{t("filter_limit_error")}</div> : null;
+}
 
-export { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep };
+
+export { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice };

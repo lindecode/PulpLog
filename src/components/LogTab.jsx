@@ -7,7 +7,7 @@ import { classifyLines, countLevels, splitTextChunk } from "../logProcessing.mjs
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, getCachedFile, cacheFile, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtSize, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 import { RotationBanner } from "./Modals.jsx";
 
@@ -59,6 +59,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   const listRef       = useRef(null);
   const itemsRef      = useRef([]);
   const carryRef      = useRef("");
+  const decodedCharsRef = useRef(0);
   const statsRef      = useRef({ error:0, warn:0, info:0, debug:0, trace:0 });
   const progressRef   = useRef(0);
   const loadedRef     = useRef(false);
@@ -79,6 +80,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   const appendCompleteLines = (lines) => {
     if (!lines.length) return processingRef.current;
     const startLine = nextParsedRef.current;
+    if (startLine + lines.length > 1_000_001) throw new Error(t("file_memory_limit"));
     nextParsedRef.current += lines.length;
     processingRef.current = processingRef.current.then(async () => {
       const result = workerRef.current
@@ -87,7 +89,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
             const items = classifyLines(lines, startLine);
             return { items, stats:countLevels(items) };
           })();
-      itemsRef.current.push(...result.items);
+      for (const item of result.items) itemsRef.current.push(item);
       for (const key of ["error", "warn", "info", "debug", "trace"]) {
         statsRef.current[key] += result.stats[key] || 0;
       }
@@ -95,6 +97,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     return processingRef.current;
   };
   const appendChunk = (chunk) => {
+    decodedCharsRef.current += chunk.length;
+    if (decodedCharsRef.current > 128 * 1024 * 1024) throw new Error(t("file_memory_limit"));
     const split = splitTextChunk(carryRef.current, chunk);
     carryRef.current = split.carry;
     appendCompleteLines(split.lines);
@@ -160,6 +164,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     const resetBuffers = () => {
       itemsRef.current = [];
       carryRef.current = "";
+      decodedCharsRef.current = 0;
       statsRef.current = { error:0, warn:0, info:0, debug:0, trace:0 };
       progressRef.current = 0;
       processingRef.current = Promise.resolve();
@@ -201,11 +206,14 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
             }
           },
           onChunk(chunk) {
-            if (!disposed) appendChunk(chunk);
+            if (disposed) return;
+            try { appendChunk(chunk); }
+            catch (error) { cancelRead?.(); setLoadError(error.message); setLoading(false); }
           },
           async onDone(bytesRead) {
             if (disposed) return;
-            await publishLoadedData();
+            try { await publishLoadedData(); }
+            catch (error) { setLoadError(error.message); setLoading(false); return; }
             if (disposed) return;
             loadedRef.current = true;
             watchOffsetRef.current = bytesRead;
@@ -226,6 +234,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
       resetBuffers();
       const file = webFile;
       if (!file) { setLoading(false); return; }
+      if (!compressed && file.size > 256 * 1024 * 1024) throw new Error(t("file_memory_limit"));
       if (compressed) {
         if (typeof DecompressionStream !== "function") {
           throw new Error(t("gzip_web_unsupported"));
@@ -256,12 +265,13 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
       };
       reader.onload = async (e) => {
         if (disposed) return;
-        appendChunk(e.target.result);
-        await publishLoadedData();
-        if (disposed) return;
-        loadedRef.current = true;
-        setLoading(false);
-        setProgress(1);
+        try {
+          appendChunk(e.target.result);
+          await publishLoadedData();
+          if (disposed) return;
+          loadedRef.current = true;
+          setLoading(false); setProgress(1);
+        } catch (error) { setLoadError(error.message); setLoading(false); }
       };
       reader.onerror = () => { if (!disposed) setLoading(false); };
       reader.readAsText(file);
@@ -301,7 +311,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     const unwatch = window.electronAPI.watchFile(filePath, {
       startOffset: watchOffsetRef.current,
       async onNewLines(text) {
-        appendChunk(text);
+        try { appendChunk(text); }
+        catch (error) { setTailing(false); setLoadError(error.message); return; }
         await processingRef.current;
         setClassified([...itemsRef.current]);
         setStats({ ...statsRef.current });
@@ -314,7 +325,7 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     return () => unwatch?.();
   }, [tailing, loading, filePath, watchNonce, compressed]); // eslint-disable-line
 
-  const { filtered, filterRegexValid, extraFilterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines } =
+  const { filtered, filterRegexValid, extraFilterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines, filterTimedOut } =
     useFilteredLogs("file", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric, extraSearchesDebounced, extraFiltersDebounced);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
@@ -583,6 +594,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
         </div>
       </div>
+
+      <FilterLimitNotice visible={filterTimedOut} />
 
       {analysisMounted && (
         <AnalysisSidebar

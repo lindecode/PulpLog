@@ -55,14 +55,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     };
   },
 
-  onMenuOpenFile: (cb) => { ipcRenderer.on("menu:open-file", cb); return () => ipcRenderer.removeListener("menu:open-file", cb); },
+  onMenuOpenFile: (cb) => { const h = () => cb(); ipcRenderer.on("menu:open-file", h); return () => ipcRenderer.removeListener("menu:open-file", h); },
   onMenuOpenRecent: (cb) => { const h = (_e, fp) => cb(fp); ipcRenderer.on("menu:open-recent", h); return () => ipcRenderer.removeListener("menu:open-recent", h); },
-  onMenuNewTab:   (cb) => { ipcRenderer.on("menu:new-tab",   cb); return () => ipcRenderer.removeListener("menu:new-tab",   cb); },
-  onMenuAbout:    (cb) => { ipcRenderer.on("menu:about",     cb); return () => ipcRenderer.removeListener("menu:about",     cb); },
-  onMenuUserGuide:(cb) => { ipcRenderer.on("menu:user-guide", cb); return () => ipcRenderer.removeListener("menu:user-guide", cb); },
-  onMenuSplitRight: (cb) => { ipcRenderer.on("menu:split-right", cb); return () => ipcRenderer.removeListener("menu:split-right", cb); },
-  onMenuSplitDown:  (cb) => { ipcRenderer.on("menu:split-down",  cb); return () => ipcRenderer.removeListener("menu:split-down",  cb); },
-  onMenuSplitClose: (cb) => { ipcRenderer.on("menu:split-close", cb); return () => ipcRenderer.removeListener("menu:split-close", cb); },
+  onMenuNewTab:   (cb) => { const h = () => cb(); ipcRenderer.on("menu:new-tab", h); return () => ipcRenderer.removeListener("menu:new-tab", h); },
+  onMenuAbout:    (cb) => { const h = () => cb(); ipcRenderer.on("menu:about", h); return () => ipcRenderer.removeListener("menu:about", h); },
+  onMenuUserGuide:(cb) => { const h = () => cb(); ipcRenderer.on("menu:user-guide", h); return () => ipcRenderer.removeListener("menu:user-guide", h); },
+  onMenuSplitRight: (cb) => { const h = () => cb(); ipcRenderer.on("menu:split-right", h); return () => ipcRenderer.removeListener("menu:split-right", h); },
+  onMenuSplitDown:  (cb) => { const h = () => cb(); ipcRenderer.on("menu:split-down", h); return () => ipcRenderer.removeListener("menu:split-down", h); },
+  onMenuSplitClose: (cb) => { const h = () => cb(); ipcRenderer.on("menu:split-close", h); return () => ipcRenderer.removeListener("menu:split-close", h); },
 
   getCapabilities: (options) => ipcRenderer.invoke("system:capabilities", options),
   copyText: (text) => ipcRenderer.invoke("clipboard:writeText", text),

@@ -83,6 +83,7 @@ function ProviderFields({ provider, settings, onTogglePref }) {
   };
   const remote = endpoint && !/^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/i.test(new URL(endpoint).hostname);
   const keyValid = apiKey.length <= 8192 && !/[^\x21-\x7e]/.test(apiKey);
+  const insecureAuth = Boolean(remote && endpoint.startsWith("http:") && (apiKey || credential?.configured));
   return <>
     <label style={labelStyle}>
       <span style={{ flexBasis:110 }}>{t("ai_server_url")}</span>
@@ -112,10 +113,11 @@ function ProviderFields({ provider, settings, onTogglePref }) {
     </div>
     {credential && !credential.canPersist && <div style={{ color:"var(--pl-status-warn)", fontSize:10 }}>{t("ai_key_session_only")}</div>}
     {remote && <div style={{ color:"var(--pl-status-warn)", fontSize:10 }}>{t("pref_ollama_remote_warning")}</div>}
+    {insecureAuth && <div role="alert" style={{ color:"var(--pl-error-text)", fontSize:10 }}>{t("ai_key_https_required")}</div>}
     <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-      <button type="button" style={fieldStyle} disabled={busy || !endpoint || !keyValid || !apiKey} onClick={() => apply(false)}>{t("ai_save_key")}</button>
+      <button type="button" style={fieldStyle} disabled={busy || !endpoint || !keyValid || !apiKey || insecureAuth} onClick={() => apply(false)}>{t("ai_save_key")}</button>
       <button type="button" style={fieldStyle} disabled={busy || !endpoint || !credential?.configured} onClick={remove}>{t("ai_remove_key")}</button>
-      <button type="button" style={fieldStyle} disabled={busy || !endpoint || !keyValid || !credential} onClick={() => apply(true)}>
+      <button type="button" style={fieldStyle} disabled={busy || !endpoint || !keyValid || !credential || insecureAuth} onClick={() => apply(true)}>
         {t(busy ? "ai_testing" : apiKey ? "ai_save_test" : "ai_test")}
       </button>
     </div>

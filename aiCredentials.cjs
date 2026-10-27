@@ -17,7 +17,16 @@ function redactError(value, key) {
   return text.replace(/(authorization\s*[:=]\s*bearer\s+)\S+/gi, "$1[REDACTED]");
 }
 
-function authHeaders(key) {
+function assertCredentialTransport(endpoint, key) {
+  if (!key) return;
+  const url = new URL(endpoint);
+  const loopback = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/i.test(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+    throw new Error("API keys require HTTPS outside loopback");
+}
+
+function authHeaders(key, endpoint) {
+  if (endpoint) assertCredentialTransport(endpoint, key);
   return key ? { Authorization:`Bearer ${validateKey(key)}` } : {};
 }
 
@@ -85,4 +94,4 @@ function createCredentialStore({ filename, safeStorage, platform = process.platf
   return { get, state, set };
 }
 
-module.exports = { authHeaders, redactError, validateKey, createCredentialStore };
+module.exports = { authHeaders, assertCredentialTransport, redactError, validateKey, createCredentialStore };

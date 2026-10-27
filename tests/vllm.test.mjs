@@ -123,3 +123,11 @@ test("redacts long API keys before truncating server errors", async t => {
   const result = await status(url, { apiKey });
   assert.equal(result.error, "Rejected [REDACTED]");
 });
+
+test("stops oversized AI output before delivering an unlimited response", async t => {
+  const url = await server(t, (_req, res) => {
+    const body = JSON.stringify({ choices:[{ delta:{ content:"a".repeat(5 * 1024 * 1024) } }] });
+    res.end(`data: ${body}\n\ndata: [DONE]\n\n`);
+  });
+  await assert.rejects(chat(url), /exceeds 4 MB/);
+});

@@ -6,7 +6,7 @@ import { useRememberedState, useBatchedLines, useFilteredLogs, useAvailableLogDa
 import { classifyLines, countLevels, appendRecentItems } from "../logProcessing.mjs";
 import { reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtNum } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 
 /* ═══════════════════════════════════════════
@@ -152,7 +152,7 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
 
   const stats = useMemo(() => countLevels(classified), [classified]);
 
-  const { filtered, filterRegexValid, extraFilterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines } =
+  const { filtered, filterRegexValid, extraFilterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines, filterTimedOut } =
     useFilteredLogs("docker", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric, extraSearchesDebounced, extraFiltersDebounced);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
@@ -413,6 +413,8 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
         </div>
       </div>
+
+      <FilterLimitNotice visible={filterTimedOut} />
 
       {analysisMounted && (
         <AnalysisSidebar

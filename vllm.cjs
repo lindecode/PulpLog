@@ -28,7 +28,7 @@ async function status(rawUrl, { apiKey = "" } = {}) {
     baseUrl = normalizeUrl(baseUrl);
     const data = await new Promise((resolve, reject) => {
       const target = new URL(`${baseUrl}/models`);
-      const req = (target.protocol === "https:" ? https : http).get(target, { timeout:5000, headers:{ Accept:"application/json", ...authHeaders(apiKey) } }, res => {
+      const req = (target.protocol === "https:" ? https : http).get(target, { timeout:5000, headers:{ Accept:"application/json", ...authHeaders(apiKey, target) } }, res => {
         let body = "";
         res.setEncoding("utf8");
         res.on("data", chunk => { body += chunk; if (body.length > LIMIT) req.destroy(new Error("Response too large")); });
@@ -61,6 +61,7 @@ function stream(rawUrl, request, { onChunk, onDone, onError }) {
   let buffer = "";
   let doneReason = "";
   let usage = {};
+  let receivedBytes = 0;
   const finish = (error) => {
     if (finished) return;
     finished = true;
@@ -82,7 +83,7 @@ function stream(rawUrl, request, { onChunk, onDone, onError }) {
   };
   const req = (target.protocol === "https:" ? https : http).request(target, {
     method:"POST", timeout:300000,
-    headers:{ "Content-Type":"application/json", Accept:"text/event-stream", "Content-Length":Buffer.byteLength(body), ...authHeaders(request.apiKey) },
+    headers:{ "Content-Type":"application/json", Accept:"text/event-stream", "Content-Length":Buffer.byteLength(body), ...authHeaders(request.apiKey, target) },
   }, res => {
     response = res;
     res.setEncoding("utf8");
@@ -96,6 +97,8 @@ function stream(rawUrl, request, { onChunk, onDone, onError }) {
     }
     res.on("data", chunk => {
       if (finished) return;
+      receivedBytes += Buffer.byteLength(chunk);
+      if (receivedBytes > LIMIT) return finish(new Error("AI response exceeds 4 MB"));
       buffer += chunk;
       // CRLF can be split between network chunks; normalize only complete pairs.
       buffer = buffer.replace(/\r\n/g, "\n");

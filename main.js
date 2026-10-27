@@ -1,6 +1,7 @@
 // Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut, clipboard, safeStorage } = require("electron");
 const path = require("path");
+const { pathToFileURL } = require("url");
 const fs   = require("fs");
 const crypto = require("crypto");
 const { StringDecoder } = require("string_decoder");
@@ -11,19 +12,26 @@ const { execFile, spawn } = require("child_process");
 const { Client: SshClient } = require("ssh2");
 const { dockerListScript, dockerReadCheck, dockerLogsScript, parseDockerContainers } = require("./remoteDocker.cjs");
 const vllm = require("./vllm.cjs");
-const { createCredentialStore, authHeaders, redactError } = require("./aiCredentials.cjs");
+const { createCredentialStore, authHeaders, assertCredentialTransport, redactError } = require("./aiCredentials.cjs");
+const { isTrustedSender, assertStreamOwner } = require("./ipcSecurity.cjs");
+const { createLineDecoder, MAX_FILE_BYTES, MAX_AI_BYTES } = require("./streamLimits.cjs");
 
 const IS_SMOKE_TEST = process.env.PULPLOG_SMOKE_TEST === "1";
 const IS_DEV = !IS_SMOKE_TEST && (process.env.NODE_ENV === "development" || !app.isPackaged);
 const GITHUB_RELEASES_URL = "https://github.com/lindecode/PulpLog/releases";
 const GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/lindecode/PulpLog/releases/latest";
+const trustedContents = new WeakSet();
 
 function assertTrustedSender(event) {
-  const source = event?.senderFrame?.url || event?.sender?.getURL?.() || "";
-  const trusted = IS_DEV
-    ? /^http:\/\/(?:localhost|127\.0\.0\.1):5173(?:\/|$)/.test(source)
-    : source.startsWith("file:");
-  if (!trusted) throw new Error("IPC sender is not trusted");
+  const appUrl = IS_DEV ? "http://localhost:5173/" : pathToFileURL(path.join(__dirname, "dist", "index.html")).href;
+  if (!isTrustedSender(event, trustedContents, appUrl)) throw new Error("IPC sender is not trusted");
+}
+
+function handleTrusted(channel, handler) {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedSender(event);
+    return handler(event, ...args);
+  });
 }
 
 function normalizeLocalPath(value) {
@@ -544,7 +552,7 @@ async function getSystemCapabilities(options = {}) {
   };
 }
 
-ipcMain.handle("system:capabilities", async (_event, options = {}) => {
+handleTrusted("system:capabilities", async (_event, options = {}) => {
   const caps = await getSystemCapabilities(options);
   if (!options?.silent) {
     for (const [name, cap] of Object.entries(caps)) {
@@ -652,6 +660,7 @@ function createWindow(splash = null) {
     },
   });
   let revealed = false;
+  trustedContents.add(win.webContents);
   let revealDelayTimer = null;
   let revealFallback = null;
   const revealWindow = (force = false) => {
@@ -687,6 +696,8 @@ function createWindow(splash = null) {
     const current = win.webContents.getURL();
     if (current && url !== current) event.preventDefault();
   });
+  win.webContents.on("will-frame-navigate", event => event.preventDefault());
+  win.webContents.on("will-attach-webview", event => event.preventDefault());
   setupWindowZoomShortcuts(win);
   if (IS_DEV) { win.loadURL("http://localhost:5173"); win.webContents.openDevTools(); }
   else          win.loadFile(path.join(__dirname, "dist", "index.html"));
@@ -779,7 +790,7 @@ function refreshApplicationMenu(settings) {
   if (win && !win.isDestroyed()) buildMenu(win, settings?.recentFiles || []);
 }
 /* ─── IPC: open dialog ─── */
-ipcMain.handle("dialog:open", async () => {
+handleTrusted("dialog:open", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
     title: mt("open_log_dialog"),
     filters: [
@@ -791,7 +802,7 @@ ipcMain.handle("dialog:open", async () => {
   return canceled ? null : filePaths[0];
 });
 
-ipcMain.handle("dialog:ssh-key", async () => {
+handleTrusted("dialog:ssh-key", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
     title: mt("pick_ssh_key"),
     filters: [
@@ -804,7 +815,7 @@ ipcMain.handle("dialog:ssh-key", async () => {
 });
 
 /* ─── IPC: stat ─── */
-ipcMain.handle("file:stat", async (event, requestedPath) => {
+handleTrusted("file:stat", async (event, requestedPath) => {
   assertTrustedSender(event);
   try {
     const filePath = normalizeLocalPath(requestedPath);
@@ -815,19 +826,24 @@ ipcMain.handle("file:stat", async (event, requestedPath) => {
 });
 
 /* ─── IPC: stream read in 1 MB chunks ─── */
-ipcMain.handle("file:read", async (event, payload) => {
+handleTrusted("file:read", async (event, payload) => {
   assertTrustedSender(event);
   const filePath = normalizeLocalPath(typeof payload === "string" ? payload : payload?.filePath);
   const readId = typeof payload === "string" ? filePath : payload?.readId;
   if (!filePath || !readId) throw new Error("Invalid file read request");
+  assertStreamOwner(activeReads.get(readId), event.sender);
+  if (activeReads.has(readId)) throw new Error("File read already active");
 
   return new Promise((resolve, reject) => {
     let bytesRead = 0;
+    let decodedBytes = 0;
     let settled = false;
     const decoder = new StringDecoder("utf8");
+    const lineDecoder = createLineDecoder();
     const source = fs.createReadStream(filePath, { highWaterMark: 1024*1024 });
     const stream = isGzipPath(filePath) ? source.pipe(zlib.createGunzip()) : source;
     activeReads.set(readId, {
+      sender:event.sender,
       destroy() {
         source.destroy();
         if (stream !== source) stream.destroy();
@@ -837,6 +853,8 @@ ipcMain.handle("file:read", async (event, payload) => {
       if (settled) return;
       settled = true;
       activeReads.delete(readId);
+      source.destroy();
+      if (stream !== source) stream.destroy();
       const message = isGzipPath(filePath) ? `${mt("gzip_read_error")}: ${err.message}` : err.message;
       logEntry("ERROR", "file", `Error leyendo ${path.basename(filePath)}: ${message}`);
       event.sender.send("file:error", readId, message);
@@ -846,7 +864,12 @@ ipcMain.handle("file:read", async (event, payload) => {
       bytesRead += chunk.length;
     });
     stream.on("data",  chunk => {
-      event.sender.send("file:chunk", readId, decoder.write(chunk), bytesRead);
+      try {
+        decodedBytes += chunk.length;
+        if (decodedBytes > MAX_FILE_BYTES) throw new Error("File exceeds the 256 MB decoded-text limit");
+        lineDecoder.write(chunk);
+        event.sender.send("file:chunk", readId, decoder.write(chunk), bytesRead);
+      } catch (error) { fail(error); }
     });
     stream.on("end",   ()    => {
       if (settled) return;
@@ -869,8 +892,9 @@ ipcMain.handle("file:read", async (event, payload) => {
   });
 });
 
-ipcMain.handle("file:read:cancel", async (_event, readId) => {
+handleTrusted("file:read:cancel", async (_event, readId) => {
   const stream = activeReads.get(readId);
+  assertStreamOwner(stream, _event.sender);
   if (!stream) return false;
   activeReads.delete(readId);
   stream.destroy();
@@ -888,7 +912,7 @@ ipcMain.handle("file:read:cancel", async (_event, readId) => {
  * next poll instead of silently losing that chunk of data. */
 const WATCH_POLL_MS = 400;
 
-ipcMain.handle("file:watch", async (event, payload) => {
+handleTrusted("file:watch", async (event, payload) => {
   assertTrustedSender(event);
   const filePath = normalizeLocalPath(typeof payload === "string" ? payload : payload?.filePath);
   const watchId = typeof payload === "string" ? filePath : payload?.watchId;
@@ -896,12 +920,14 @@ ipcMain.handle("file:watch", async (event, payload) => {
     ? payload.startOffset
     : null;
   if (!filePath || !watchId) throw new Error("Invalid file watch request");
+  assertStreamOwner(watchers.get(watchId), event.sender);
 
   stopWatch(watchId);
   logEntry("INFO", "file", `Iniciando watch: ${path.basename(filePath)}`);
 
   async function startWatcher() {
     const entry = {
+      sender:event.sender,
       watcher: null,
       pollTimer: null,
       filePath,
@@ -988,7 +1014,7 @@ ipcMain.handle("file:watch", async (event, payload) => {
       let handle;
       try {
         handle = await fs.promises.open(filePath, "r");
-        const length = stat.size - entry.lastSize;
+        const length = Math.min(stat.size - entry.lastSize, 1024 * 1024);
         const buf = Buffer.allocUnsafe(length);
         const { bytesRead } = await handle.read(buf, 0, length, entry.lastSize);
         if (entry.stopped) return;
@@ -1020,19 +1046,20 @@ function stopWatch(watchId) {
 }
 
 /* ─── IPC: stop watching ─── */
-ipcMain.handle("file:unwatch", async (_e, payload) => {
+handleTrusted("file:unwatch", async (_e, payload) => {
   const filePath = typeof payload === "string" ? payload : payload?.filePath;
   const watchId = typeof payload === "string" ? payload : payload?.watchId;
+  assertStreamOwner(watchers.get(watchId), _e.sender);
   if (filePath) logEntry("INFO", "file", `Watch detenido: ${path.basename(filePath)}`);
   stopWatch(watchId);
 });
 
-ipcMain.handle("clipboard:writeText", async (_e, text) => {
+handleTrusted("clipboard:writeText", async (_e, text) => {
   clipboard.writeText(String(text ?? ""));
   return true;
 });
 
-ipcMain.handle("export:text", async (event, payload) => {
+handleTrusted("export:text", async (event, payload) => {
   assertTrustedSender(event);
   const defaultPath = payload?.defaultPath || "pulplog-results.log";
   const content = String(payload?.content ?? "");
@@ -1053,7 +1080,7 @@ ipcMain.handle("export:text", async (event, payload) => {
 });
 
 /* ─── Tab context menu ─── */
-ipcMain.handle("tabmenu:show", (event, payload) => {
+handleTrusted("tabmenu:show", (event, payload) => {
   const { tabId, paneId, filePath, hasContent, tabCount, canCloseRight, groupStart, x, y } = payload || {};
 
   function sendAction(action) {
@@ -1106,7 +1133,7 @@ function dockerGet(apiPath) {
   });
 }
 
-ipcMain.handle("docker:list", async (event) => {
+handleTrusted("docker:list", async (event) => {
   logEntry("INFO", "docker", "Listando contenedores…");
   try {
     const result = await dockerGet("/containers/json?all=false");
@@ -1122,13 +1149,14 @@ ipcMain.handle("docker:list", async (event) => {
 
 const dockerStreams = new Map(); // streamId → { proc, stopped }
 
-ipcMain.handle("docker:logs:start", (event, payload) => {
+handleTrusted("docker:logs:start", (event, payload) => {
   assertTrustedSender(event);
   const streamId = normalizeIdentifier(payload?.streamId, "stream id");
   const containerId = normalizeIdentifier(payload?.containerId, "container id");
   if (!streamId || !containerId) throw new Error("Invalid docker stream request");
   const shortId = containerId.slice(0, 12);
   logEntry("INFO", "docker", `Iniciando stream: ${shortId}`);
+  assertStreamOwner(dockerStreams.get(streamId), event.sender);
   stopDockerStream(streamId);
 
   const proc = spawn("docker", ["logs", "--follow", "--tail=500", containerId], {
@@ -1136,8 +1164,8 @@ ipcMain.handle("docker:logs:start", (event, payload) => {
     shell: false,
   });
 
-  const stream = { proc, stopped: false };
-  let lineBuf  = "";
+  const stream = { proc, stopped: false, sender:event.sender };
+  const lineDecoder = createLineDecoder();
   let hadLines = false;
 
   function send(ch, ...args) {
@@ -1145,11 +1173,10 @@ ipcMain.handle("docker:logs:start", (event, payload) => {
   }
 
   function flushLines(data) {
-    lineBuf += data.toString("utf8");
-    const parts = lineBuf.split("\n");
-    lineBuf = parts.pop();
-    const complete = parts.filter(Boolean);
-    if (complete.length) { hadLines = true; send("docker:lines", streamId, complete.join("\n")); }
+    try {
+      const complete = lineDecoder.write(data).filter(Boolean);
+      if (complete.length) { hadLines = true; send("docker:lines", streamId, complete.join("\n")); }
+    } catch (error) { stopDockerStream(streamId); send("docker:error", streamId, error.message); }
   }
 
   proc.stdout.on("data", flushLines);
@@ -1191,7 +1218,8 @@ ipcMain.handle("docker:logs:start", (event, payload) => {
   dockerStreams.set(streamId, stream);
 });
 
-ipcMain.handle("docker:logs:stop", (_e, streamId) => {
+handleTrusted("docker:logs:stop", (_e, streamId) => {
+  assertStreamOwner(dockerStreams.get(streamId), _e.sender);
   logEntry("INFO", "docker", `Stream detenido manualmente: ${streamId}`);
   stopDockerStream(streamId);
 });
@@ -1580,9 +1608,11 @@ function listNativeRemoteDirectory(config) {
   return new Promise((resolve, reject) => {
     const client = new SshClient();
     let settled = false;
+    const listingTimer = setTimeout(() => finish(new Error(mt("remote_request_timeout"))), 20000);
     const finish = (error, result) => {
       if (settled) return;
       settled = true;
+      clearTimeout(listingTimer);
       try { client.end(); } catch {}
       error ? reject(error) : resolve(result);
     };
@@ -1594,10 +1624,6 @@ function listNativeRemoteDirectory(config) {
         return normalizeFingerprint(formatHostFingerprint(key)) === expectedFingerprint;
       },
     };
-    if (identityFile) {
-      connection.privateKey = fs.readFileSync(identityFile);
-      if (passphrase) connection.passphrase = passphrase;
-    }
     client.once("ready", () => {
       client.sftp((sftpError, sftp) => {
         if (sftpError) return finish(sftpError);
@@ -1630,7 +1656,15 @@ function listNativeRemoteDirectory(config) {
       });
     });
     client.once("error", error => finish(error));
-    client.connect(connection);
+    client.once("end", () => finish(new Error("SSH connection closed during directory listing")));
+    client.once("close", () => finish(new Error("SSH connection closed during directory listing")));
+    try {
+      if (identityFile) {
+        connection.privateKey = fs.readFileSync(identityFile);
+        if (passphrase) connection.passphrase = passphrase;
+      }
+      client.connect(connection);
+    } catch (error) { finish(error); }
   });
 }
 
@@ -1673,8 +1707,8 @@ function startNativeSshStream(event, payload) {
 
   const label = `${username}@${target}:${filePath}`;
   const client = new SshClient();
-  const stream = { client, channel: null, stopped: false, label };
-  let lineBuf = "";
+  const stream = { client, channel: null, stopped: false, label, sender:event.sender };
+  const lineDecoder = createLineDecoder();
   let stderrBuf = "";
   let hadLines = false;
   let dropFirstHistoryLine = false;
@@ -1688,10 +1722,10 @@ function startNativeSshStream(event, payload) {
 
   function flushLines(data) {
     if (historyExpected > 0) historyReceived += data.length;
-    lineBuf += data.toString("utf8");
-    const parts = lineBuf.split("\n");
-    lineBuf = parts.pop();
-    const complete = parts.filter(Boolean).filter(line => {
+    let lines;
+    try { lines = lineDecoder.write(data); }
+    catch (error) { stopRemoteStream(streamId); send("remote:error", streamId, error.message); return; }
+    const complete = lines.filter(Boolean).filter(line => {
       const history = line.trim().match(/^__PULPLOG_REMOTE_HISTORY__:(lines|bytes|full):(-?\d+):(\d+)$/);
       if (history) {
         const size = Number(history[2]);
@@ -1720,9 +1754,11 @@ function startNativeSshStream(event, payload) {
   }
 
   function flushRemainder() {
-    if (!lineBuf) return;
-    const line = lineBuf;
-    lineBuf = "";
+    if (stream.stopped) return false;
+    let line;
+    try { line = lineDecoder.end(); }
+    catch (error) { send("remote:error", streamId, error.message); return false; }
+    if (!line) return;
     if (line.trim() === REMOTE_READY_MARKER) return;
     hadLines = true;
     send("remote:lines", streamId, line);
@@ -1748,7 +1784,7 @@ function startNativeSshStream(event, payload) {
       channel.on("close", (code) => {
         remoteStreams.delete(streamId);
         client.end();
-        flushRemainder();
+        if (flushRemainder() === false) return;
         if (stream.stopped) {
           logEntry("INFO", "remote", `SSH nativo detenido: ${label}`);
           return;
@@ -1791,10 +1827,11 @@ function startNativeSshStream(event, payload) {
   config.passphrase = null;
 }
 
-ipcMain.handle("remote:logs:start", (event, payload) => {
+handleTrusted("remote:logs:start", (event, payload) => {
   assertTrustedSender(event);
   const streamId = normalizeIdentifier(payload?.streamId, "stream id");
   if (!streamId) throw new Error("Invalid remote stream request");
+  assertStreamOwner(remoteStreams.get(streamId), event.sender);
   stopRemoteStream(streamId);
 
   if (payload?.mode === "ssh-native") {
@@ -1818,8 +1855,8 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
 
   logEntry("INFO", "remote", `Iniciando stream remoto: ${spec.label}`);
   const proc = spawn(spec.command, spec.args, { windowsHide: true });
-  const stream = { proc, stopped: false, label: spec.label };
-  let lineBuf = "";
+  const stream = { proc, stopped: false, label: spec.label, sender:event.sender };
+  const lineDecoder = createLineDecoder();
   let stderrBuf = "";
   let hadLines = false;
   let remoteReady = false;
@@ -1834,10 +1871,10 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
 
   function flushLines(data) {
     if (historyExpected > 0) historyReceived += data.length;
-    lineBuf += data.toString("utf8");
-    const parts = lineBuf.split("\n");
-    lineBuf = parts.pop();
-    const complete = parts.filter(Boolean).filter(line => {
+    let lines;
+    try { lines = lineDecoder.write(data); }
+    catch (error) { stopRemoteStream(streamId); send("remote:error", streamId, error.message); return; }
+    const complete = lines.filter(Boolean).filter(line => {
       const history = line.trim().match(/^__PULPLOG_REMOTE_HISTORY__:(lines|bytes|full):(-?\d+):(\d+)$/);
       if (history) {
         const size = Number(history[2]);
@@ -1871,9 +1908,11 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
   }
 
   function flushRemainder() {
-    if (!lineBuf) return;
-    const line = lineBuf;
-    lineBuf = "";
+    if (stream.stopped) return false;
+    let line;
+    try { line = lineDecoder.end(); }
+    catch (error) { send("remote:error", streamId, error.message); return false; }
+    if (!line) return;
     if (line.trim() === REMOTE_READY_MARKER) return;
     hadLines = true;
     send("remote:lines", streamId, line);
@@ -1891,7 +1930,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
 
   proc.on("close", (code) => {
     remoteStreams.delete(streamId);
-    flushRemainder();
+    if (flushRemainder() === false) return;
     if (stream.stopped) {
       logEntry("INFO", "remote", `Stream remoto detenido: ${spec.label}`);
       return;
@@ -1920,7 +1959,7 @@ ipcMain.handle("remote:logs:start", (event, payload) => {
   remoteStreams.set(streamId, stream);
 });
 
-ipcMain.handle("remote:test", async (event, payload) => {
+handleTrusted("remote:test", async (event, payload) => {
   assertTrustedSender(event);
   try {
     return payload?.mode === "ssh-native"
@@ -1931,7 +1970,7 @@ ipcMain.handle("remote:test", async (event, payload) => {
   }
 });
 
-ipcMain.handle("remote:docker-list", async (event, payload) => {
+handleTrusted("remote:docker-list", async (event, payload) => {
   assertTrustedSender(event);
   try {
     if (!["ssh", "ssh-wsl", "ssh-native"].includes(payload?.mode)) throw new Error(mt("remote_docker_ssh"));
@@ -1955,7 +1994,7 @@ ipcMain.handle("remote:docker-list", async (event, payload) => {
   }
 });
 
-ipcMain.handle("remote:list-dir", async (event, payload) => {
+handleTrusted("remote:list-dir", async (event, payload) => {
   assertTrustedSender(event);
   try {
     const result = payload?.mode === "ssh-native"
@@ -1970,7 +2009,8 @@ ipcMain.handle("remote:list-dir", async (event, payload) => {
   }
 });
 
-ipcMain.handle("remote:logs:stop", (_e, streamId) => {
+handleTrusted("remote:logs:stop", (_e, streamId) => {
+  assertStreamOwner(remoteStreams.get(streamId), _e.sender);
   stopRemoteStream(streamId);
 });
 
@@ -2103,15 +2143,15 @@ function updateSettings(mutator) {
   return operation;
 }
 
-ipcMain.handle("settings:get", async () => {
+handleTrusted("settings:get", async () => {
   await settingsWriteQueue;
   return loadSettings();
 });
-ipcMain.handle("settings:set", (_event, data) =>
+handleTrusted("settings:set", (_event, data) =>
   updateSettings(current => ({ ...current, ...(data && typeof data === "object" ? data : {}) }))
     .then(settings => { refreshApplicationMenu(settings); return settings; })
 );
-ipcMain.handle("recentfiles:add", (_event, fp) => updateSettings(current => {
+handleTrusted("recentfiles:add", (_event, fp) => updateSettings(current => {
   if (typeof fp !== "string" || !fp) return current;
   const recent = (current.recentFiles || []).filter(file => file !== fp);
   recent.unshift(fp);
@@ -2120,7 +2160,7 @@ ipcMain.handle("recentfiles:add", (_event, fp) => updateSettings(current => {
   refreshApplicationMenu(settings);
   return settings.recentFiles;
 }));
-ipcMain.handle("recentfiles:remove", (_event, fp) => updateSettings(current => ({
+handleTrusted("recentfiles:remove", (_event, fp) => updateSettings(current => ({
   ...current,
   recentFiles:(current.recentFiles || []).filter(file => file !== fp),
 })).then(settings => {
@@ -2151,17 +2191,19 @@ async function fetchAiStatus(provider, endpoint) {
   }
 }
 
-ipcMain.handle("ai:credential-state", (event, payload) => {
+handleTrusted("ai:credential-state", (event, payload) => {
   assertTrustedSender(event);
   return aiCredentials.state(payload?.provider, aiEndpoint(payload?.provider, payload?.url));
 });
-ipcMain.handle("ai:credential-set", async (event, payload) => {
+handleTrusted("ai:credential-set", async (event, payload) => {
   assertTrustedSender(event);
-  const result = await aiCredentials.set(payload?.provider, aiEndpoint(payload?.provider, payload?.url), payload?.key, payload?.remember === true);
+  const endpoint = aiEndpoint(payload?.provider, payload?.url);
+  assertCredentialTransport(endpoint, payload?.key);
+  const result = await aiCredentials.set(payload?.provider, endpoint, payload?.key, payload?.remember === true);
   const settings = await updateSettings(current => ({ ...current, aiCredentialRevision:current.aiCredentialRevision + 1 }));
   return { ...result, revision:settings.aiCredentialRevision };
 });
-ipcMain.handle("ai:test", (event, payload) => {
+handleTrusted("ai:test", (event, payload) => {
   assertTrustedSender(event);
   return fetchAiStatus(payload?.provider, aiEndpoint(payload?.provider, payload?.url));
 });
@@ -2202,13 +2244,14 @@ function ollamaJson(baseUrl, apiPath, { body = null, timeout = 3000, apiKey = ""
       method: data ? "POST" : "GET",
       headers: {
         Accept: "application/json",
-        ...authHeaders(apiKey),
+        ...authHeaders(apiKey, targetUrl),
         ...(data ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } : {}),
       },
       timeout,
     }, (res) => {
       let text = "";
       res.setEncoding("utf8");
+      res.on("error", reject);
       res.on("data", chunk => {
         text += chunk;
         if (text.length > 4 * 1024 * 1024) req.destroy(new Error("Response too large"));
@@ -2287,11 +2330,13 @@ function stopAiStream(streamId) {
 function startOllamaChat(sender, streamId, baseUrl, request, withThink) {
   const send = (ch, ...args) => { if (!sender.isDestroyed()) sender.send(ch, ...args); };
   const entry = { req: null, stopped: false, finished: false, sender };
+  let receivedBytes = 0;
   const finish = (ch, arg) => {
     if (entry.stopped || entry.finished) return;
     entry.finished = true;
     if (activeAiStreams.get(streamId) === entry) activeAiStreams.delete(streamId);
     send(ch, streamId, ch === "ollama:error" ? redactError(arg, request.apiKey) : arg);
+    entry.req?.destroy();
   };
 
   const postData = JSON.stringify({
@@ -2331,14 +2376,20 @@ function startOllamaChat(sender, streamId, baseUrl, request, withThink) {
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(postData),
       Accept: "application/x-ndjson",
-      ...authHeaders(request.apiKey),
+      ...authHeaders(request.apiKey, targetUrl),
     },
     timeout: 300000,
   }, (res) => {
+    res.on("error", error => finish("ollama:error", error.message));
+    res.on("aborted", () => finish("ollama:error", "AI stream interrupted"));
     if (res.statusCode < 200 || res.statusCode >= 300) {
       let errBody = "";
       res.setEncoding("utf8");
-      res.on("data", c => { errBody += c; });
+      res.on("data", c => {
+        receivedBytes += Buffer.byteLength(c);
+        if (receivedBytes > MAX_AI_BYTES) { finish("ollama:error", "AI response exceeds 4 MB"); return; }
+        errBody += c;
+      });
       res.on("end", () => {
         const message = ollamaErrorText(res.statusCode, errBody, request.apiKey);
         // Models without a thinking mode (e.g. granite) reject `think`; retry once without it.
@@ -2355,6 +2406,8 @@ function startOllamaChat(sender, streamId, baseUrl, request, withThink) {
     res.setEncoding("utf8");
     res.on("data", (chunk) => {
       if (entry.stopped || entry.finished) return;
+      receivedBytes += Buffer.byteLength(chunk);
+      if (receivedBytes > MAX_AI_BYTES) { finish("ollama:error", "AI response exceeds 4 MB"); return; }
       buffer += chunk;
       const lines = buffer.split("\n");
       buffer = lines.pop();
@@ -2379,14 +2432,14 @@ function startOllamaChat(sender, streamId, baseUrl, request, withThink) {
 
 const aiCleanupSenders = new WeakSet();
 
-ipcMain.handle("ollama:status", async (event) => {
+handleTrusted("ollama:status", async (event) => {
   assertTrustedSender(event);
   await settingsWriteQueue;
   const settings = await loadSettings();
   return fetchAiStatus(settings.aiProvider, aiEndpoint(settings.aiProvider, settings.aiProvider === "vllm" ? settings.vllmUrl : settings.ollamaUrl));
 });
 
-ipcMain.handle("ollama:chat:start", async (event, payload) => {
+handleTrusted("ollama:chat:start", async (event, payload) => {
   assertTrustedSender(event);
   const streamId = normalizeIdentifier(payload?.streamId, "stream id");
   const model = normalizeIdentifier(typeof payload?.model === "string" ? payload.model.trim() : "", "model");
@@ -2404,6 +2457,7 @@ ipcMain.handle("ollama:chat:start", async (event, payload) => {
   const numCtx = Math.min(normalizeOllamaContext(settings.ollamaContextTokens), maxContext);
   const apiKey = await aiCredentials.get(settings.aiProvider, baseUrl);
 
+  assertStreamOwner(activeAiStreams.get(streamId), event.sender);
   stopAiStream(streamId);
   const sender = event.sender;
   if (!aiCleanupSenders.has(sender)) {
@@ -2433,17 +2487,18 @@ ipcMain.handle("ollama:chat:start", async (event, payload) => {
   return { ok: true, streamId, numCtx };
 });
 
-ipcMain.handle("ollama:chat:stop", (event, streamId) => {
+handleTrusted("ollama:chat:stop", (event, streamId) => {
   assertTrustedSender(event);
+  assertStreamOwner(activeAiStreams.get(streamId), event.sender);
   stopAiStream(streamId);
   return { ok: true };
 });
 
 /* ─── IPC: app diagnostics log ─── */
-ipcMain.handle("applog:get",   () => [...appLogEntries]);
-ipcMain.handle("applog:clear", () => { appLogEntries.length = 0; });
-ipcMain.handle("applog:add",   (_e, level, category, msg) => logEntry(level, category, msg));
-ipcMain.handle("diagnostics:metric", (_event, data) => {
+handleTrusted("applog:get",   () => [...appLogEntries]);
+handleTrusted("applog:clear", () => { appLogEntries.length = 0; });
+handleTrusted("applog:add",   (_e, level, category, msg) => logEntry(level, category, msg));
+handleTrusted("diagnostics:metric", (_event, data) => {
   const name = typeof data?.name === "string" ? data.name.slice(0, 40) : "metric";
   const value = Number(data?.value);
   const detail = typeof data?.detail === "string" ? data.detail.slice(0, 160) : "";
@@ -2452,7 +2507,7 @@ ipcMain.handle("diagnostics:metric", (_event, data) => {
   return true;
 });
 /* ─── IPC: initial file arg (pull model — renderer asks on mount) ─── */
-ipcMain.handle("file:getInitialArg", () => {
+handleTrusted("file:getInitialArg", () => {
   const fp = pendingFileArg;
   pendingFileArg = null;
   return fp;

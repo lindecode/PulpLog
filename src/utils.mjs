@@ -18,7 +18,7 @@ export function getCachedFile(filePath, stat) {
   if (!entry) return null;
   if (!stat || entry.size !== stat.size || entry.mtime !== stat.mtime) {
     fileCache.delete(filePath);
-    fileCacheBytes -= entry.size;
+    fileCacheBytes -= entry.cacheBytes;
     return null;
   }
   fileCache.delete(filePath);
@@ -28,17 +28,18 @@ export function getCachedFile(filePath, stat) {
 
 export function cacheFile(filePath, stat, items, stats) {
   const previous = fileCache.get(filePath);
-  if (previous) fileCacheBytes -= previous.size;
+  if (previous) fileCacheBytes -= previous.cacheBytes;
   fileCache.delete(filePath);
-  if (!stat || stat.size > FILE_CACHE_MAX_BYTES) return;
-  const entry = { size:stat.size, mtime:stat.mtime, items, stats:{ ...stats } };
+  const cacheBytes = items.reduce((total, item) => total + (item.raw?.length || 0) * 2 + 128, 0);
+  if (!stat || cacheBytes > FILE_CACHE_MAX_BYTES) return;
+  const entry = { size:stat.size, cacheBytes, mtime:stat.mtime, items, stats:{ ...stats } };
   fileCache.set(filePath, entry);
-  fileCacheBytes += entry.size;
+  fileCacheBytes += entry.cacheBytes;
   while (fileCache.size > FILE_CACHE_MAX_ENTRIES || fileCacheBytes > FILE_CACHE_MAX_BYTES) {
     const oldestKey = fileCache.keys().next().value;
     const oldest = fileCache.get(oldestKey);
     fileCache.delete(oldestKey);
-    fileCacheBytes -= oldest?.size || 0;
+    fileCacheBytes -= oldest?.cacheBytes || 0;
   }
 }
 

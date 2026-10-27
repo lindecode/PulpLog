@@ -7,7 +7,7 @@ import { classifyLines, countLevels, appendRecentItems } from "../logProcessing.
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtBytes, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 
 function remoteDirname(value) {
@@ -887,7 +887,7 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
     setReloadNonce(value => value + 1);
   }, [resetViewState]);
 
-  const { filtered, filterRegexValid, extraFilterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines } =
+  const { filtered, filterRegexValid, extraFilterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines, filterTimedOut } =
     useFilteredLogs("remote", classified, filterDebounced, filterUseRegex, lvl, context, searchDebounced, searchUseRegex, timeRange, reportMetric, extraSearchesDebounced, extraFiltersDebounced);
 
   const shownCount = useMemo(() => filtered.filter(x => !x.separator).length, [filtered]);
@@ -1144,6 +1144,8 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
         <Btn onClick={() => listRef.current?.scrollToBottom()}>{t("scroll_bottom")}</Btn>
         </div>
       </div>
+
+      <FilterLimitNotice visible={filterTimedOut} />
 
       {analysisMounted && (
         <AnalysisSidebar

@@ -123,7 +123,14 @@ export function countLevels(items) {
 export function appendRecentItems(previous, incoming, limit = MAX_LIVE_LINES) {
   if (!incoming.length) return previous;
   const combined = previous.concat(incoming);
-  return combined.length > limit ? combined.slice(combined.length - limit) : combined;
+  let start = combined.length;
+  let bytes = 0;
+  while (start > 0 && combined.length - start < limit) {
+    const size = (combined[start - 1].raw?.length || 0) * 2 + 128;
+    if (bytes + size > 64 * 1024 * 1024) break;
+    bytes += size; start--;
+  }
+  return start ? combined.slice(start) : combined;
 }
 
 export function findAdjacentLineIndex(items, selectedLine, direction) {
@@ -152,6 +159,7 @@ export function findLineRange(items, anchorLine, targetLine) {
 
 export function splitTextChunk(carry, chunk) {
   const parts = (carry + chunk).split("\n");
+  if (parts.some(line => line.length > 256 * 1024)) throw new Error("Log line exceeds the 256K character limit");
   return { lines:parts.slice(0, -1), carry:parts[parts.length - 1] ?? "" };
 }
 
@@ -184,6 +192,7 @@ export function applyContext(classified, isMatch, context) {
 function buildMatcher(text, useRegex) {
   if (!text) return { match:null, valid:true };
   if (useRegex) {
+    if (text.length > 4096) return { match:null, valid:false };
     try {
       const regex = new RegExp(text, "i");
       return { match: item => Boolean(item.raw && regex.test(item.raw)), valid:true };
