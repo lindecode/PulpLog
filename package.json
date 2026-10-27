@@ -16,7 +16,7 @@
     "dist:linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
-    "react": "^18.2.0",
+    "react": "^19.3.1",
     "react-dom": "^18.2.0",
     "ssh2": "^1.17.0"
   },
