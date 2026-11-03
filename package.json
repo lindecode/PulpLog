@@ -28,6 +28,10 @@
     "vite": "^8.3.5",
     "wait-on": "^9.5.1"
   },
+  "overrides": {
+    "joi": "^18.3.1",
+    "minimatch": "^11.0.1"
+  },
   "build": {
     "appId": "com.lindecode.pulplog",
     "productName": "PulpLog",
