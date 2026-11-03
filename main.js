@@ -1258,6 +1258,10 @@ function buildRemoteTailScript(config, filePath) {
   if (config?.source === "docker") return dockerLogsScript(config, REMOTE_READY_MARKER, mt("remote_docker_unavailable"));
   const history = normalizeRemoteHistory(config);
   const quotedPath = quotePosixArg(filePath);
+  const tailDetect = `TAIL=tail; if [ -x /opt/freeware/bin/tail ]; then TAIL=/opt/freeware/bin/tail; `
+    + `elif command -v gtail >/dev/null 2>&1; then TAIL=gtail; fi; `
+    + `FOLLOW='-F --'; if ! "$TAIL" --version >/dev/null 2>&1; then `
+    + `case "$(uname -s 2>/dev/null)" in AIX*|SunOS*|OS400*) FOLLOW='-f' ;; esac; fi; `;
   if (isGzipPath(filePath)) {
     const readCheck = `if ! command -v gzip >/dev/null 2>&1; then printf 'gzip no disponible en el host remoto\\n' >&2; exit 127; fi; `
       + `if ! test -r ${quotedPath}; then printf 'No se pudo leer la ruta remota\\n' >&2; exit 1; fi; `;
@@ -1270,17 +1274,21 @@ function buildRemoteTailScript(config, filePath) {
     return `${readCheck}printf '${REMOTE_READY_MARKER}\\n'; gzip -cd -- ${quotedPath} | tail -c ${history.maxBytes}`;
   }
   if (config?.resumeOnly)
-    return `printf '${REMOTE_READY_MARKER}\\n'; exec tail -n 0 -F -- ${quotedPath}`;
+    return `${tailDetect}printf '${REMOTE_READY_MARKER}\\n'; exec "$TAIL" -n 0 $FOLLOW ${quotedPath}`;
   if (history.mode === "lines")
-    return `printf '${REMOTE_READY_MARKER}\\n'; exec tail -n ${history.tailLines} -F -- ${quotedPath}`;
-  return `size=$(wc -c < ${quotedPath} 2>/dev/null || printf -- -1); `
+    return `${tailDetect}printf '${REMOTE_READY_MARKER}\\n'; exec "$TAIL" -n ${history.tailLines} $FOLLOW ${quotedPath}`;
+  return `${tailDetect}size=$(wc -c < ${quotedPath} 2>/dev/null || printf -- -1); `
     + `printf '${REMOTE_HISTORY_MARKER}:${history.mode}:%s:${history.maxBytes}\\n' "$size"; `
-    + `printf '${REMOTE_READY_MARKER}\\n'; exec tail -c ${history.maxBytes} -F -- ${quotedPath}`;
+    + `printf '${REMOTE_READY_MARKER}\\n'; exec "$TAIL" -c ${history.maxBytes} $FOLLOW ${quotedPath}`;
 }
 
 function buildRemoteReadCheck(filePath, config) {
   if (config?.source === "docker") return dockerReadCheck(config, mt("remote_docker_unavailable"));
   const quotedPath = quotePosixArg(filePath);
+  const tailDetect = `TAIL=tail; if [ -x /opt/freeware/bin/tail ]; then TAIL=/opt/freeware/bin/tail; `
+    + `elif command -v gtail >/dev/null 2>&1; then TAIL=gtail; fi; `
+    + `FOLLOW='-F --'; if ! "$TAIL" --version >/dev/null 2>&1; then `
+    + `case "$(uname -s 2>/dev/null)" in AIX*|SunOS*|OS400*) FOLLOW='-f' ;; esac; fi; `;
   const toolCheck = isGzipPath(filePath)
     ? "command -v gzip >/dev/null"
     : "command -v tail >/dev/null";

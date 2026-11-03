@@ -1,6 +1,6 @@
 {
   "name": "pulplog",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "PulpLog — visor de logs avanzado",
   "author": "LindeCode",
   "license": "MIT",
@@ -95,5 +95,9 @@
         "role": "Viewer"
       }
     ]
+  },
+  "allowScripts": {
+    "electron-winstaller@5.4.0": true,
+    "ssh2@1.17.0": true
   }
 }

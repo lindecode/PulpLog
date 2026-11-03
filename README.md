@@ -26,14 +26,14 @@ viene incluido en cada paquete. Tampoco se incluyen servidores ni modelos de IA.
 Ejemplo para AppImage, sustituyendo el nombre por el archivo descargado:
 
 ```bash
-chmod +x ./PulpLog-4.0.0.AppImage
-./PulpLog-4.0.0.AppImage
+chmod +x ./PulpLog-4.0.1.AppImage
+./PulpLog-4.0.1.AppImage
 ```
 
 Ejemplo para Debian/Ubuntu, desde la carpeta de la descarga:
 
 ```bash
-sudo apt install ./pulplog_4.0.0_amd64.deb
+sudo apt install ./pulplog_4.0.1_amd64.deb
 ```
 
 Los nombres son ilustrativos: utiliza el nombre real del paquete. `x64`/`amd64`
