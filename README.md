@@ -631,12 +631,21 @@ ssh-add --apple-use-keychain ~/.ssh/id_ed25519
 
 La primera conexión manual detecta la huella SHA256 del servidor. Verifícala con el administrador o por otro medio confiable antes de marcarla como aceptada. La confianza se aplica sólo a esa sesión.
 
-Las contraseñas y passphrases:
+Las passphrases de llaves y las contraseñas que no se marquen para guardar:
 
 - No se guardan en perfiles, ajustes ni restauración de sesión.
 - No se escriben en la bitácora interna.
 - No se pasan como argumentos de procesos ni variables de entorno.
 - Permanecen en memoria únicamente mientras la conexión activa las necesita.
+
+Las contraseñas SSH pueden guardarse opcionalmente en **Configuración → Bóveda local de credenciales SSH**. La bóveda:
+
+- Se cifra localmente con AES-256-GCM y una clave derivada de la contraseña maestra mediante `scrypt`.
+- Nunca guarda la contraseña maestra; los perfiles sólo conservan el identificador de la credencial cifrada.
+- Debe estar desbloqueada para usar o guardar contraseñas y puede bloquearse manualmente.
+- Permite listar y eliminar credenciales sin revelar su contenido.
+
+No hay recuperación de la contraseña maestra. **Olvidé mi contraseña** explica que se eliminará permanentemente la base cifrada completa, pide dos confirmaciones y obliga a capturar de nuevo todas las credenciales. Esta acción no elimina llaves SSH, archivos de log ni perfiles; los perfiles que apuntaban a credenciales borradas volverán a solicitar una contraseña.
 
 #### Reconexión
 
@@ -655,6 +664,7 @@ El límite de líneas vivas configurado en PulpLog continúa protegiendo la memo
 | Idioma | Interfaz en español o inglés |
 | Tema | LindeCode (por defecto; color hueso con cabecera oscura, como lindecode.cloud), Clásica, Blanca, Oscura, Brasa (fuego/carmesí), Azul (oscuro, tonalidad azul) o Bosque (verde grisáceo) |
 | Preferencias | Auto-scroll por defecto y números de línea por defecto |
+| Bóveda SSH | Crear, desbloquear, bloquear, listar o eliminar contraseñas SSH cifradas localmente |
 | Bitácora interna | Panel de diagnóstico con eventos de archivos, Docker y atajos |
 | Acerca de | Modal con información de la app, autor y licencia |
 
@@ -675,8 +685,9 @@ En Windows 11 algunos atajos con `Super` pueden estar reservados por el sistema.
 ## Privacidad y seguridad
 
 - Los archivos locales se procesan en el equipo.
-- Las contraseñas y passphrases SSH manuales se conservan sólo durante la
-  conexión y no se guardan en perfiles ni en la restauración de sesión.
+- Las passphrases SSH y las contraseñas no guardadas se conservan sólo durante la
+  conexión. Las contraseñas marcadas para guardar se cifran en la bóveda local;
+  los perfiles almacenan únicamente una referencia y nunca el secreto en claro.
 - El chat de IA envía las filas incluidas en el contexto, los metadatos del origen
   y la conversación al servidor Ollama o vLLM configurado. Si el servidor es remoto,
   esos datos salen del equipo; utiliza un destino autorizado y HTTPS o un túnel SSH.

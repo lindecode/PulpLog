@@ -176,6 +176,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
   deleteConversation: id => ipcRenderer.invoke("conversations:delete", id),
   clearConversations: () => ipcRenderer.invoke("conversations:clear"),
 
+  /* ── Password-protected local credential vault ── */
+  getVaultState: () => ipcRenderer.invoke("vault:state"),
+  createVault: password => ipcRenderer.invoke("vault:create", password),
+  unlockVault: password => ipcRenderer.invoke("vault:unlock", password),
+  lockVault: () => ipcRenderer.invoke("vault:lock"),
+  listVaultCredentials: () => ipcRenderer.invoke("vault:list"),
+  saveVaultCredential: entry => ipcRenderer.invoke("vault:save", entry),
+  deleteVaultCredential: id => ipcRenderer.invoke("vault:delete", id),
+  resetVault: () => ipcRenderer.invoke("vault:reset"),
+
   /* ── Settings & recent files ── */
   getSettings:      () => ipcRenderer.invoke("settings:get"),
   setSettings:      (d) => ipcRenderer.invoke("settings:set", d),

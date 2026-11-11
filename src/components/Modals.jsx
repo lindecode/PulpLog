@@ -5,6 +5,7 @@ import { useEscapeToClose } from "../hooks.mjs";
 import { fmtNum, IS_ELECTRON } from "../utils.mjs";
 import { Btn } from "./SharedUI.jsx";
 import { AiProviderSettings } from "./AiProviderSettings.jsx";
+import { CredentialVaultSettings } from "./CredentialVaultSettings.jsx";
 
 /* ═══════════════════════════════════════════
    Rotation banner
@@ -264,6 +265,7 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
             </select>
           </label>
           <AiProviderSettings settings={settings} onTogglePref={onTogglePref} />
+          <CredentialVaultSettings />
         </div>
 
         <button onClick={onClose}

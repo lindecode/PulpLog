@@ -192,6 +192,10 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const [identityFile, setIdentityFile] = useState(initialConfig?.identityFile || "");
   const [password, setPassword] = useState(initialConfig?.password || "");
   const [passphrase, setPassphrase] = useState(initialConfig?.passphrase || "");
+  const [vaultCredentialId, setVaultCredentialId] = useState(initialConfig?.vaultCredentialId || "");
+  const [rememberPassword, setRememberPassword] = useState(false);
+  const [vaultState, setVaultState] = useState({ configured:false, unlocked:false });
+  const [vaultError, setVaultError] = useState("");
   const [fingerprint, setFingerprint] = useState(initialConfig?.fingerprint || "");
   const [trustHostForSession, setTrustHostForSession] = useState(false);
   const [distro, setDistro] = useState(initialConfig?.distro || "");
@@ -203,7 +207,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const [loadingContainers, setLoadingContainers] = useState(false);
   const [containerError, setContainerError] = useState(null);
   const containerRequestRef = useRef(0);
-  const connectionKey = JSON.stringify([mode, target, user, port, identityFile, proxyJump, password, passphrase,
+  const connectionKey = JSON.stringify([mode, target, user, port, identityFile, proxyJump, password, passphrase, vaultCredentialId,
     fingerprint, trustHostForSession, distro, source]);
   const previousConnectionRef = useRef(connectionKey);
   const [tailLines, setTailLines] = useState(initialConfig?.tailLines || 500);
@@ -227,7 +231,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     : mode === "ssh-wsl" ? (wslCap?.sshHosts?.[selectedWslDistro] || []) : [];
   const wslDistrosKey = wslDistros.join("|");
   const modeAvailable = mode === "wsl" || mode === "ssh-wsl" ? wslCap?.available : mode === "ssh-native" ? true : sshCap?.available;
-  const hasNativeAuth = mode !== "ssh-native" || (user.trim() && (password || identityFile.trim()));
+  const hasNativeAuth = mode !== "ssh-native" || (user.trim() && (password || vaultCredentialId || identityFile.trim()));
   const hostAccepted = mode !== "ssh-native" || Boolean(fingerprint.trim() && trustHostForSession);
   const discoveringHost = mode === "ssh-native" && !fingerprint.trim();
   const hasSource = source === "docker" ? Boolean(containerId) : Boolean(filePath.trim());
@@ -253,6 +257,9 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     if (mode === "wsl") setSource("file");
   }, [connectionKey, mode]);
   useEffect(() => () => { containerRequestRef.current++; }, []);
+  useEffect(() => {
+    window.electronAPI?.getVaultState?.().then(setVaultState).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!capabilities) return;
@@ -265,12 +272,27 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     setDistro(wslDistros[0]);
   }, [mode, distro, wslDistrosKey]);
 
-  const submit = (e) => {
+  const persistPassword = async config => {
+    if (!rememberPassword || !password) return config;
+    if (!vaultState.unlocked) throw new Error(t("vault_unlock_before_save"));
+    const saved = await window.electronAPI.saveVaultCredential({
+      id:vaultCredentialId || undefined,
+      label:profileName.trim() || `${user.trim()}@${target.trim()}`,
+      kind:"ssh-password", target:target.trim(), username:user.trim(), secret:password,
+    });
+    setVaultCredentialId(saved.id);
+    return { ...config, vaultCredentialId:saved.id, vaultCredentialKind:"ssh-password" };
+  };
+
+  const submit = async (e) => {
     e.preventDefault();
     if (!canSubmit) return;
-    onSelect(connectionConfig());
-    setPassword("");
-    setPassphrase("");
+    setVaultError("");
+    try {
+      const config = await persistPassword(connectionConfig());
+      onSelect(config);
+      setPassword(""); setPassphrase("");
+    } catch (error) { setVaultError(error.message); }
   };
 
   const pickIdentityFile = async () => {
@@ -280,7 +302,8 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   };
 
   const connectionConfig = () => ({ mode, target:target.trim(), user:user.trim(), port:String(port).trim(),
-    identityFile:identityFile.trim(), proxyJump:proxyJump.trim(), password, passphrase, fingerprint:fingerprint.trim(),
+    identityFile:identityFile.trim(), proxyJump:proxyJump.trim(), password, passphrase,
+    vaultCredentialId, vaultCredentialKind:"ssh-password", fingerprint:fingerprint.trim(),
     trustHostForSession, distro:distro.trim(), filePath:source === "docker" ? "" : filePath.trim(), tailLines,
     source, containerId:source === "docker" ? containerId : "", containerName:source === "docker" ? containerName : "",
     historyMode:historyPreset.split(":")[0], maxInitialMb:Number(historyPreset.split(":")[1]) || 100 });
@@ -294,6 +317,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     setAdvanced(profile.mode === "ssh-native");
     setPort(profile.port || ""); setIdentityFile(profile.identityFile || "");
     setProxyJump(profile.proxyJump || "");
+    setVaultCredentialId(profile.vaultCredentialId || ""); setRememberPassword(false);
     setFingerprint(profile.fingerprint || ""); setDistro(profile.distro || "");
     setFilePath(profile.filePath || ""); setTailLines(profile.tailLines || 500);
     setSource(profile.source === "docker" ? "docker" : "file");
@@ -303,10 +327,13 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     setProfileName(profile.name || ""); setTrustHostForSession(false);
   };
 
-  const saveProfile = () => {
+  const saveProfile = async () => {
     const name = profileName.trim() || target.trim() || distro.trim() || "SSH";
     const id = selectedProfile || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const safe = { ...connectionConfig(), id, name };
+    setVaultError("");
+    let safe;
+    try { safe = { ...(await persistPassword(connectionConfig())), id, name }; }
+    catch (error) { setVaultError(error.message); return; }
     delete safe.password; delete safe.passphrase; delete safe.trustHostForSession;
     const next = [...profiles.filter(item => item.id !== id), safe];
     setSelectedProfile(id); setProfileName(name); onProfilesChange?.(next);
@@ -586,6 +613,15 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
               placeholder={`${t("remote_password")} (opcional)`} />
             <input style={inputStyle} type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)}
               placeholder={`${t("remote_passphrase")} (opcional)`} />
+            <label style={{ gridColumn:"1 / -1", display:"flex", gap:7, alignItems:"center", color:"var(--pl-text-4)", fontSize:10 }}>
+              <input type="checkbox" checked={rememberPassword} disabled={!password}
+                onChange={event => setRememberPassword(event.target.checked)} />
+              {t("remote_save_password")}
+            </label>
+            {vaultCredentialId && !password && <div style={{ gridColumn:"1 / -1", color:"var(--pl-status-live)", fontSize:10 }}>
+              {t("remote_saved_password_selected")}
+            </div>}
+            {vaultError && <div role="alert" style={{ gridColumn:"1 / -1", color:"var(--pl-error-text)", fontSize:10 }}>{vaultError}</div>}
           </div>
         )}
 

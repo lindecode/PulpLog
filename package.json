@@ -45,6 +45,7 @@
       "vllm.cjs",
       "aiCredentials.cjs",
       "conversationStore.cjs",
+      "credentialVault.cjs",
       "ipcSecurity.cjs",
       "streamLimits.cjs",
       "preload.js",

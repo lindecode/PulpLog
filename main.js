@@ -1,5 +1,5 @@
 // Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut, clipboard, safeStorage } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut, clipboard, safeStorage, powerMonitor } = require("electron");
 const path = require("path");
 const { pathToFileURL } = require("url");
 const fs   = require("fs");
@@ -16,6 +16,7 @@ const { createCredentialStore, authHeaders, assertCredentialTransport, redactErr
 const { isTrustedSender, assertStreamOwner } = require("./ipcSecurity.cjs");
 const { createLineDecoder, MAX_FILE_BYTES, MAX_AI_BYTES } = require("./streamLimits.cjs");
 const { createConversationStore } = require("./conversationStore.cjs");
+const { createCredentialVault } = require("./credentialVault.cjs");
 
 const IS_SMOKE_TEST = process.env.PULPLOG_SMOKE_TEST === "1";
 const IS_DEV = !IS_SMOKE_TEST && (process.env.NODE_ENV === "development" || !app.isPackaged);
@@ -1836,12 +1837,18 @@ function startNativeSshStream(event, payload) {
   config.passphrase = null;
 }
 
-handleTrusted("remote:logs:start", (event, payload) => {
+handleTrusted("remote:logs:start", async (event, payload) => {
   assertTrustedSender(event);
   const streamId = normalizeIdentifier(payload?.streamId, "stream id");
   if (!streamId) throw new Error("Invalid remote stream request");
   assertStreamOwner(remoteStreams.get(streamId), event.sender);
   stopRemoteStream(streamId);
+  try { payload = await resolveVaultSecrets(payload); }
+  catch (error) {
+    showRemoteStreamAlert(event, payload, mt("err_ssh"), error.message);
+    event.sender.send("remote:error", streamId, error.message);
+    return;
+  }
 
   if (payload?.mode === "ssh-native") {
     try {
@@ -1971,6 +1978,7 @@ handleTrusted("remote:logs:start", (event, payload) => {
 handleTrusted("remote:test", async (event, payload) => {
   assertTrustedSender(event);
   try {
+    payload = await resolveVaultSecrets(payload);
     return payload?.mode === "ssh-native"
       ? await testNativeSsh(payload)
       : await testSystemSsh(payload);
@@ -1982,6 +1990,7 @@ handleTrusted("remote:test", async (event, payload) => {
 handleTrusted("remote:docker-list", async (event, payload) => {
   assertTrustedSender(event);
   try {
+    payload = await resolveVaultSecrets(payload);
     if (!["ssh", "ssh-wsl", "ssh-native"].includes(payload?.mode)) throw new Error(mt("remote_docker_ssh"));
     const script = dockerListScript(mt("remote_docker_unavailable"));
     let stdout;
@@ -2006,6 +2015,7 @@ handleTrusted("remote:docker-list", async (event, payload) => {
 handleTrusted("remote:list-dir", async (event, payload) => {
   assertTrustedSender(event);
   try {
+    payload = await resolveVaultSecrets(payload);
     const result = payload?.mode === "ssh-native"
       ? await listNativeRemoteDirectory(payload)
       : await listSystemRemoteDirectory(payload);
@@ -2070,6 +2080,7 @@ function normalizeRemoteProfiles(value) {
     tailLines: normalizeTailLines(profile.tailLines),
     historyMode: ["lines", "bytes", "full"].includes(profile.historyMode) ? profile.historyMode : "lines",
     maxInitialMb: normalizeRemoteHistory(profile).maxMb,
+    vaultCredentialId: typeof profile.vaultCredentialId === "string" ? profile.vaultCredentialId.slice(0, 100) : "",
   }));
 }
 
@@ -2188,6 +2199,31 @@ handleTrusted("conversations:get", (_event, id) => conversationStore.get(convers
 handleTrusted("conversations:save", (_event, conversation) => conversationStore.save(conversation));
 handleTrusted("conversations:delete", (_event, id) => conversationStore.remove(conversationId(id)));
 handleTrusted("conversations:clear", () => conversationStore.clear());
+
+/* ─── Password-protected local SSH credential vault ─── */
+const credentialVault = createCredentialVault({
+  filename:path.join(app.getPath("userData"), "credential-vault.json"),
+});
+const vaultId = value => normalizeIdentifier(value, "vault credential id");
+
+async function resolveVaultSecrets(payload) {
+  const id = payload?.vaultCredentialId;
+  if (!id || payload?.password || payload?.passphrase) return payload;
+  const kind = payload?.vaultCredentialKind === "ssh-passphrase" ? "ssh-passphrase" : "ssh-password";
+  const secret = await credentialVault.getSecret(vaultId(id), {
+    kind, target:String(payload?.target || "").trim(), username:String(payload?.user || "").trim(),
+  });
+  return { ...payload, [kind === "ssh-passphrase" ? "passphrase" : "password"]:secret };
+}
+
+handleTrusted("vault:state", () => credentialVault.state());
+handleTrusted("vault:create", (_event, password) => credentialVault.create(String(password || "")));
+handleTrusted("vault:unlock", (_event, password) => credentialVault.unlock(String(password || "")));
+handleTrusted("vault:lock", () => credentialVault.lock());
+handleTrusted("vault:list", () => credentialVault.list());
+handleTrusted("vault:save", (_event, entry) => credentialVault.save(entry));
+handleTrusted("vault:delete", (_event, id) => credentialVault.remove(vaultId(id)));
+handleTrusted("vault:reset", () => credentialVault.reset());
 /* ─── Local AI (Ollama) integration ─── */
 const OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434";
 const OLLAMA_CONTEXT_SIZES = [4096, 8192, 16384, 32768, 65536, 131072];
@@ -2598,6 +2634,7 @@ function registerShortcuts(win) {
 
 /* ─── lifecycle ─── */
 app.whenReady().then(async () => {
+  powerMonitor.on("suspend", () => credentialVault.lock().catch(() => {}));
   const { session } = require("electron");
   if (session?.defaultSession) {
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
