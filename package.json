@@ -44,6 +44,7 @@
       "remoteDocker.cjs",
       "vllm.cjs",
       "aiCredentials.cjs",
+      "conversationStore.cjs",
       "ipcSecurity.cjs",
       "streamLimits.cjs",
       "preload.js",

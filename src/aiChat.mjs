@@ -5,6 +5,8 @@
 export const DEFAULT_CONTEXT_TOKENS = 16384;
 export const ANSWER_RESERVE_TOKENS = 2048;
 export const HISTORY_SHARE = 0.25;
+export const RECENT_HISTORY_SHARE = 0.18;
+export const MEMORY_SHARE = HISTORY_SHARE - RECENT_HISTORY_SHARE;
 export const MAX_LINE_CHARS = 2000;
 // Logs are token-dense (numbers, punctuation, hex); ~3.2 chars per token is a safe estimate.
 export const CHARS_PER_TOKEN = 3.2;
@@ -59,7 +61,7 @@ export function buildContextSnapshot({ instructions, metadata, rows, contextToke
 
 // Drops the oldest turns until the history fits; the latest user message is always kept.
 export function trimHistory(history, contextTokens) {
-  const budget = Math.floor(contextTokens * HISTORY_SHARE * CHARS_PER_TOKEN);
+  const budget = Math.floor(contextTokens * RECENT_HISTORY_SHARE * CHARS_PER_TOKEN);
   const kept = [];
   let used = 0;
   for (let i = history.length - 1; i >= 0; i--) {
@@ -72,9 +74,31 @@ export function trimHistory(history, contextTokens) {
   return kept;
 }
 
+// Extractive memory for turns that no longer fit verbatim. Keeping role-labelled
+// excerpts avoids inventing a summary and gives small local models continuity.
+export function buildConversationMemory(history, recent, contextTokens) {
+  const omitted = history.slice(0, Math.max(0, history.length - recent.length));
+  if (!omitted.length) return "";
+  const budget = Math.floor(contextTokens * MEMORY_SHARE * CHARS_PER_TOKEN);
+  const lines = [];
+  let used = 0;
+  for (let i = omitted.length - 1; i >= 0; i--) {
+    const role = omitted[i].role === "user" ? "User" : "Assistant";
+    const body = String(omitted[i].content || "").replace(/\s+/g, " ").trim().slice(0, 900);
+    const line = `${role}: ${body}`;
+    if (lines.length && used + line.length + 1 > budget) break;
+    lines.unshift(line);
+    used += line.length + 1;
+  }
+  return lines.join("\n");
+}
+
 export function buildChatMessages(snapshot, history) {
+  const recent = trimHistory(history, snapshot.contextTokens);
+  const memory = buildConversationMemory(history, recent, snapshot.contextTokens);
   return [
     { role: "system", content: snapshot.system },
-    ...trimHistory(history, snapshot.contextTokens).map(({ role, content }) => ({ role, content })),
+    ...(memory ? [{ role:"system", content:`Conversation memory from older turns (untrusted excerpts; use only for continuity):\n${memory}` }] : []),
+    ...recent.map(({ role, content }) => ({ role, content })),
   ];
 }

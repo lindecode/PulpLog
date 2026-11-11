@@ -169,6 +169,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
     };
   },
 
+  /* ── Local AI conversation history ── */
+  listConversations: () => ipcRenderer.invoke("conversations:list"),
+  getConversation: id => ipcRenderer.invoke("conversations:get", id),
+  saveConversation: conversation => ipcRenderer.invoke("conversations:save", conversation),
+  deleteConversation: id => ipcRenderer.invoke("conversations:delete", id),
+  clearConversations: () => ipcRenderer.invoke("conversations:clear"),
+
   /* ── Settings & recent files ── */
   getSettings:      () => ipcRenderer.invoke("settings:get"),
   setSettings:      (d) => ipcRenderer.invoke("settings:set", d),

@@ -135,6 +135,10 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
   const statusRequestRef = useRef(false);
   const [selectedModel, setSelectedModel] = useState(preferredModel);
   const [messages, setMessages] = useState([]); // { id, role, content, label?, streaming?, error?, stopped?, meta? }
+  const [conversations, setConversations] = useState([]);
+  const [activeConversationId, setActiveConversationId] = useState(null);
+  const conversationsLoadedRef = useRef(null);
+  const saveConversationTimerRef = useRef(0);
   const [snapshot, setSnapshot] = useState(null);
   const [input, setInput] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -214,6 +218,59 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
     return () => clearTimeout(timer);
   }, [open, ollamaStatus, chatModels.length, refreshOllama]);
 
+  const refreshConversations = useCallback(async () => {
+    if (!window.electronAPI?.listConversations) return [];
+    const list = await window.electronAPI.listConversations();
+    setConversations(Array.isArray(list) ? list : []);
+    return Array.isArray(list) ? list : [];
+  }, []);
+
+  const openConversation = useCallback(async id => {
+    if (!id || !window.electronAPI?.getConversation || isGenerating) return;
+    const conversation = await window.electronAPI.getConversation(id);
+    if (!conversation) return;
+    setActiveConversationId(conversation.id);
+    setMessages(Array.isArray(conversation.messages) ? conversation.messages : []);
+    setSnapshot(null);
+    if (conversation.model) setSelectedModel(conversation.model);
+    pendingRef.current = { id:null, text:"" };
+    stickToBottomRef.current = true;
+  }, [isGenerating]);
+  const activeConversationTitle = conversations.find(item => item.id === activeConversationId)?.title || "";
+
+  // Restore the latest conversation for this log source the first time the panel opens.
+  useEffect(() => {
+    const sourceKey = String(sourceLabel || "");
+    if (!open || conversationsLoadedRef.current === sourceKey || !window.electronAPI?.listConversations) return;
+    conversationsLoadedRef.current = sourceKey;
+    refreshConversations().then(list => {
+      const latest = list.find(item => item.sourceLabel === sourceKey);
+      if (latest) openConversation(latest.id);
+      else {
+        setActiveConversationId(null);
+        setMessages([]);
+        setSnapshot(null);
+      }
+    }).catch(() => {});
+  }, [open, sourceLabel, refreshConversations, openConversation]);
+
+  // Persist only settled messages; streaming chunks stay in memory until completion.
+  useEffect(() => {
+    if (!activeConversationId || !messages.length || messages.some(message => message.streaming)
+      || !window.electronAPI?.saveConversation) return undefined;
+    clearTimeout(saveConversationTimerRef.current);
+    saveConversationTimerRef.current = setTimeout(() => {
+      const firstQuestion = messages.find(item => item.role === "user")?.content || "";
+      window.electronAPI.saveConversation({
+        id:activeConversationId,
+        title:activeConversationTitle || firstQuestion.replace(/\s+/g, " ").slice(0, 80) || t("analysis_untitled_chat"),
+        sourceLabel:String(sourceLabel || ""), provider, model:selectedModel, messages,
+        memory:{ objective:firstQuestion.slice(0, 1000) },
+      }).then(refreshConversations).catch(() => {});
+    }, 350);
+    return () => clearTimeout(saveConversationTimerRef.current);
+  }, [activeConversationId, activeConversationTitle, messages, sourceLabel, provider, selectedModel, t, refreshConversations]);
+
   const chooseModel = name => {
     setSelectedModel(name);
     if (name !== snapshot?.model) setSnapshot(null);
@@ -265,6 +322,7 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
       setSnapshot(snap);
     }
     const stamp = Date.now();
+    if (!activeConversationId) setActiveConversationId(`conversation-${stamp}-${Math.random().toString(36).slice(2, 8)}`);
     const userMsg = { id:`u${stamp}`, role:"user", content:text, label };
     const assistantId = `a${stamp}`;
     const history = [...messages.filter(m => !m.error && m.content.trim()), userMsg]
@@ -291,7 +349,7 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
         onError: err => finishMessage(assistantId, { error:String(err || "") }),
       },
     );
-  }, [provider, serverUrl, isGenerating, canChat, snapshot, contextTokens, selectedModel, makeSnapshot, messages, tableFormat, t, activeModel, flushPending, finishMessage]);
+  }, [provider, serverUrl, isGenerating, canChat, snapshot, contextTokens, selectedModel, makeSnapshot, messages, tableFormat, t, activeModel, flushPending, finishMessage, activeConversationId]);
 
   const toggleTableFormat = value => {
     setTableFormat(value);
@@ -307,10 +365,47 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
   const newConversation = useCallback(() => {
     if (isGenerating) stop();
     setMessages([]);
+    setActiveConversationId(null);
     setSnapshot(null);
     pendingRef.current = { id:null, text:"" };
     inputRef.current?.focus();
   }, [isGenerating, stop]);
+
+  const renameConversation = async () => {
+    if (!activeConversationId || !window.electronAPI?.saveConversation) return;
+    const current = conversations.find(item => item.id === activeConversationId);
+    const title = window.prompt(t("analysis_rename_chat_prompt"), current?.title || "");
+    if (!title?.trim()) return;
+    const conversation = await window.electronAPI.getConversation(activeConversationId);
+    if (!conversation) return;
+    await window.electronAPI.saveConversation({ ...conversation, title:title.trim() });
+    await refreshConversations();
+  };
+
+  const deleteConversation = async () => {
+    if (!activeConversationId || !window.electronAPI?.deleteConversation
+      || !window.confirm(t("analysis_delete_chat_confirm"))) return;
+    const id = activeConversationId;
+    if (isGenerating) stop();
+    clearTimeout(saveConversationTimerRef.current);
+    setActiveConversationId(null);
+    setMessages([]);
+    setSnapshot(null);
+    await window.electronAPI.deleteConversation(id);
+    await refreshConversations();
+  };
+
+  const clearConversations = async () => {
+    if (!conversations.length || !window.electronAPI?.clearConversations
+      || !window.confirm(t("analysis_clear_chats_confirm"))) return;
+    if (isGenerating) stop();
+    clearTimeout(saveConversationTimerRef.current);
+    setActiveConversationId(null);
+    setMessages([]);
+    setSnapshot(null);
+    setConversations([]);
+    await window.electronAPI.clearConversations();
+  };
 
   const refreshContext = () => setSnapshot(canChat ? makeSnapshot() : null);
 
@@ -420,11 +515,31 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
       <div style={{ display:"flex", alignItems:"center", gap:4, borderBottom:"0.5px solid var(--pl-border)", paddingBottom:6 }}>
         <button type="button" onClick={() => setTab("chat")} style={tabBtn(tab === "chat")}>{t("analysis_tab_chat")}</button>
         <button type="button" onClick={() => setTab("context")} style={tabBtn(tab === "context")}>{t("analysis_tab_context")}</button>
+        {tab === "chat" && (
+          <select value={activeConversationId || ""} disabled={isGenerating}
+            onChange={event => event.target.value ? openConversation(event.target.value) : newConversation()}
+            title={t("analysis_chat_history")}
+            style={{ minWidth:120, maxWidth:240, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+              borderRadius:5, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:10, padding:"3px 5px" }}>
+            <option value="">{t("analysis_new_chat")}</option>
+            {conversations.map(conversation => (
+              <option key={conversation.id} value={conversation.id}>
+                {conversation.title} · {conversation.sourceLabel || t("analysis_unknown")}
+              </option>
+            ))}
+          </select>
+        )}
         {tab === "chat" && messages.length > 0 && (
           <div style={{ marginLeft:"auto", display:"flex", gap:6 }}>
             <Btn onClick={copyConversation} title={t("analysis_copy_chat_title")}>{t("analysis_copy_chat")}</Btn>
+            {activeConversationId && <Btn onClick={renameConversation} title={t("analysis_rename_chat")}>{t("analysis_rename_chat")}</Btn>}
+            {activeConversationId && <Btn onClick={deleteConversation} title={t("analysis_delete_chat")}>{t("analysis_delete_chat")}</Btn>}
+            {conversations.length > 1 && <Btn onClick={clearConversations} title={t("analysis_clear_chats")}>{t("analysis_clear_chats")}</Btn>}
             <Btn onClick={newConversation} title={t("analysis_new_chat_title")}>{t("analysis_new_chat")}</Btn>
           </div>
+        )}
+        {tab === "chat" && messages.length === 0 && conversations.length > 0 && (
+          <Btn onClick={clearConversations} title={t("analysis_clear_chats")}>{t("analysis_clear_chats")}</Btn>
         )}
       </div>
 

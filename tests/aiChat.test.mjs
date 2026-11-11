@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildChatMessages, buildContextSnapshot, effectiveContextTokens, escapeLogBlock,
+  buildChatMessages, buildContextSnapshot, buildConversationMemory, effectiveContextTokens, escapeLogBlock,
   formatLogLine, selectTailRows, trimHistory,
 } from "../src/aiChat.mjs";
 
@@ -48,4 +48,16 @@ test("trims old turns but always keeps the latest question", () => {
   assert.deepEqual(trimHistory(history, 4096).map(m => m.content), ["latest"]);
   const messages = buildChatMessages({ system: "sys", contextTokens: 65536 }, history);
   assert.deepEqual(messages.map(m => m.role), ["system", "user", "assistant", "user"]);
+});
+
+test("preserves extractive memory when old turns leave the recent window", () => {
+  const history = Array.from({ length:12 }, (_, index) => ({
+    role:index % 2 ? "assistant" : "user",
+    content:`turn-${index} ${"x".repeat(700)}`,
+  }));
+  const messages = buildChatMessages({ system:"logs", contextTokens:4096 }, history);
+  assert.match(messages[1].content, /Conversation memory/);
+  assert.match(messages[1].content, /turn-/);
+  assert.equal(messages.at(-1).content, history.at(-1).content);
+  assert.ok(buildConversationMemory(history, history.slice(-2), 4096).length > 0);
 });

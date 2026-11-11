@@ -15,6 +15,7 @@ const vllm = require("./vllm.cjs");
 const { createCredentialStore, authHeaders, assertCredentialTransport, redactError } = require("./aiCredentials.cjs");
 const { isTrustedSender, assertStreamOwner } = require("./ipcSecurity.cjs");
 const { createLineDecoder, MAX_FILE_BYTES, MAX_AI_BYTES } = require("./streamLimits.cjs");
+const { createConversationStore } = require("./conversationStore.cjs");
 
 const IS_SMOKE_TEST = process.env.PULPLOG_SMOKE_TEST === "1";
 const IS_DEV = !IS_SMOKE_TEST && (process.env.NODE_ENV === "development" || !app.isPackaged);
@@ -2175,6 +2176,18 @@ handleTrusted("recentfiles:remove", (_event, fp) => updateSettings(current => ({
   refreshApplicationMenu(settings);
   return settings.recentFiles;
 }));
+
+/* ─── AI conversation history (local userData JSON) ─── */
+const conversationStore = createConversationStore({
+  filename:path.join(app.getPath("userData"), "ai-conversations.json"),
+});
+const conversationId = value => normalizeIdentifier(value, "conversation id");
+
+handleTrusted("conversations:list", () => conversationStore.list());
+handleTrusted("conversations:get", (_event, id) => conversationStore.get(conversationId(id)));
+handleTrusted("conversations:save", (_event, conversation) => conversationStore.save(conversation));
+handleTrusted("conversations:delete", (_event, id) => conversationStore.remove(conversationId(id)));
+handleTrusted("conversations:clear", () => conversationStore.clear());
 /* ─── Local AI (Ollama) integration ─── */
 const OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434";
 const OLLAMA_CONTEXT_SIZES = [4096, 8192, 16384, 32768, 65536, 131072];
