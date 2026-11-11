@@ -6,11 +6,36 @@ import { LogTab } from "./LogTab.jsx";
 import { DockerTab, DockerPicker } from "./DockerTab.jsx";
 import { RemoteTab, RemotePicker } from "./RemoteTab.jsx";
 import { Welcome } from "./Welcome.jsx";
+import { tabKey, entryKey } from "../workspaces.mjs";
+import { createMergedStream } from "../mergedSource.mjs";
+
+/* Workspace merged view: several local files interleaved by timestamp */
+function MergedTab({ tabKey: key, merged, maxLiveLines, isActive }) {
+  const filesKey = JSON.stringify(merged.files);
+  const stream = React.useMemo(
+    () => handlers => createMergedStream(merged.files, handlers, { maxLines: maxLiveLines }),
+    [filesKey, maxLiveLines], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  return <DockerTab tabKey={key} maxLiveLines={maxLiveLines} stream={stream}
+                    sourceTitle={`⧉ ${merged.title} · ${merged.files.length}`} isActive={isActive} />;
+}
 
 /* ═══════════════════════════════════════════
    App shell (tabs)
 ═══════════════════════════════════════════ */
 let nextId = 1;
+
+const isContentTab = tab => !!(tab.filePath || tab.docker || tab.remote || tab.merged);
+
+export function remoteTabLabel(config) {
+  const name = config.mode === "wsl"
+    ? (config.distro ? `WSL ${config.distro}` : "WSL")
+    : config.mode === "ssh-wsl"
+      ? `${config.distro || "WSL"} → ${config.target}`
+    : (config.user && !config.target.includes("@") ? `${config.user}@${config.target}` : config.target);
+  const prefix = config.mode === "wsl" ? "WSL2" : config.mode === "ssh-wsl" ? "SSH WSL2" : config.mode === "ssh-native" ? "SSH directo" : "SSH";
+  return config.source === "docker" ? `Docker ${config.containerName || config.containerId} · ${name}` : `${prefix} ${name}`;
+}
 
 /* ═══════════════════════════════════════════
    usePaneTabs — one independent tab list + all
@@ -31,10 +56,25 @@ function usePaneTabs(setSettings, notifyFileMissing) {
   useEffect(() => { activeRef.current = active; }, [active]);
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
 
+  /* finalize() keeps the invariants after closing tabs: at least one tab
+     (a welcome tab if needed) and the active tab always exists. */
+  const finalize = (next, preferredIndex = null) => {
+    const visible = next;
+    if (!visible.length) {
+      const newId = nextId++;
+      setActive(newId);
+      return [...next, { id: newId, label:"$welcome", filePath:null }];
+    }
+    setActive(a => visible.some(tab => tab.id === a)
+      ? a
+      : visible[Math.min(preferredIndex ?? visible.length - 1, visible.length - 1)].id);
+    return next;
+  };
+
   const addTab = (label, filePath, fileSize, extra = {}) => {
     const id = nextId++;
     const tab = { id, label, filePath, fileSize, ...extra };
-    setTabs(p => p.length === 1 && !p[0].filePath && !p[0].docker && !p[0].remote ? [tab] : [...p, tab]);
+    setTabs(p => [...p.filter(isContentTab), tab]);
     setActive(id);
   };
 
@@ -72,15 +112,9 @@ function usePaneTabs(setSettings, notifyFileMissing) {
 
   const openRemoteTab = (config) => {
     const id = nextId++;
-    const name = config.mode === "wsl"
-      ? (config.distro ? `WSL ${config.distro}` : "WSL")
-      : config.mode === "ssh-wsl"
-        ? `${config.distro || "WSL"} → ${config.target}`
-      : (config.user && !config.target.includes("@") ? `${config.user}@${config.target}` : config.target);
-    const prefix = config.mode === "wsl" ? "WSL2" : config.mode === "ssh-wsl" ? "SSH WSL2" : config.mode === "ssh-native" ? "SSH directo" : "SSH";
     setTabs(p => [...p, {
       id,
-      label: config.source === "docker" ? `Docker ${config.containerName || config.containerId} · ${name}` : `${prefix} ${name}`,
+      label: remoteTabLabel(config),
       filePath: null,
       fileSize: null,
       remote: config,
@@ -95,14 +129,7 @@ function usePaneTabs(setSettings, notifyFileMissing) {
       const tab = prev[idx];
       if (tab?.filePath && tab.filePath !== "__web__")
         closedTabsRef.current.push({ label: tab.label, filePath: tab.filePath, fileSize: tab.fileSize });
-      const next = prev.filter(tab => tab.id !== id);
-      if (next.length === 0) {
-        const newId = nextId++;
-        setActive(newId);
-        return [{ id: newId, label:"$welcome", filePath:null }];
-      }
-      setActive(a => a === id ? next[Math.min(idx, next.length - 1)].id : a);
-      return next;
+      return finalize(prev.filter(tab => tab.id !== id), Math.max(idx, 0));
     });
   };
 
@@ -114,7 +141,7 @@ function usePaneTabs(setSettings, notifyFileMissing) {
     setTabs(prev => {
       const currentIdx = prev.findIndex(t => t.id === tabId);
       if (currentIdx === -1) return prev;
-      const clone = { ...prev[currentIdx], id: newId, reloadNonce: 0 };
+      const clone = { ...prev[currentIdx], id: newId, reloadNonce: 0, workspaceIds: [], wsOwned: false };
       const next = [...prev];
       next.splice(currentIdx + 1, 0, clone);
       return next;
@@ -150,15 +177,17 @@ function usePaneTabs(setSettings, notifyFileMissing) {
     const snapshotIndex = snapshot.findIndex(t => t.id === tabId);
     const activeWasRemoved = snapshotIndex >= 0 && snapshot.slice(snapshotIndex + 1).some(t => t.id === activeRef.current);
     setTabs(prev => {
-      const idx = prev.findIndex(t => t.id === tabId);
+      const visible = prev;
+      const idx = visible.findIndex(t => t.id === tabId);
       if (idx === -1) return prev;
-      const removed = prev.slice(idx + 1);
+      const removed = visible.slice(idx + 1);
       if (!removed.length) return prev;
       removed.forEach(t => {
         if (t.filePath && t.filePath !== "__web__")
           closedTabsRef.current.push({ label: t.label, filePath: t.filePath, fileSize: t.fileSize });
       });
-      return prev.slice(0, idx + 1);
+      const removedIds = new Set(removed.map(t => t.id));
+      return prev.filter(t => !removedIds.has(t.id));
     });
     if (activeWasRemoved) setActive(tabId);
   };
@@ -172,6 +201,18 @@ function usePaneTabs(setSettings, notifyFileMissing) {
     const id = nextId++;
     setTabs(p => [...p, { id, label: last.label, filePath: last.filePath, fileSize: last.fileSize }]);
     setActive(id);
+  };
+
+  /* Bulk helpers used by workspaces */
+  const appendTabs = (newTabs) => {
+    if (!newTabs.length) return;
+    const withIds = newTabs.map(tab => ({ ...tab, id: nextId++ }));
+    setTabs(p => [...p.filter(isContentTab), ...withIds]);
+    setActive(withIds[0].id);
+  };
+
+  const removeTabsWhere = (predicate) => {
+    setTabs(prev => prev.some(predicate) ? finalize(prev.filter(tab => !predicate(tab))) : prev);
   };
 
   const toggleGroupStart = (tabId) => {
@@ -197,7 +238,7 @@ function usePaneTabs(setSettings, notifyFileMissing) {
     addTab, openDockerTab, openRemoteTab, openFile, openFileByPath,
     closeTab, duplicateTab, reloadTab, renameTab,
     closeOtherTabs, closeTabsToRight, closeActiveTab, reopenLastClosedTab,
-    toggleGroupStart, reorderTab,
+    toggleGroupStart, reorderTab, appendTabs, removeTabsWhere,
   };
 }
 
@@ -206,8 +247,14 @@ function usePaneTabs(setSettings, notifyFileMissing) {
    these are rendered by App() (side by side or
    stacked) when split, one when not.
 ═══════════════════════════════════════════ */
-function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemoteProfilesChange, onTogglePref }) {
+function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemoteProfilesChange, onTogglePref, workspaces }) {
   const t = useLang();
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
+  // only active workspaces color a tab
+  const activeWsIds = new Set(workspaces?.activeIds || []);
+  const wsById = new Map((workspaces?.workspaces || []).filter(ws => activeWsIds.has(ws.id)).map(ws => [ws.id, ws]));
+  const firstWs = tab => (tab.workspaceIds || []).map(id => wsById.get(id)).find(Boolean);
   const {
     tabs, active, setActive,
     dockerPicker, setDockerPicker, remotePicker, setRemotePicker,
@@ -254,7 +301,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
 
   useEffect(() => {
     if (!IS_ELECTRON) return;
-    const cleanup = window.electronAPI.onTabMenuAction(({ tabId, paneId: targetPane, action }) => {
+    const cleanup = window.electronAPI.onTabMenuAction(({ tabId, paneId: targetPane, action, workspaceId }) => {
       if (targetPane !== paneId) return;
       if (action === "duplicate") duplicateTab(tabId);
       else if (action === "reload") reloadTab(tabId);
@@ -262,10 +309,19 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
       else if (action === "close-others") closeOtherTabs(tabId);
       else if (action === "close-right") closeTabsToRight(tabId);
       else if (action === "toggle-group-start") toggleGroupStart(tabId);
+      else if (action.startsWith("ws-")) {
+        const ws = workspacesRef.current;
+        const tab = pane.tabsRef.current.find(x => x.id === tabId);
+        if (!ws || !tab) return;
+        if (action === "ws-add") ws.addTab(workspaceId, tab);
+        else if (action === "ws-remove") ws.removeEntry(workspaceId, tabKey(tab));
+        else if (action === "ws-new") ws.createFromTab(tab);
+      }
     });
     return () => cleanup?.();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const visibleTabs = tabs;
   const activeTab = tabs.find(tab => tab.id === active) || tabs[0];
   const dockerCap = capabilities?.docker;
   const sshCap = capabilities?.ssh;
@@ -310,7 +366,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
       {/* tab bar */}
       <div data-chrome style={{ display:"flex", alignItems:"stretch", background:"var(--pl-bg-tabbar)",
                     borderBottom:"0.5px solid var(--pl-border-soft)", flexShrink:0, overflowX:"auto" }}>
-        {tabs.map((tab, idx) => (
+        {visibleTabs.map((tab, idx) => (
           <div key={tab.id} style={{ display:"flex", alignItems:"stretch" }}>
             {tab.groupStart && idx > 0 && (
               <div style={{ width:2, alignSelf:"stretch", background:"var(--pl-text-7)", flexShrink:0 }} />
@@ -335,24 +391,34 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
                   tabId: tab.id,
                   paneId,
                   filePath: tab.filePath && tab.filePath !== "__web__" ? tab.filePath : null,
-                  hasContent: !!(tab.docker || tab.remote || (tab.filePath && tab.filePath !== "__web__")),
-                  tabCount: tabs.length,
-                  canCloseRight: idx < tabs.length - 1,
+                  hasContent: !!(tab.docker || tab.remote || tab.merged || (tab.filePath && tab.filePath !== "__web__")),
+                  workspaceable: !!tabKey(tab),
+                  tabCount: visibleTabs.length,
+                  canCloseRight: idx < visibleTabs.length - 1,
                   groupStart: !!tab.groupStart,
+                  workspaces: (() => {
+                    const key = tabKey(tab);
+                    return (workspaces?.workspaces || []).map(ws => ({
+                      id: ws.id, name: ws.name, has: !!key && ws.entries.some(en => entryKey(en) === key),
+                    }));
+                  })(),
                   x: e.clientX,
                   y: e.clientY,
                 });
               }}
-              title={
+              title={(tab.workspaceIds?.length
+                  ? `${t("ws_tab_in")}: ${tab.workspaceIds.map(id => wsById.get(id)?.name).filter(Boolean).join(", ")}\n` : "") + (
+                tab.merged   ? tab.merged.files.map(f => f.filePath).join("\n") :
                 tab.docker   ? `🐳 ${tab.docker.name}\nID: ${tab.docker.containerId.slice(0, 12)}` :
                 tab.remote   ? `${tab.remote.mode === "wsl" ? "WSL" : "SSH"}\n${tab.remote.filePath}` :
                 tab.filePath ? tab.filePath :
-                               t("hint_electron")
+                               t("hint_electron"))
               }
               style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 14px",
                        borderRight:"0.5px solid var(--pl-border-soft)", cursor:"pointer", flexShrink:0,
                        fontSize:12, maxWidth:200, overflow:"hidden",
                        WebkitUserDrag:"element", userSelect:"none",
+                       boxShadow: firstWs(tab) ? `inset 0 2px 0 ${firstWs(tab).color}` : "none",
                        background: tab.id===active ? "var(--pl-bg-panel)":"transparent",
                        color:      tab.id===active ? "var(--pl-text-1)":"var(--pl-text-5)",
                        borderBottom: tab.id===active ? "1.5px solid var(--pl-accent)":"1.5px solid transparent" }}>
@@ -378,12 +444,16 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
                   {!mountedTabIds.has(tab.id) && tab.filePath && (
                     <span title={t("reading", 0)} style={{ color:"var(--pl-text-7)", flexShrink:0 }}>○</span>
                   )}
+                  {(tab.workspaceIds || []).map(id => wsById.get(id)).filter(Boolean).map(ws => (
+                    <span key={ws.id} aria-hidden="true"
+                      style={{ width:7, height:7, borderRadius:"50%", background:ws.color, flexShrink:0 }} />
+                  ))}
                   <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                     {tab.label === "$welcome" ? t("welcome_tab") : tab.label}
                   </span>
                 </>
               )}
-              {tabs.length > 1 && (
+              {visibleTabs.length > 1 && (
                 <span style={{ fontSize:10, color:"var(--pl-text-6)", padding:"0 2px", cursor:"pointer",
                                flexShrink:0, borderRadius:3 }}
                   onClick={e => { e.stopPropagation(); closeTab(tab.id); }}>✕</span>
@@ -434,7 +504,10 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
       {tabs.filter(tab => mountedTabIds.has(tab.id) || tab.id === activeTab.id).map(tab => (
         <div key={tab.id} aria-hidden={tab.id !== activeTab.id}
              style={{ display:tab.id === activeTab.id ? "flex" : "none", flex:1, minHeight:0, overflow:"hidden" }}>
-          {tab.docker
+          {tab.merged
+            ? <MergedTab key={`merged-${tab.id}-${tab.reloadNonce || 0}`} tabKey={String(tab.id)} merged={tab.merged}
+                         maxLiveLines={settings.maxLiveLines} isActive={tab.id === activeTab.id && focused} />
+            : tab.docker
             ? <DockerTab key={`docker-${tab.id}-${tab.reloadNonce || 0}`}
                          tabKey={String(tab.id)} maxLiveLines={settings.maxLiveLines}
                          containerId={tab.docker.containerId} containerName={tab.docker.name}

@@ -2,7 +2,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { LangCtx, T } from "./i18n.jsx";
 import { IS_ELECTRON, reportMetric, RENDERER_STARTED_AT } from "./utils.mjs";
-import { Pane, usePaneTabs } from "./components/Pane.jsx";
+import { Pane, usePaneTabs, remoteTabLabel } from "./components/Pane.jsx";
+import { WorkspaceSelector, WorkspacesModal } from "./components/Workspaces.jsx";
+import { useWorkspaces, entryFromTab } from "./workspaces.mjs";
 import { DiagPanel, SettingsModal, AboutModal, HelpGuideModal } from "./components/Modals.jsx";
 import { AiSettingsCtx } from "./components/AnalysisSidebar.jsx";
 
@@ -41,6 +43,36 @@ export default function App() {
 
   const paneA = usePaneTabs(setSettings, notifyFileMissing);
   const paneB = usePaneTabs(setSettings, notifyFileMissing);
+
+  /* ── Workspaces ── */
+  const [wsModal, setWsModal] = useState(null); // null | { initialId }
+  const notifyWsMissing = useCallback((count) => {
+    clearTimeout(toastTimerRef.current);
+    setToast(t("ws_missing", count));
+    toastTimerRef.current = setTimeout(() => setToast(null), 6000);
+  }, [t]);
+  const workspaces = useWorkspaces({
+    panes: [paneA, paneB], remoteTabLabel, onMissing: notifyWsMissing, enabled: IS_ELECTRON,
+  });
+  const openTabEntries = useCallback(() => [...paneA.tabsRef.current, ...paneB.tabsRef.current]
+    .map(entryFromTab).filter(Boolean), [paneA.tabsRef, paneB.tabsRef]);
+  const workspacesForPanes = useMemo(() => ({
+    ...workspaces,
+    createFromTab: (tab) => {
+      const created = workspaces.createFromTab(tab);
+      if (created) setWsModal({ initialId: created.id });
+      return created;
+    },
+  }), [workspaces]);
+  const saveOpenTabsAsWorkspace = () => {
+    const entries = openTabEntries();
+    const created = workspaces.create({ name: t("ws_new_name"), entries });
+    if (entries.length) workspaces.activate(created.id);
+    setWsModal({ initialId: created.id });
+  };
+  useEffect(() => {
+    if (sessionReady && workspaces.loaded) workspaces.restoreActive();
+  }, [sessionReady, workspaces.loaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -128,13 +160,13 @@ export default function App() {
   }, []);
 
   const closeSplit = () => {
-    const contentTabs = paneB.tabs.filter(t => t.filePath || t.docker || t.remote);
+    const contentTabs = paneB.tabs.filter(t => t.filePath || t.docker || t.remote || t.merged);
     // Note: nextId from Pane won't be available here directly, we could just use Date.now() for the temporary welcome tab ID
     const newWelcomeId = Date.now();
     paneB.setTabs([{ id:newWelcomeId, label:"$welcome", filePath:null, fileSize:null }]);
     paneB.setActive(newWelcomeId);
     if (contentTabs.length) paneA.setTabs(prev => {
-      const withoutWelcome = prev.filter(t => t.filePath || t.docker || t.remote);
+      const withoutWelcome = prev.filter(t => t.filePath || t.docker || t.remote || t.merged);
       return [...withoutWelcome, ...contentTabs];
     });
     setSplitDirection(null);
@@ -228,7 +260,7 @@ export default function App() {
     if (!IS_ELECTRON || !sessionReady) return;
     const timer = setTimeout(() => {
       const serialize = tabs => tabs
-        .filter(tb => tb.filePath && tb.filePath !== "__web__")
+        .filter(tb => tb.filePath && tb.filePath !== "__web__" && !tb.wsOwned) // workspace tabs persist in workspaces.json
         .map(tb => ({ filePath: tb.filePath, label: tb.label, fileSize: tb.fileSize, groupStart: !!tb.groupStart }));
       const panes = [{ tabs: serialize(paneA.tabs) }];
       if (splitDirection) panes.push({ tabs: serialize(paneB.tabs) });
@@ -263,6 +295,11 @@ export default function App() {
         {/* chrome bar */}
         <div data-chrome style={{ display:"flex", alignItems:"stretch", background:"var(--pl-bg-tabbar)",
                       borderBottom:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}>
+          {IS_ELECTRON && (
+            <WorkspaceSelector ws={workspaces}
+              onManage={() => setWsModal({ initialId: workspaces.activeIds[0] })}
+              onSaveOpen={saveOpenTabsAsWorkspace} />
+          )}
           <button onClick={() => setSplitDirection("row")}
             style={{ background: splitDirection==="row" ? "var(--pl-split-active-bg)" : "transparent",
                      border:"none", color: splitDirection==="row" ? "var(--pl-accent-alt)" : "var(--pl-text-6)",
@@ -323,7 +360,8 @@ export default function App() {
             <Pane paneId="A" focused={focusedPane==="A"} onFocus={() => setFocusedPane("A")}
                   pane={paneA} capabilities={capabilities} settings={settings}
                   onRemoteProfilesChange={saveRemoteProfiles}
-                  onTogglePref={savePref} />
+                  onTogglePref={savePref}
+                  workspaces={IS_ELECTRON ? workspacesForPanes : null} />
           </div>
 
           {splitDirection && (
@@ -337,7 +375,8 @@ export default function App() {
                 <Pane paneId="B" focused={focusedPane==="B"} onFocus={() => setFocusedPane("B")}
                       pane={paneB} capabilities={capabilities} settings={settings}
                       onRemoteProfilesChange={saveRemoteProfiles}
-                      onTogglePref={savePref} />
+                      onTogglePref={savePref}
+                  workspaces={IS_ELECTRON ? workspacesForPanes : null} />
               </div>
             </>
           )}
@@ -354,6 +393,10 @@ export default function App() {
             onClearRecent={clearAllRecent}
             onTogglePref={savePref}
           />
+        )}
+        {wsModal && IS_ELECTRON && (
+          <WorkspacesModal ws={workspaces} initialId={wsModal.initialId}
+            openTabEntries={openTabEntries} onClose={() => setWsModal(null)} />
         )}
         {about && <AboutModal onClose={() => setAbout(false)} />}
         {helpGuideOpen && <HelpGuideModal lang={settings.language || "es"} onClose={() => setHelpGuideOpen(false)} />}

@@ -43,6 +43,7 @@
       "main.js",
       "remoteDocker.cjs",
       "vllm.cjs",
+      "workspaces.cjs",
       "aiCredentials.cjs",
       "conversationStore.cjs",
       "credentialVault.cjs",

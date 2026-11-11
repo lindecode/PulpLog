@@ -83,14 +83,17 @@ function DockerPicker({ onSelect, onClose }) {
 /* ═══════════════════════════════════════════
    Docker – log streaming tab
 ═══════════════════════════════════════════ */
-function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive = false }) {
+/* `stream` (optional) replaces the Docker source: (handlers) => cleanup, same
+   handler shape as streamDockerLogs. Used by the workspace merged view. */
+function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive = false, stream = null, sourceTitle = null }) {
   const t = useLang();
   const searchInputRef = useRef(null);
   const filterInputRef = useRef(null);
   useSearchShortcuts(searchInputRef, filterInputRef, isActive);
 
-  const selectionSource = `docker-${containerName}`;
-  const sourceLabel = `Docker ${containerName}${containerId ? ` (${String(containerId).slice(0, 12)})` : ""}`;
+  const selectionSource = stream ? `merged-${sourceTitle}` : `docker-${containerName}`;
+  const sourceLabel = stream ? sourceTitle : `Docker ${containerName}${containerId ? ` (${String(containerId).slice(0, 12)})` : ""}`;
+  const resultSource = stream ? sourceTitle : `Docker ${containerName}`;
   const [classified, setClassified] = useState([]);
   const [spawned,    setSpawned]   = useState(false);
   const [connected,  setConnected] = useState(false);
@@ -139,7 +142,8 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
     setSpawned(false);
     setConnected(false);
     setError(null);
-    const unwatch = window.electronAPI.streamDockerLogs(containerId, {
+    const start = stream || (handlers => window.electronAPI.streamDockerLogs(containerId, handlers));
+    const unwatch = start({
       onSpawned() { setSpawned(true); },
       onLines(text) {
         enqueueLines(text.split("\n").filter(Boolean));
@@ -148,7 +152,7 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
       onError(msg) { setError(msg); setConnected(false); },
     });
     return unwatch;
-  }, [containerId, streamNonce]);
+  }, [containerId, stream, streamNonce]);
 
   const stats = useMemo(() => countLevels(classified), [classified]);
 
@@ -237,15 +241,15 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
   ];
 
   const copyResults = useCallback(() => {
-    const text = buildResultText({ source: `Docker ${containerName}`, filter, timeRange, items: filtered, total: classified.length });
+    const text = buildResultText({ source: resultSource, filter, timeRange, items: filtered, total: classified.length });
     copyResultText(text);
-  }, [containerName, filter, timeRange, filtered, classified.length]);
+  }, [resultSource, filter, timeRange, filtered, classified.length]);
 
   const exportResults = useCallback(() => {
-    const source = `docker-${containerName}`;
-    const text = buildResultText({ source: `Docker ${containerName}`, filter, timeRange, items: filtered, total: classified.length });
+    const source = selectionSource;
+    const text = buildResultText({ source: resultSource, filter, timeRange, items: filtered, total: classified.length });
     exportResultText(`${safeFileName(source)}-filtered.log`, text);
-  }, [containerName, filter, timeRange, filtered, classified.length]);
+  }, [resultSource, filter, timeRange, filtered, classified.length]);
 
   const clearVisibleLog = useCallback(() => {
     setRememberedScroll(tabKey, 0);
@@ -448,8 +452,8 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
                       flexDirection:"column", gap:10, color:"var(--pl-text-7)", fontSize:13 }}>
           <span style={{ fontSize:28, color:"var(--pl-status-live)", animation:"spin 1s linear infinite" }}>↻</span>
-          {spawned ? t("docker_waiting") : t("docker_starting")}
-          {spawned && <span style={{ fontSize:10, color:"var(--pl-text-8)" }}>{t("docker_no_logs")}</span>}
+          {stream ? t("ws_merged_loading") : spawned ? t("docker_waiting") : t("docker_starting")}
+          {spawned && !stream && <span style={{ fontSize:10, color:"var(--pl-text-8)" }}>{t("docker_no_logs")}</span>}
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         </div>
       ) : filtered.length === 0 ? (

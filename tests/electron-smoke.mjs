@@ -11,6 +11,11 @@ const electronPath = require("electron");
 const smokeDir = mkdtempSync(join(tmpdir(), "pulplog-smoke-"));
 const smokeFile = join(smokeDir, "sample.log");
 writeFileSync(smokeFile, "INFO ready\n", "utf8");
+// one workspace with the sample file, inactive at start: the app exercises activate → hide → show
+writeFileSync(join(smokeDir, "workspaces.json"), JSON.stringify({
+  workspaces:[{ id:"smoke", name:"Smoke", color:"#539BF5", view:"tabs", entries:[{ type:"file", filePath:smokeFile }] }],
+  activeIds:[],
+}), "utf8");
 const electronEnv = {
   ...process.env,
   PULPLOG_SMOKE_TEST:"1",

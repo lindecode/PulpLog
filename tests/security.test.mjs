@@ -36,6 +36,15 @@ test("only registered application main frames may invoke IPC", () => {
   assert.equal(isTrustedSender({ sender, senderFrame:frame }, allowed, url), false);
   frame.url = url;
   assert.equal(isTrustedSender({ sender, senderFrame:frame }, new WeakSet(), url), false);
+  // Windows drive letter case differs between Chromium and Node; nothing else may
+  const winUrl = "file:///v:/app/dist/index.html";
+  frame.url = "file:///V:/app/dist/index.html";
+  assert.equal(isTrustedSender({ sender, senderFrame:frame }, allowed, winUrl), true);
+  frame.url = "file:///V:/APP/dist/index.html";
+  assert.equal(isTrustedSender({ sender, senderFrame:frame }, allowed, winUrl), false);
+  frame.url = "file:///W:/app/dist/index.html";
+  assert.equal(isTrustedSender({ sender, senderFrame:frame }, allowed, winUrl), false);
+  frame.url = url;
   assert.throws(() => assertStreamOwner({ sender }, {}), /another window/);
   assert.doesNotThrow(() => assertStreamOwner({ sender }, sender));
 });

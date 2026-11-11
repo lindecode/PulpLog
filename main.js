@@ -12,6 +12,7 @@ const { execFile, spawn } = require("child_process");
 const { Client: SshClient } = require("ssh2");
 const { dockerListScript, dockerReadCheck, dockerLogsScript, parseDockerContainers } = require("./remoteDocker.cjs");
 const vllm = require("./vllm.cjs");
+const workspacesStore = require("./workspaces.cjs");
 const { createCredentialStore, authHeaders, assertCredentialTransport, redactError } = require("./aiCredentials.cjs");
 const { isTrustedSender, assertStreamOwner } = require("./ipcSecurity.cjs");
 const { createLineDecoder, MAX_FILE_BYTES, MAX_AI_BYTES } = require("./streamLimits.cjs");
@@ -134,6 +135,8 @@ const MENU_STRINGS = {
     duplicate_tab:"Duplicar bitácora", reload_tab:"Recargar bitácora", rename_tab:"Renombrar pestaña",
     group_start_off:"Quitar separador de grupo", group_start_on:"Iniciar grupo aquí",
     close_others:"Cerrar otras pestañas", close_right:"Cerrar pestañas a la derecha",
+    ws_export_dialog:"Exportar workspaces", ws_import_dialog:"Importar workspaces", ws_filter:"Workspaces de PulpLog",
+    ws_add_to:"Agregar a workspace", ws_remove_from:"Quitar de workspace", ws_new_with_tab:"Nuevo workspace con esta bitácora…",
     open_log_dialog:"Abrir archivo de log", pick_ssh_key:"Seleccionar llave privada SSH",
     export_dialog:"Exportar resultados", filter_logs:"Logs", filter_all:"Todos", filter_ssh_keys:"Llaves SSH",
     ok:"Aceptar", cancel:"Cancelar", tech_detail:"Detalle técnico",
@@ -175,6 +178,8 @@ const MENU_STRINGS = {
     duplicate_tab:"Duplicate tab", reload_tab:"Reload tab", rename_tab:"Rename tab",
     group_start_off:"Remove group separator", group_start_on:"Start group here",
     close_others:"Close other tabs", close_right:"Close tabs to the right",
+    ws_export_dialog:"Export workspaces", ws_import_dialog:"Import workspaces", ws_filter:"PulpLog workspaces",
+    ws_add_to:"Add to workspace", ws_remove_from:"Remove from workspace", ws_new_with_tab:"New workspace with this log…",
     open_log_dialog:"Open log file", pick_ssh_key:"Select SSH private key",
     export_dialog:"Export results", filter_logs:"Logs", filter_all:"All files", filter_ssh_keys:"SSH keys",
     ok:"OK", cancel:"Cancel", tech_detail:"Technical detail",
@@ -1084,9 +1089,12 @@ handleTrusted("export:text", async (event, payload) => {
 /* ─── Tab context menu ─── */
 handleTrusted("tabmenu:show", (event, payload) => {
   const { tabId, paneId, filePath, hasContent, tabCount, canCloseRight, groupStart, x, y } = payload || {};
+  const workspaces = (Array.isArray(payload?.workspaces) ? payload.workspaces : [])
+    .filter(ws => ws && typeof ws.id === "string" && typeof ws.name === "string")
+    .slice(0, 50);
 
-  function sendAction(action) {
-    if (!event.sender.isDestroyed()) event.sender.send("tabmenu:action", { tabId, paneId, action });
+  function sendAction(action, workspaceId) {
+    if (!event.sender.isDestroyed()) event.sender.send("tabmenu:action", { tabId, paneId, action, workspaceId });
   }
 
   const template = [];
@@ -1098,6 +1106,25 @@ handleTrusted("tabmenu:show", (event, payload) => {
   if (hasContent) {
     template.push({ label: mt("duplicate_tab"), click: () => sendAction("duplicate") });
     template.push({ label: mt("reload_tab"), click: () => sendAction("reload") });
+    template.push({ type: "separator" });
+  }
+  if (hasContent && payload?.workspaceable !== false) {
+    const addable = workspaces.filter(ws => !ws.has);
+    const removable = workspaces.filter(ws => ws.has);
+    template.push({
+      label: mt("ws_add_to"),
+      submenu: [
+        ...addable.map(ws => ({ label: ws.name.slice(0, 80), click: () => sendAction("ws-add", ws.id) })),
+        ...(addable.length ? [{ type: "separator" }] : []),
+        { label: mt("ws_new_with_tab"), click: () => sendAction("ws-new") },
+      ],
+    });
+    if (removable.length) {
+      template.push({
+        label: mt("ws_remove_from"),
+        submenu: removable.map(ws => ({ label: ws.name.slice(0, 80), click: () => sendAction("ws-remove", ws.id) })),
+      });
+    }
     template.push({ type: "separator" });
   }
   template.push({ label: mt("rename_tab"), click: () => sendAction("rename") });
@@ -2163,6 +2190,44 @@ function updateSettings(mutator) {
   return operation;
 }
 
+const workspaces = workspacesStore.createStore(
+  path.join(path.dirname(getSettingsPath()), "workspaces.json"),
+  err => logEntry("ERROR", "workspaces", `No se pudieron guardar los workspaces: ${err.message}`),
+);
+handleTrusted("workspaces:get", () => workspaces.get());
+handleTrusted("workspaces:set", (_event, data) => workspaces.save(data));
+handleTrusted("workspaces:resolve", (_event, payload) => {
+  const pattern = normalizeLocalPath(payload?.pattern);
+  return workspacesStore.resolvePattern(pattern, { latestOnly: payload?.latestOnly !== false });
+});
+handleTrusted("workspaces:export", async (_event, payload) => {
+  const list = Array.isArray(payload?.workspaces) ? payload.workspaces : [];
+  if (!list.length) return null;
+  const base = String(payload?.defaultName || "workspaces").replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").slice(0, 80) || "workspaces";
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: mt("ws_export_dialog"),
+    defaultPath: `${base}.pulpworkspace`,
+    filters: [{ name: mt("ws_filter"), extensions: ["pulpworkspace", "json"] }],
+  });
+  if (canceled || !filePath) return null;
+  await fs.promises.writeFile(filePath, workspacesStore.serializeExport(list), "utf8");
+  logEntry("INFO", "workspaces", `Workspaces exportados: ${path.basename(filePath)}`);
+  return filePath;
+});
+handleTrusted("workspaces:import", async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: mt("ws_import_dialog"),
+    filters: [{ name: mt("ws_filter"), extensions: ["pulpworkspace", "json"] }, { name: mt("filter_all"), extensions: ["*"] }],
+    properties: ["openFile"],
+  });
+  if (canceled || !filePaths?.[0]) return null;
+  const stat = await fs.promises.stat(filePaths[0]);
+  if (stat.size > 5 * 1024 * 1024) throw new Error("Invalid workspace file");
+  const list = workspacesStore.parseImport(await fs.promises.readFile(filePaths[0], "utf8"));
+  logEntry("INFO", "workspaces", `Workspaces importados: ${list.length} desde ${path.basename(filePaths[0])}`);
+  return list;
+});
+
 handleTrusted("settings:get", async () => {
   await settingsWriteQueue;
   return loadSettings();
@@ -2651,6 +2716,7 @@ app.whenReady().then(async () => {
       setTimeout(async () => {
         try {
           const smokeFile = JSON.stringify(process.env.PULPLOG_SMOKE_FILE || "");
+          const smokePattern = JSON.stringify(path.join(path.dirname(process.env.PULPLOG_SMOKE_FILE || "."), "sample*.log"));
           const result = await win.webContents.executeJavaScript(`(async () => {
             const stat = await window.electronAPI.statFile(${smokeFile});
             const readText = await new Promise((resolve, reject) => {
@@ -2663,7 +2729,38 @@ app.whenReady().then(async () => {
             });
             await window.electronAPI.setSettings({ maxLiveLines:250000 });
             const settings = await window.electronAPI.getSettings();
+
+            /* Workspaces: activate opens the tab, deactivate closes it, re-activate opens it once */
+            const until = async (check, ms = 5000) => {
+              const end = Date.now() + ms;
+              while (Date.now() < end) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); }
+              return false;
+            };
+            const sampleTabs = () => [...document.querySelectorAll('[draggable="true"]')]
+              .filter(el => el.textContent.includes("sample.log")).length;
+            const pattern = await window.electronAPI.resolveWorkspacePattern(${smokePattern}, true);
+            await until(() => document.querySelector('[aria-haspopup="menu"]'));
+            document.querySelector('[aria-haspopup="menu"]').click();
+            await until(() => document.querySelector('[role="menuitemcheckbox"]'));
+            const item = () => document.querySelector('[role="menuitemcheckbox"]');
+            item().click();
+            const wsShown = await until(() => sampleTabs() === 1);
+            const mountedPanels = () => document.querySelectorAll('[aria-hidden="true"], [aria-hidden="false"]').length;
+            await new Promise(r => setTimeout(r, 300));
+            const panelsBefore = mountedPanels();
+            item().click();
+            const wsHidden = await until(() => sampleTabs() === 0);
+            await new Promise(r => setTimeout(r, 300));
+            const contentClosed = mountedPanels() < panelsBefore; // deactivating closes (unmounts), no background tail
+            item().click();
+            const wsReshown = await until(() => sampleTabs() === 1);
+            await new Promise(r => setTimeout(r, 300));
+            const wsNoDuplicate = sampleTabs() === 1;
+            const wsStore = await window.electronAPI.getWorkspaces();
             return {
+              wsPattern: pattern.length === 1 && pattern[0].filePath === ${smokeFile},
+              wsShown, wsHidden, contentClosed, wsReshown, wsNoDuplicate,
+              wsPersisted: wsStore.activeIds.includes("smoke"),
               hasRoot: document.querySelector("#root")?.childElementCount > 0,
               hasPreload: typeof window.electronAPI?.statFile === "function",
               sandboxed: typeof process === "undefined",
@@ -2675,6 +2772,8 @@ app.whenReady().then(async () => {
           const recentMenu = Menu.getApplicationMenu()?.getMenuItemById("open-recent");
           if (!result.hasRoot || !result.hasPreload || !result.sandboxed ||
               result.statSize !== 11 || !result.readMatches || !result.settingsPersisted ||
+              !result.wsPattern || !result.wsShown || !result.wsHidden || !result.contentClosed ||
+              !result.wsReshown || !result.wsNoDuplicate || !result.wsPersisted ||
               !recentMenu?.submenu) throw new Error(JSON.stringify(result));
           console.log("PULPLOG_SMOKE_OK");
           app.exit(0);

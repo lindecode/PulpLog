@@ -189,6 +189,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   /* ── Settings & recent files ── */
   getSettings:      () => ipcRenderer.invoke("settings:get"),
   setSettings:      (d) => ipcRenderer.invoke("settings:set", d),
+  getWorkspaces:    () => ipcRenderer.invoke("workspaces:get"),
+  setWorkspaces:    (d) => ipcRenderer.invoke("workspaces:set", d),
+  resolveWorkspacePattern: (pattern, latestOnly) => ipcRenderer.invoke("workspaces:resolve", { pattern, latestOnly }),
+  exportWorkspaces: (workspaces, defaultName) => ipcRenderer.invoke("workspaces:export", { workspaces, defaultName }),
+  importWorkspaces: () => ipcRenderer.invoke("workspaces:import"),
   addRecentFile:    (fp) => ipcRenderer.invoke("recentfiles:add", fp),
   removeRecentFile: (fp) => ipcRenderer.invoke("recentfiles:remove", fp),
 
