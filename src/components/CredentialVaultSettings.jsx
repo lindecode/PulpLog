@@ -38,6 +38,11 @@ export function CredentialVaultSettings() {
     if (!window.confirm(t("vault_forgot_confirm_final"))) return;
     run(() => window.electronAPI.resetVault());
   };
+  const deleteVault = () => {
+    if (!window.confirm(t("vault_delete_all_confirm"))) return;
+    if (!window.confirm(t("vault_delete_all_confirm_final"))) return;
+    run(() => window.electronAPI.resetVault());
+  };
 
   return <div style={{ border:"0.5px solid var(--pl-border)", borderRadius:7, padding:12, marginTop:4 }}>
     <div style={{ fontSize:11, fontWeight:700, color:"var(--pl-text-2)", marginBottom:5 }}>{t("vault_title")}</div>
@@ -80,6 +85,10 @@ export function CredentialVaultSettings() {
               style={{ border:0, background:"none", color:"var(--pl-error-text)", cursor:"pointer", fontSize:10 }}>{t("vault_delete")}</button>
           </div>)}
         </div>}
+      <button type="button" onClick={deleteVault} disabled={busy}
+        style={{ marginTop:10, border:0, background:"none", color:"var(--pl-error-text)", cursor:"pointer", fontSize:10 }}>
+        {t("vault_delete_all")}
+      </button>
     </>}
     {error && <div role="alert" style={{ color:"var(--pl-error-text)", fontSize:10, marginTop:8 }}>{error}</div>}
   </div>;

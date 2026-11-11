@@ -644,6 +644,7 @@ Las contraseñas SSH pueden guardarse opcionalmente en **Configuración → Bóv
 - Nunca guarda la contraseña maestra; los perfiles sólo conservan el identificador de la credencial cifrada.
 - Debe estar desbloqueada para usar o guardar contraseñas y puede bloquearse manualmente.
 - Permite listar y eliminar credenciales sin revelar su contenido.
+- Permite borrar una credencial o eliminar la bóveda completa, siempre con confirmación; los perfiles y logs originales permanecen intactos.
 
 No hay recuperación de la contraseña maestra. **Olvidé mi contraseña** explica que se eliminará permanentemente la base cifrada completa, pide dos confirmaciones y obliga a capturar de nuevo todas las credenciales. Esta acción no elimina llaves SSH, archivos de log ni perfiles; los perfiles que apuntaban a credenciales borradas volverán a solicitar una contraseña.
 
@@ -681,6 +682,8 @@ El límite de líneas vivas configurado en PulpLog continúa protegiendo la memo
 | Atajos globales | `Super+A` abre archivo, `Super+T` nueva pestaña, `Super+W` cierra pestaña, `Super+Shift+T` reabre la última pestaña y `Super+P` trae la app al frente |
 
 En Windows 11 algunos atajos con `Super` pueden estar reservados por el sistema. La bitácora interna indica cuáles se registraron correctamente.
+
+El desinstalador interactivo de Windows pregunta si también debe eliminar todos los datos locales de PulpLog: bóveda, conversaciones, ajustes y bitácora interna. La opción se omite durante actualizaciones y desinstalaciones silenciosas para evitar pérdidas inesperadas. Los paquetes actuales de macOS y Linux no tienen un asistente de desinstalación equivalente y conservan los datos locales por defecto.
 
 ## Privacidad y seguridad
 
