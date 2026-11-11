@@ -13,6 +13,7 @@ const { Client: SshClient } = require("ssh2");
 const { dockerListScript, dockerReadCheck, dockerLogsScript, parseDockerContainers } = require("./remoteDocker.cjs");
 const vllm = require("./vllm.cjs");
 const workspacesStore = require("./workspaces.cjs");
+const containerRuntimes = require("./containerRuntimes.cjs");
 const { createCredentialStore, authHeaders, assertCredentialTransport, redactError } = require("./aiCredentials.cjs");
 const { isTrustedSender, assertStreamOwner } = require("./ipcSecurity.cjs");
 const { createLineDecoder, MAX_FILE_BYTES, MAX_AI_BYTES } = require("./streamLimits.cjs");
@@ -528,8 +529,11 @@ function checkSshAgent() {
 
 async function getSystemCapabilities(options = {}) {
   const shouldCheckSshAgent = options.checkSshAgent === true;
-  const [docker, ssh, wsl] = await Promise.all([
+  const [docker, podman, nerdctl, kubectl, ssh, wsl] = await Promise.all([
     checkCommand("docker", ["version", "--format", "{{.Server.Version}}"]),
+    checkCommand("podman", ["version", "--format", "{{.Client.Version}}"]),
+    checkCommand("nerdctl", ["version", "--format", "{{.Client.Version}}"]),
+    checkCommand("kubectl", ["version", "--client", "--output=json"]),
     checkCommand("ssh", ["-V"]),
     process.platform === "win32"
       ? checkCommand("wsl.exe", ["--status"])
@@ -551,9 +555,16 @@ async function getSystemCapabilities(options = {}) {
     : { running:false, keysLoaded:false, keyCount:0 };
   ssh.agent.pollingEnabled = shouldCheckSshAgent;
 
+  const runtimeChecks = { docker, podman, nerdctl, kubernetes: kubectl };
+  const containers = {
+    runtimes: Object.keys(runtimeChecks).filter(id => runtimeChecks[id].available),
+  };
+  containers.available = containers.runtimes.length > 0;
+
   return {
     platform: process.platform,
     docker,
+    containers,
     ssh,
     wsl,
   };
@@ -1140,40 +1151,58 @@ handleTrusted("tabmenu:show", (event, payload) => {
   Menu.buildFromTemplate(template).popup({ window: win || undefined, x, y });
 });
 
-/* ─── Docker ─── */
-const DOCKER_SOCKET = process.platform === "win32"
-  ? "//./pipe/docker_engine"
-  : "/var/run/docker.sock";
-
-function dockerGet(apiPath) {
+/* ─── Containers: Docker, Podman, nerdctl (containerd), Kubernetes ─── */
+// All through each runtime's own CLI, so Docker contexts, DOCKER_HOST,
+// `minikube docker-env`, Rancher Desktop, Colima… behave like in a terminal.
+function runCli(bin, args, timeout = 10000) {
   return new Promise((resolve, reject) => {
-    const req = http.get(
-      { socketPath: DOCKER_SOCKET, path: apiPath, headers: { Accept: "application/json" } },
-      (res) => {
-        const chunks = [];
-        res.on("data", c => chunks.push(c));
-        res.on("end",  () => {
-          try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
-          catch (e) { reject(e); }
-        });
-      }
-    );
-    req.on("error", reject);
+    execFile(bin, args, { timeout, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        err.detail = String(stderr || "").trim().split(/\r?\n/).slice(-3).join(" ") || err.message;
+        reject(err);
+      } else resolve(String(stdout || ""));
+    });
   });
 }
 
-handleTrusted("docker:list", async (event) => {
-  logEntry("INFO", "docker", "Listando contenedores…");
-  try {
-    const result = await dockerGet("/containers/json?all=false");
-    const count = Array.isArray(result) ? result.length : "?";
-    logEntry("INFO", "docker", `Contenedores activos: ${count}`);
-    return result;
-  } catch (e) {
-    logEntry("ERROR", "docker", `Error al listar contenedores: ${e.message}`);
-    showErrorAlert(event.sender, "docker", mt("err_docker"), e.message);
-    return { error: e.message };
+async function listRuntime(runtime, options) {
+  const { bin } = containerRuntimes.RUNTIMES[runtime];
+  if (runtime === "docker") return { items: containerRuntimes.parseDockerPs(await runCli(bin, containerRuntimes.DOCKER_LIST_ARGS)) };
+  if (runtime === "podman") return { items: containerRuntimes.parsePodmanPs(await runCli(bin, containerRuntimes.PODMAN_LIST_ARGS)) };
+  if (runtime === "nerdctl") {
+    const namespaces = containerRuntimes.parseNamespaces(await runCli(bin, containerRuntimes.NERDCTL_NAMESPACES_ARGS));
+    const lists = await Promise.all(namespaces.map(ns =>
+      runCli(bin, containerRuntimes.nerdctlListArgs(ns)).then(out => containerRuntimes.parseNerdctlPs(out, ns)).catch(() => [])));
+    return { items: lists.flat() };
   }
+  // kubernetes: reading contexts only reads the local kubeconfig (no network). Pods are
+  // fetched — one context at a time — only when the user asks (includeKubernetes), so
+  // opening the picker never connects to (or authenticates against) a remote cluster.
+  const contexts = containerRuntimes.parseKubeContexts(await runCli(bin, containerRuntimes.KUBE_CONTEXTS_ARGS));
+  const current = (await runCli(bin, containerRuntimes.KUBE_CURRENT_ARGS).catch(() => "")).trim();
+  const selected = contexts.includes(options?.kubeContext) ? options.kubeContext
+    : contexts.includes(current) ? current : contexts[0];
+  const kube = { contexts, current, selected, loaded: false };
+  if (!selected || options?.includeKubernetes !== true) return { items: [], kube };
+  kube.loaded = true;
+  const out = await runCli(bin, containerRuntimes.kubePodsArgs(selected), 15000);
+  return { items: containerRuntimes.parseKubePods(out, selected), kube };
+}
+
+handleTrusted("containers:list", async (_event, options) => {
+  logEntry("INFO", "docker", "Listando contenedores (Docker, Podman, nerdctl, Kubernetes)…");
+  const results = await Promise.all(containerRuntimes.RUNTIME_IDS.map(runtime =>
+    listRuntime(runtime, options)
+      .then(result => ({ runtime, ...result }))
+      // not installed → silently absent; installed but failing → reported per runtime
+      .catch(err => err.code === "ENOENT" ? { runtime, missing: true } : { runtime, error: String(err.killed ? `timeout (${err.signal || "killed"})` : err.detail || err.message).slice(0, 400) })));
+  const items = results.flatMap(r => r.items || []);
+  const errors = results.filter(r => r.error).map(r => ({ runtime: r.runtime, message: r.error }));
+  const runtimes = results.filter(r => !r.missing).map(r => r.runtime);
+  const kube = results.find(r => r.runtime === "kubernetes")?.kube || null;
+  errors.forEach(e => logEntry("WARN", "docker", `${e.runtime}: ${e.message}`));
+  logEntry("INFO", "docker", `Contenedores: ${items.length} (${runtimes.join(", ") || "ningún runtime"})`);
+  return { items, errors, runtimes, kube };
 });
 
 const dockerStreams = new Map(); // streamId → { proc, stopped }
@@ -1181,14 +1210,19 @@ const dockerStreams = new Map(); // streamId → { proc, stopped }
 handleTrusted("docker:logs:start", (event, payload) => {
   assertTrustedSender(event);
   const streamId = normalizeIdentifier(payload?.streamId, "stream id");
-  const containerId = normalizeIdentifier(payload?.containerId, "container id");
-  if (!streamId || !containerId) throw new Error("Invalid docker stream request");
-  const shortId = containerId.slice(0, 12);
+  if (!streamId) throw new Error("Invalid docker stream request");
+  // legacy payload { containerId } = Docker
+  const source = containerRuntimes.normalizeSource(payload?.source || { runtime: "docker", id: payload?.containerId });
+  const args = containerRuntimes.logsArgs(source);
+  const bin = containerRuntimes.RUNTIMES[source.runtime].bin;
+  const shortId = source.runtime === "kubernetes"
+    ? `${source.context}/${source.namespace}/${source.pod || source.workload}/${source.container}`
+    : `${source.runtime}:${source.id.slice(0, 12)}`;
   logEntry("INFO", "docker", `Iniciando stream: ${shortId}`);
   assertStreamOwner(dockerStreams.get(streamId), event.sender);
   stopDockerStream(streamId);
 
-  const proc = spawn("docker", ["logs", "--follow", "--tail=500", containerId], {
+  const proc = spawn(bin, args, {
     windowsHide: true,
     shell: false,
   });
@@ -1227,7 +1261,7 @@ handleTrusted("docker:logs:start", (event, payload) => {
     const isError = code !== null && code !== 0;
     if (isError && !hadLines) {
       logEntry("ERROR", "docker", `Stream ${shortId} terminó con código ${code}`);
-      const msg = `docker logs terminó con código ${code}`;
+      const msg = `${bin} logs terminó con código ${code}`;
       showErrorAlert(event.sender, "docker", mt("err_docker_logs"), msg);
       send("docker:error", streamId, msg);
     } else {
@@ -2757,7 +2791,34 @@ app.whenReady().then(async () => {
             await new Promise(r => setTimeout(r, 300));
             const wsNoDuplicate = sampleTabs() === 1;
             const wsStore = await window.electronAPI.getWorkspaces();
+
+            /* Containers: the list never throws; if a runtime has containers, its logs must stream */
+            const containers = await window.electronAPI.listContainers({});
+            let streamOk = null;
+            const first = containers.items?.[0];
+            if (first) {
+              const source = first.runtime === "kubernetes"
+                ? { runtime:first.runtime, context:first.context, namespace:first.namespace, pod:first.pod, container:first.container }
+                : { runtime:first.runtime, id:first.id, namespace:first.namespace };
+              streamOk = await new Promise(resolve => {
+                let stop = null;
+                const timer = setTimeout(() => { stop?.(); resolve("timeout"); }, 8000);
+                const done = value => { clearTimeout(timer); stop?.(); resolve(value); };
+                stop = window.electronAPI.streamDockerLogs(source, {
+                  onSpawned: () => setTimeout(() => done(true), 1500), // a quiet container still spawns fine
+                  onLines: () => done(true),
+                  onError: msg => done("error: " + msg),
+                  onEnd: () => done(true),
+                });
+              });
+            }
             return {
+              containersSummary: {
+                runtimes: containers.runtimes, count: containers.items?.length, errors: containers.errors, kubeLoaded: containers.kube?.loaded ?? null,
+                first: first ? first.runtime + ":" + first.name : null, streamOk,
+              },
+              containersOk: Array.isArray(containers.items) && Array.isArray(containers.runtimes) && (streamOk === null || streamOk === true)
+                && (!containers.kube || containers.kube.loaded === false), // opening the picker never queries a cluster
               wsPattern: pattern.length === 1 && pattern[0].filePath === ${smokeFile},
               wsShown, wsHidden, contentClosed, wsReshown, wsNoDuplicate,
               wsPersisted: wsStore.activeIds.includes("smoke"),
@@ -2773,8 +2834,9 @@ app.whenReady().then(async () => {
           if (!result.hasRoot || !result.hasPreload || !result.sandboxed ||
               result.statSize !== 11 || !result.readMatches || !result.settingsPersisted ||
               !result.wsPattern || !result.wsShown || !result.wsHidden || !result.contentClosed ||
-              !result.wsReshown || !result.wsNoDuplicate || !result.wsPersisted ||
+              !result.wsReshown || !result.wsNoDuplicate || !result.wsPersisted || !result.containersOk ||
               !recentMenu?.submenu) throw new Error(JSON.stringify(result));
+          console.log(`PULPLOG_SMOKE_CONTAINERS ${JSON.stringify(result.containersSummary)}`);
           console.log("PULPLOG_SMOKE_OK");
           app.exit(0);
         } catch (error) {

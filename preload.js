@@ -75,9 +75,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("tabmenu:action", h);
   },
 
-  listContainers: () => ipcRenderer.invoke("docker:list"),
+  // { kubeContext? } → { items, errors, runtimes, kube }
+  listContainers: (options) => ipcRenderer.invoke("containers:list", options || {}),
 
-  streamDockerLogs(containerId, { onLines, onEnd, onError, onSpawned }) {
+  // source: { runtime, id, namespace?, context?, pod?, workload?, container? } (a bare id = Docker)
+  streamDockerLogs(source, { onLines, onEnd, onError, onSpawned }) {
     const streamId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const spawnH = (_e, id)       => { if (id === streamId) onSpawned?.(); };
     const linesH = (_e, id, text) => { if (id === streamId) onLines?.(text); };
@@ -87,7 +89,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("docker:lines",   linesH);
     ipcRenderer.on("docker:end",     endH);
     ipcRenderer.on("docker:error",   errH);
-    ipcRenderer.invoke("docker:logs:start", { streamId, containerId });
+    const payload = typeof source === "string" ? { streamId, containerId: source } : { streamId, source };
+    ipcRenderer.invoke("docker:logs:start", payload).catch(e => { cleanup(); onError?.(e?.message ?? String(e)); });
     function cleanup() {
       ipcRenderer.removeListener("docker:spawned", spawnH);
       ipcRenderer.removeListener("docker:lines",   linesH);

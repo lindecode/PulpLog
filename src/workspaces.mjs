@@ -8,6 +8,7 @@
 // Nothing stays alive in the background. Edits to an active workspace are not
 // applied live: it is marked "pending" and the change applies when reopened.
 import { useState, useEffect, useCallback, useRef } from "react";
+import { containerTabLabel } from "./containers.mjs";
 
 export const WS_PALETTE = ["#E5534B", "#57AB5A", "#539BF5", "#C69026", "#B083F0", "#39C5CF", "#E275AD", "#DB6D28"];
 const IS_WIN = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent || "");
@@ -16,7 +17,17 @@ const SECRET_KEYS = ["password", "passphrase", "trustHostForSession"];
 export function entryFromTab(tab) {
   if (!tab) return null;
   if (tab.filePath && tab.filePath !== "__web__") return { type:"file", filePath:tab.filePath, label:tab.label };
-  if (tab.docker) return { type:"docker", containerId:tab.docker.containerId, name:tab.docker.name, label:tab.label };
+  if (tab.docker) {
+    const d = tab.docker;
+    const runtime = d.runtime || "docker";
+    if (runtime === "kubernetes") {
+      // workspaces reopen by workload when known (pod names change on every rollout)
+      return { type:"docker", runtime, context:d.context, namespace:d.namespace, container:d.container,
+               ...(d.workload ? { workload:d.workload } : { pod:d.pod }), name:d.name, label:tab.label };
+    }
+    return { type:"docker", runtime, containerId:d.containerId, name:d.name, label:tab.label,
+             ...(runtime === "nerdctl" ? { namespace:d.namespace || "default" } : {}) };
+  }
   if (tab.remote) {
     const remote = { ...tab.remote };
     SECRET_KEYS.forEach(key => delete remote[key]);
@@ -29,7 +40,14 @@ export function entryFromTab(tab) {
 export function entryKey(entry, isWin = IS_WIN) {
   if (!entry) return null;
   if (entry.type === "file") return `file:${isWin ? entry.filePath.toLowerCase() : entry.filePath}`;
-  if (entry.type === "docker") return `docker:${entry.name || entry.containerId}`;
+  if (entry.type === "docker") {
+    const runtime = entry.runtime || "docker";
+    if (runtime === "docker") return `docker:${entry.name || entry.containerId}`;
+    if (runtime === "kubernetes") {
+      return `container:kubernetes|${entry.context}|${entry.namespace}|${entry.workload || entry.pod}|${entry.container}`;
+    }
+    return `container:${runtime}|${entry.namespace || ""}|${entry.name || entry.containerId}`;
+  }
   const r = entry.remote || {};
   return `remote:${[r.mode, r.user, r.target, r.port, r.distro, r.source, r.filePath, r.containerName || r.containerId].join("|")}`;
 }
@@ -132,9 +150,18 @@ export function useWorkspaces({ panes, remoteTabLabel, onMissing, enabled }) {
       return files.map(f => ({ ...base, label:f.label, filePath:f.filePath, fileSize:f.size }));
     }
     if (entry.type === "docker") {
-      const name = entry.name || entry.containerId;
-      // container names survive re-creation; ids don't
-      return [{ ...base, label:entry.label || `🐳 ${name}`, docker:{ containerId:name, name } }];
+      const runtime = entry.runtime || "docker";
+      let docker;
+      if (runtime === "kubernetes") {
+        docker = { runtime, context:entry.context, namespace:entry.namespace, container:entry.container,
+                   workload:entry.workload, pod:entry.workload ? undefined : entry.pod,
+                   name:entry.name || `${entry.workload || entry.pod} · ${entry.container}` };
+      } else {
+        const name = entry.name || entry.containerId;
+        // container names survive re-creation; ids don't
+        docker = { runtime, containerId:name, name, ...(runtime === "nerdctl" ? { namespace:entry.namespace || "default" } : {}) };
+      }
+      return [{ ...base, label:entry.label || containerTabLabel(docker), docker }];
     }
     return [{ ...base, label:entry.label || remoteTabLabel(entry.remote), remote:{ ...entry.remote } }];
   };

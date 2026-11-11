@@ -8,6 +8,7 @@ import { RemoteTab, RemotePicker } from "./RemoteTab.jsx";
 import { Welcome } from "./Welcome.jsx";
 import { tabKey, entryKey } from "../workspaces.mjs";
 import { createMergedStream } from "../mergedSource.mjs";
+import { containerTabLabel, containerTooltip, tabDockerFromItem } from "../containers.mjs";
 
 /* Workspace merged view: several local files interleaved by timestamp */
 function MergedTab({ tabKey: key, merged, maxLiveLines, isActive }) {
@@ -103,9 +104,11 @@ function usePaneTabs(setSettings, notifyFileMissing) {
     }
   }, [openFileByPath]);
 
-  const openDockerTab = (containerId, name) => {
+  /* item from the containers picker (any runtime) */
+  const openDockerTab = (item) => {
     const id = nextId++;
-    setTabs(p => [...p, { id, label: `🐳 ${name}`, filePath: null, fileSize: null, docker: { containerId, name } }]);
+    const docker = tabDockerFromItem(item);
+    setTabs(p => [...p.filter(isContentTab), { id, label: containerTabLabel(docker), filePath: null, fileSize: null, docker }]);
     setActive(id);
     setDockerPicker(false);
   };
@@ -326,7 +329,8 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
   const dockerCap = capabilities?.docker;
   const sshCap = capabilities?.ssh;
   const wslCap = capabilities?.wsl;
-  const dockerEnabled = !!dockerCap?.available;
+  // any container runtime (docker, podman, nerdctl, kubectl) enables the button
+  const dockerEnabled = !!(capabilities?.containers?.available ?? dockerCap?.available);
   const remoteEnabled = true;
 
   const handleFileDrop = (e) => {
@@ -409,7 +413,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
               title={(tab.workspaceIds?.length
                   ? `${t("ws_tab_in")}: ${tab.workspaceIds.map(id => wsById.get(id)?.name).filter(Boolean).join(", ")}\n` : "") + (
                 tab.merged   ? tab.merged.files.map(f => f.filePath).join("\n") :
-                tab.docker   ? `🐳 ${tab.docker.name}\nID: ${tab.docker.containerId.slice(0, 12)}` :
+                tab.docker   ? containerTooltip(tab.docker) :
                 tab.remote   ? `${tab.remote.mode === "wsl" ? "WSL" : "SSH"}\n${tab.remote.filePath}` :
                 tab.filePath ? tab.filePath :
                                t("hint_electron"))
@@ -474,7 +478,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
             style={{ background:"transparent", border:"none", color: dockerEnabled ? "var(--pl-cat-docker)" : "var(--pl-text-7)",
                      padding:"0 14px", cursor: dockerEnabled ? "pointer" : "not-allowed", fontSize:14,
                      borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
-            title={dockerEnabled ? t("docker_btn_title") : (dockerCap?.reason || t("capability_checking"))}>
+            title={dockerEnabled ? t("docker_btn_title") : capabilities ? t("containers_no_runtime") : t("capability_checking")}>
             🐳
           </button>
         )}
@@ -510,7 +514,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
             : tab.docker
             ? <DockerTab key={`docker-${tab.id}-${tab.reloadNonce || 0}`}
                          tabKey={String(tab.id)} maxLiveLines={settings.maxLiveLines}
-                         containerId={tab.docker.containerId} containerName={tab.docker.name}
+                         container={tab.docker}
                          isActive={tab.id === activeTab.id && focused} />
             : tab.remote
               ? <RemoteTab key={`remote-${tab.id}-${tab.reloadNonce || 0}`}

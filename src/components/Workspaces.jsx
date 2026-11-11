@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { useLang } from "../i18n.jsx";
 import { useEscapeToClose } from "../hooks.mjs";
 import { WS_PALETTE, entryKey, isPatternEntry } from "../workspaces.mjs";
+import { RUNTIME_META, runtimeOf, originLabel } from "../containers.mjs";
 
 const dot = (color, size = 9) => ({ width:size, height:size, borderRadius:"50%", background:color, flexShrink:0, display:"inline-block" });
 const smallBtn = {
@@ -12,7 +13,7 @@ const smallBtn = {
 
 function entryDetail(entry) {
   if (entry.type === "file") return entry.filePath;
-  if (entry.type === "docker") return entry.name || entry.containerId;
+  if (entry.type === "docker") return `${entry.name || entry.containerId} · ${originLabel(entry)}`;
   const r = entry.remote || {};
   const host = r.mode === "wsl" ? `WSL ${r.distro || ""}` : `${r.user ? `${r.user}@` : ""}${r.target}`;
   return `${host} · ${r.source === "docker" ? (r.containerName || r.containerId) : r.filePath}`;
@@ -353,7 +354,9 @@ export function WorkspacesModal({ ws, initialId, openTabEntries, onClose }) {
                       <div key={key} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 10px",
                                               borderBottom:"0.5px solid var(--pl-border-soft)", fontSize:12 }}>
                         <span style={{ fontSize:9, color:"var(--pl-text-6)", width:52, flexShrink:0, textTransform:"uppercase" }}>
-                          {isPatternEntry(entry) ? t("ws_type_pattern") : t(`ws_type_${entry.type}`)}
+                          {isPatternEntry(entry) ? t("ws_type_pattern")
+                            : entry.type === "docker" ? `${RUNTIME_META[runtimeOf(entry)].icon} ${RUNTIME_META[runtimeOf(entry)].label}`
+                            : t(`ws_type_${entry.type}`)}
                           {isPatternEntry(entry) && (
                             <div style={{ fontSize:8, textTransform:"none" }}>
                               {entry.latestOnly !== false ? t("ws_latest_short") : t("ws_all_short")}

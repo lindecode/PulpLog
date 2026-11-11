@@ -35,7 +35,7 @@ const timeout = setTimeout(() => {
   child.kill();
   console.error(output);
   process.exitCode = 1;
-}, 15000);
+}, 45000); // includes querying every installed container runtime
 child.on("exit", code => {
   clearTimeout(timeout);
   rmSync(smokeDir, { recursive:true, force:true });
@@ -44,5 +44,7 @@ child.on("exit", code => {
     process.exitCode = 1;
     return;
   }
+  const containers = output.split(/\r?\n/).find(line => line.startsWith("PULPLOG_SMOKE_CONTAINERS"));
+  if (containers) console.log(containers);
   console.log("Electron smoke test: OK");
 });

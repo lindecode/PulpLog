@@ -44,6 +44,7 @@
       "remoteDocker.cjs",
       "vllm.cjs",
       "workspaces.cjs",
+      "containerRuntimes.cjs",
       "aiCredentials.cjs",
       "conversationStore.cjs",
       "credentialVault.cjs",

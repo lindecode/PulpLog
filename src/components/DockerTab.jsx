@@ -8,73 +8,156 @@ import { reportMetric, safeFileName, buildResultText, copyResultText, exportResu
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
 import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
+import { RUNTIME_META, originLabel, containerSource, containerTooltip } from "../containers.mjs";
 
 /* ═══════════════════════════════════════════
    Docker – container picker modal
 ═══════════════════════════════════════════ */
 function DockerPicker({ onSelect, onClose }) {
   const t = useLang();
-  const [containers, setContainers] = useState(null);
+  const [data,       setData]       = useState(null);   // { items, errors, runtimes, kube }
   const [error,      setError]      = useState(null);
+  const [loading,    setLoading]    = useState(true);
+  const [kubeContext,setKubeContext]= useState(null);
+  // Kubernetes pods are fetched only on request: contacting a (remote) cluster can be
+  // slow, prompt for auth or open connections the user didn't intend
+  const [loadKube,   setLoadKube]   = useState(false);
+  const [query,      setQuery]      = useState("");
+  const [onlyRuntime,setOnlyRuntime]= useState(null);   // null = all
+  const [refreshNonce, setRefreshNonce] = useState(0);
   useEscapeToClose(onClose);
 
   useEffect(() => {
-    window.electronAPI.listContainers()
-      .then(res => res?.error ? setError(res.error) : setContainers(res))
-      .catch(e  => setError(e.message));
-  }, []);
+    let alive = true;
+    setLoading(true);
+    window.electronAPI.listContainers({ ...(kubeContext ? { kubeContext } : {}), includeKubernetes: loadKube })
+      .then(res => { if (alive) { setData(res); setError(null); } })
+      .catch(e => { if (alive) setError(e.message); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [kubeContext, loadKube, refreshNonce]);
+
+  const items = data?.items || [];
+  const counts = items.reduce((acc, item) => ({ ...acc, [item.runtime]: (acc[item.runtime] || 0) + 1 }), {});
+  const q = query.trim().toLowerCase();
+  const shown = items.filter(item => (!onlyRuntime || item.runtime === onlyRuntime)
+    && (!q || [item.name, item.image, item.status, originLabel(item)].join(" ").toLowerCase().includes(q)));
+  const kube = data?.kube;
+
+  const chip = (active) => ({
+    background: active ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
+    border:`0.5px solid ${active ? "var(--pl-border-focus)" : "var(--pl-border)"}`, borderRadius:12,
+    color: active ? "var(--pl-text-1)" : "var(--pl-text-5)", fontFamily:"inherit", fontSize:10,
+    padding:"3px 9px", cursor:"pointer",
+  });
 
   return (
     <div onClick={onClose}
       style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)",
-               display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
+               display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000, padding:16 }}>
       <div data-float onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("docker_title")}
         style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
-                 padding:"24px", minWidth:440, maxWidth:580, fontFamily:"inherit",
-                 boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
-        <div style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700, marginBottom:16 }}>
-          {t("docker_title")}
+                 padding:"22px 24px", width:"min(640px, 100%)", maxHeight:"calc(100vh - 32px)", display:"flex",
+                 flexDirection:"column", fontFamily:"inherit", boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+          <span style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700 }}>{t("docker_title")}</span>
+          {loading && <span style={{ fontSize:11, color:"var(--pl-text-6)" }}>{t("docker_connecting")}</span>}
         </div>
 
-        {containers === null && !error && (
-          <div style={{ color:"var(--pl-text-6)", fontSize:12, padding:"8px 0" }}>{t("docker_connecting")}</div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:10 }}>
+          <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder={t("containers_search")}
+            style={{ flex:1, minWidth:160, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                     borderRadius:6, color:"var(--pl-text-1)", fontFamily:"inherit", fontSize:12, padding:"6px 9px" }} />
+          {kube?.contexts?.length > 0 && (
+            <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:11, color:"var(--pl-text-5)" }}>
+              ☸
+              <select value={kube.selected || ""} title={t("containers_kube_context")}
+                onChange={e => { setKubeContext(e.target.value); setLoadKube(true); }}
+                style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:6,
+                         color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:11, padding:"5px 6px", maxWidth:220 }}>
+                {kube.contexts.map(ctx => (
+                  <option key={ctx} value={ctx}>{ctx}{ctx === kube.current ? ` (${t("containers_current")})` : ""}</option>
+                ))}
+              </select>
+              {!kube.loaded && (
+                <button onClick={() => setLoadKube(true)} disabled={loading} title={t("containers_kube_load_hint")}
+                  style={{ ...chip(false), fontSize:11, padding:"4px 10px", color:"var(--pl-text-3)" }}>
+                  {t("containers_kube_load")}
+                </button>
+              )}
+            </label>
+          )}
+        </div>
+
+        {(data?.runtimes?.length || 0) > 1 && (
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 }}>
+            <button onClick={() => setOnlyRuntime(null)} style={chip(!onlyRuntime)}>{t("containers_all")} · {items.length}</button>
+            {data.runtimes.map(rt => (
+              <button key={rt} onClick={() => setOnlyRuntime(rt === onlyRuntime ? null : rt)} style={chip(onlyRuntime === rt)}>
+                {RUNTIME_META[rt].icon} {RUNTIME_META[rt].label} · {counts[rt] || 0}
+              </button>
+            ))}
+          </div>
         )}
+
         {error && (
           <div style={{ color:"var(--pl-error-text)", fontSize:12, padding:"8px 0", lineHeight:1.6 }}>
             <span style={{ fontWeight:700 }}>Error:</span> {error}
-            <br /><span style={{ color:"var(--pl-text-5)" }}>{t("docker_err_hint")}</span>
           </div>
         )}
-        {containers?.length === 0 && (
+        {(data?.errors || []).map(e => (
+          <div key={e.runtime} style={{ color:"var(--pl-error-text)", fontSize:11, padding:"4px 0", lineHeight:1.5 }}>
+            {RUNTIME_META[e.runtime]?.icon} <b>{RUNTIME_META[e.runtime]?.label}</b>: {e.message}
+          </div>
+        ))}
+        {data && !loading && data.runtimes.length === 0 && (
+          <div style={{ color:"var(--pl-text-5)", fontSize:12, padding:"8px 0" }}>{t("containers_no_runtime")}</div>
+        )}
+        {data && !loading && data.runtimes.length > 0 && shown.length === 0 && (
           <div style={{ color:"var(--pl-text-5)", fontSize:12, padding:"8px 0" }}>{t("docker_empty")}</div>
         )}
 
-        <div style={{ display:"flex", flexDirection:"column", gap:6, maxHeight:320, overflowY:"auto" }}>
-          {containers?.map(c => {
-            const name   = c.Names?.[0]?.replace(/^\//, "") ?? c.Id.slice(0, 12);
-            const image  = c.Image ?? "";
-            const status = c.Status ?? "";
-            return (
-              <div key={c.Id} onClick={() => onSelect(c.Id, name, image)}
-                style={{ padding:"10px 14px", borderRadius:6, cursor:"pointer",
-                         background:"var(--pl-bg-hover)", border:"0.5px solid var(--pl-border-soft)",
-                         display:"flex", flexDirection:"column", gap:3,
-                         transition:"background .1s" }}
-                onMouseEnter={e => e.currentTarget.style.background="var(--pl-docker-row-hover)"}
-                onMouseLeave={e => e.currentTarget.style.background="var(--pl-bg-hover)"}>
-                <span style={{ color:"var(--pl-text-1)", fontSize:13, fontWeight:600 }}>{name}</span>
-                <span style={{ color:"var(--pl-text-5)", fontSize:10 }}>{image} · {status}</span>
+        <div style={{ display:"flex", flexDirection:"column", gap:6, overflowY:"auto", minHeight:0, flex:1 }}>
+          {shown.map(item => (
+            <div key={`${item.runtime}:${item.context || ""}:${item.namespace || ""}:${item.id}`}
+              role="button" tabIndex={0}
+              onClick={() => onSelect(item)}
+              onKeyDown={e => { if (e.key === "Enter") onSelect(item); }}
+              style={{ padding:"9px 12px", borderRadius:6, cursor:"pointer",
+                       background:"var(--pl-bg-hover)", border:"0.5px solid var(--pl-border-soft)",
+                       display:"flex", flexDirection:"column", gap:3, transition:"background .1s" }}
+              onMouseEnter={e => e.currentTarget.style.background="var(--pl-docker-row-hover)"}
+              onMouseLeave={e => e.currentTarget.style.background="var(--pl-bg-hover)"}>
+              <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0 }}>
+                <span style={{ color:"var(--pl-text-1)", fontSize:13, fontWeight:600, flex:1, minWidth:0,
+                               overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.name}</span>
+                <span title={RUNTIME_META[item.runtime]?.label}
+                  style={{ flexShrink:0, fontSize:10, color:"var(--pl-text-4)", border:"0.5px solid var(--pl-border)",
+                           borderRadius:10, padding:"1px 8px", maxWidth:240, overflow:"hidden", textOverflow:"ellipsis",
+                           whiteSpace:"nowrap" }}>
+                  {RUNTIME_META[item.runtime]?.icon} {originLabel(item)}
+                </span>
               </div>
-            );
-          })}
+              <span style={{ color:"var(--pl-text-5)", fontSize:10, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                {item.image}{item.status ? ` · ${item.status}` : ""}{item.workload ? ` · ${item.workload}` : ""}
+              </span>
+            </div>
+          ))}
         </div>
 
-        <button onClick={onClose}
-          style={{ marginTop:20, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
-                   borderRadius:6, color:"var(--pl-text-4)", fontFamily:"inherit",
-                   fontSize:11, padding:"6px 20px", cursor:"pointer" }}>
-          {t("cancel")}
-        </button>
+        <div style={{ display:"flex", gap:8, marginTop:16 }}>
+          <button onClick={() => setRefreshNonce(n => n + 1)} disabled={loading}
+            style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:6,
+                     color:"var(--pl-text-4)", fontFamily:"inherit", fontSize:11, padding:"6px 14px", cursor:"pointer" }}>
+            ↻ {t("containers_refresh")}
+          </button>
+          <button onClick={onClose}
+            style={{ marginLeft:"auto", background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                     borderRadius:6, color:"var(--pl-text-4)", fontFamily:"inherit",
+                     fontSize:11, padding:"6px 20px", cursor:"pointer" }}>
+            {t("cancel")}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -85,15 +168,20 @@ function DockerPicker({ onSelect, onClose }) {
 ═══════════════════════════════════════════ */
 /* `stream` (optional) replaces the Docker source: (handlers) => cleanup, same
    handler shape as streamDockerLogs. Used by the workspace merged view. */
-function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive = false, stream = null, sourceTitle = null }) {
+/* `container` = tab.docker (any runtime). `stream` (optional) replaces it with a
+   custom source: (handlers) => cleanup, used by the workspace merged view. */
+function DockerTab({ tabKey, maxLiveLines, container = null, containerId, containerName, isActive = false, stream = null, sourceTitle = null }) {
   const t = useLang();
   const searchInputRef = useRef(null);
   const filterInputRef = useRef(null);
   useSearchShortcuts(searchInputRef, filterInputRef, isActive);
 
-  const selectionSource = stream ? `merged-${sourceTitle}` : `docker-${containerName}`;
-  const sourceLabel = stream ? sourceTitle : `Docker ${containerName}${containerId ? ` (${String(containerId).slice(0, 12)})` : ""}`;
-  const resultSource = stream ? sourceTitle : `Docker ${containerName}`;
+  const item = container || { runtime:"docker", containerId, name:containerName };
+  const runtimeLabel = RUNTIME_META[item.runtime]?.label || "Docker";
+  const selectionSource = stream ? `merged-${sourceTitle}` : `${item.runtime || "docker"}-${item.name}`;
+  const sourceLabel = stream ? sourceTitle : containerTooltip(item).split("\n").join(" · ");
+  const resultSource = stream ? sourceTitle : `${runtimeLabel} ${item.name} (${originLabel(item)})`;
+  const sourceKey = JSON.stringify(stream ? null : containerSource(item));
   const [classified, setClassified] = useState([]);
   const [spawned,    setSpawned]   = useState(false);
   const [connected,  setConnected] = useState(false);
@@ -142,7 +230,7 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
     setSpawned(false);
     setConnected(false);
     setError(null);
-    const start = stream || (handlers => window.electronAPI.streamDockerLogs(containerId, handlers));
+    const start = stream || (handlers => window.electronAPI.streamDockerLogs(JSON.parse(sourceKey), handlers));
     const unwatch = start({
       onSpawned() { setSpawned(true); },
       onLines(text) {
@@ -152,7 +240,7 @@ function DockerTab({ tabKey, maxLiveLines, containerId, containerName, isActive 
       onError(msg) { setError(msg); setConnected(false); },
     });
     return unwatch;
-  }, [containerId, stream, streamNonce]);
+  }, [sourceKey, stream, streamNonce]);
 
   const stats = useMemo(() => countLevels(classified), [classified]);
 

@@ -5,6 +5,7 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
+const containerRuntimes = require("./containerRuntimes.cjs");
 
 const MAX_WORKSPACES = 50;
 const MAX_ENTRIES = 60;
@@ -64,10 +65,24 @@ function normalizeEntry(value) {
     return { type:"file", filePath, label: label || path.basename(filePath) };
   }
   if (value.type === "docker") {
+    // "docker" entries cover every container runtime; no runtime = Docker (older files)
+    const runtime = containerRuntimes.RUNTIME_IDS.includes(value.runtime) ? value.runtime : "docker";
+    if (runtime === "kubernetes") {
+      // reopen by workload (deployment/x…) when known: pod names change on every rollout
+      let source;
+      try {
+        source = containerRuntimes.normalizeSource({ ...value, pod: value.workload ? undefined : value.pod });
+      } catch { return null; }
+      const name = str(value.name, 200) || `${source.workload || source.pod} · ${source.container}`;
+      return { type:"docker", runtime, context:source.context, namespace:source.namespace, container:source.container,
+               ...(source.workload ? { workload:source.workload } : { pod:source.pod }), name, label };
+    }
     const name = str(value.name, 160).replace(/^\//, "");
     const containerId = str(value.containerId, 160);
     if (!(name || containerId) || hasControl(name + containerId)) return null;
-    return { type:"docker", containerId, name: name || containerId.slice(0, 12), label };
+    const entry = { type:"docker", runtime, containerId, name: name || containerId.slice(0, 12), label };
+    if (runtime === "nerdctl") entry.namespace = str(value.namespace, 128) || "default";
+    return entry;
   }
   if (value.type === "remote") {
     const remote = normalizeRemote(value.remote);
@@ -78,7 +93,14 @@ function normalizeEntry(value) {
 
 function entryKey(entry) {
   if (entry.type === "file") return `file:${process.platform === "win32" ? entry.filePath.toLowerCase() : entry.filePath}`;
-  if (entry.type === "docker") return `docker:${entry.name || entry.containerId}`;
+  if (entry.type === "docker") {
+    const runtime = entry.runtime || "docker";
+    if (runtime === "docker") return `docker:${entry.name || entry.containerId}`; // unchanged for older files
+    if (runtime === "kubernetes") {
+      return `container:kubernetes|${entry.context}|${entry.namespace}|${entry.workload || entry.pod}|${entry.container}`;
+    }
+    return `container:${runtime}|${entry.namespace || ""}|${entry.name || entry.containerId}`;
+  }
   const r = entry.remote;
   return `remote:${[r.mode, r.user, r.target, r.port, r.distro, r.source, r.filePath, r.containerName || r.containerId].join("|")}`;
 }
