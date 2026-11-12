@@ -49,10 +49,14 @@ Copy-Item "release\PulpLog-$v-win.zip" "release\PulpLog-Portable-$v-win.zip"
 # Instalador: el .exe dentro de un zip sin compresión (ya viene comprimido).
 Compress-Archive -Path "release\PulpLog Setup $v.exe" `
   -DestinationPath "release\PulpLog-Setup-$v-win.zip" -CompressionLevel NoCompression -Force
+# Auto-actualización: latest.yml apunta a "PulpLog-Setup-$v.exe" (con guiones).
+Copy-Item "release\PulpLog Setup $v.exe" "release\PulpLog-Setup-$v.exe"
+Copy-Item "release\PulpLog Setup $v.exe.blockmap" "release\PulpLog-Setup-$v.exe.blockmap"
 ```
 
-Resultado: `PulpLog-Setup-4.0.1-win.zip`, `PulpLog-Portable-4.0.1-win.zip`, el instalador suelto `release\PulpLog Setup $v.exe` y `release\latest.yml`.
-*(Nota: Para que la auto-actualización con `electron-updater` funcione de forma transparente en los equipos instalados, el release de GitHub debe incluir también el `.exe` del instalador y el archivo `latest.yml`).*
+Resultado: `PulpLog-Setup-4.0.1-win.zip`, `PulpLog-Portable-4.0.1-win.zip`, `PulpLog-Setup-4.0.1.exe`, su `.blockmap` y `release\latest.yml`.
+
+*(Nota: para que la auto-actualización con `electron-updater` funcione en los equipos instalados, el release debe incluir el `.exe`, su `.blockmap` y `latest.yml`. El `.exe` debe subirse con el nombre exacto que indica `url` en `latest.yml` (`PulpLog-Setup-X.Y.Z.exe`): GitHub cambia los espacios por puntos, así que `PulpLog Setup X.Y.Z.exe` no se encontraría. Comprueba también que `build.publish.owner` en `package.json` sea `lindecode`, porque se incrusta en el instalador.)*
 
 Los paquetes de macOS (`dmg`) y Linux (`AppImage`, `deb`) se generan con
 `npm run dist:mac` y `npm run dist:linux` en cada sistema.
@@ -121,7 +125,7 @@ notas en `notes.md` (plantilla abajo):
 ```bash
 gh release create v4.0.1 -R lindecode/PulpLog \
   --title "PulpLog v4.0.1" --notes-file notes.md --verify-tag --latest \
-  "release/PulpLog Setup 4.0.1.exe" release/latest.yml \
+  release/PulpLog-Setup-4.0.1.exe release/PulpLog-Setup-4.0.1.exe.blockmap release/latest.yml \
   release/PulpLog-Setup-4.0.1-win.zip release/PulpLog-Portable-4.0.1-win.zip \
   pulplog-4.0.1-1.png pulplog-4.0.1-2.png pulplog-4.0.1-3.png \
   pulplog-4.0.1-4.png pulplog-4.0.1-5.png
