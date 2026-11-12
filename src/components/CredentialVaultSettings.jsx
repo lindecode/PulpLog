@@ -80,6 +80,9 @@ export function CredentialVaultSettings() {
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ color:"var(--pl-text-3)", fontSize:10, fontWeight:700 }}>{entry.label}</div>
               <div style={{ color:"var(--pl-text-6)", fontSize:9, overflow:"hidden", textOverflow:"ellipsis" }}>{entry.username}{entry.username && "@"}{entry.target}</div>
+              {(entry.blocked || entry.authFailures > 0) && <div style={{ color:entry.blocked ? "var(--pl-error-text)" : "var(--pl-status-warn)", fontSize:9, marginTop:2 }}>
+                {entry.blocked ? t("vault_credential_blocked") : t("vault_auth_failures", entry.authFailures)}
+              </div>}
             </div>
             <button type="button" onClick={() => window.confirm(t("vault_delete_confirm")) && run(() => window.electronAPI.deleteVaultCredential(entry.id))}
               style={{ border:0, background:"none", color:"var(--pl-error-text)", cursor:"pointer", fontSize:10 }}>{t("vault_delete")}</button>

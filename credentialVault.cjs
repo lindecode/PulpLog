@@ -6,6 +6,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 const VERSION = 1;
+const MAX_AUTH_FAILURES = 3;
 const SCRYPT = { N:32768, r:8, p:1, maxmem:64 * 1024 * 1024 };
 const b64 = value => Buffer.from(value).toString("base64");
 const unb64 = value => Buffer.from(String(value || ""), "base64");
@@ -65,6 +66,8 @@ function createCredentialVault({ filename }) {
   const metadata = entry => ({
     id:entry.id, label:entry.label, kind:entry.kind, target:entry.target || "", username:entry.username || "",
     createdAt:entry.createdAt, updatedAt:entry.updatedAt,
+    authFailures:Number.isInteger(entry.authFailures) ? Math.max(0, entry.authFailures) : 0,
+    blocked:Boolean(entry.blockedAt), blockedAt:entry.blockedAt || "",
   });
 
   async function state() {
@@ -137,6 +140,7 @@ function createCredentialVault({ filename }) {
       const entry = {
         id, label:text(input?.label, 120) || "SSH", kind, target, username,
         createdAt:previous?.createdAt || now, updatedAt:now,
+        authFailures:0, blockedAt:"",
         encrypted:encrypt(dek, { secret, kind, target, username }, `pulplog-vault-entry-v1:${id}`),
       };
       data.entries = [...(data.entries || []).filter(item => item.id !== id), entry];
@@ -157,6 +161,8 @@ function createCredentialVault({ filename }) {
     if (!dek) throw new Error("La bóveda está bloqueada; desbloquéala en Configuración");
     const entry = (await read()).entries.find(item => item.id === id);
     if (!entry) throw new Error("La credencial guardada ya no existe");
+    if (entry.blockedAt || Number(entry.authFailures || 0) >= MAX_AUTH_FAILURES)
+      throw new Error("La credencial está bloqueada después de 3 rechazos de autenticación. Actualiza la contraseña guardada en la bóveda.");
     const payload = decrypt(dek, entry.encrypted, `pulplog-vault-entry-v1:${entry.id}`);
     const target = text(context.target, 255);
     const username = text(context.username, 128);
@@ -167,6 +173,29 @@ function createCredentialVault({ filename }) {
     return payload.secret;
   }
 
+  function recordAuthFailure(id) {
+    return lockedUpdate(data => {
+      const entry = (data.entries || []).find(item => item.id === id);
+      if (!entry) throw new Error("La credencial guardada ya no existe");
+      if (!entry.blockedAt) {
+        entry.authFailures = Math.min(MAX_AUTH_FAILURES, Number(entry.authFailures || 0) + 1);
+        if (entry.authFailures >= MAX_AUTH_FAILURES) entry.blockedAt = new Date().toISOString();
+      }
+      return metadata(entry);
+    });
+  }
+
+  function recordAuthSuccess(id) {
+    return lockedUpdate(data => {
+      const entry = (data.entries || []).find(item => item.id === id);
+      if (!entry) return false;
+      if (!entry.authFailures && !entry.blockedAt) return false;
+      entry.authFailures = 0;
+      entry.blockedAt = "";
+      return true;
+    });
+  }
+
   async function reset() {
     await queue;
     if (dek) dek.fill(0);
@@ -175,7 +204,7 @@ function createCredentialVault({ filename }) {
     return { configured:false, unlocked:false, count:0 };
   }
 
-  return { state, create, unlock, lock, list, save, remove, getSecret, reset };
+  return { state, create, unlock, lock, list, save, remove, getSecret, recordAuthFailure, recordAuthSuccess, reset };
 }
 
-module.exports = { createCredentialVault };
+module.exports = { createCredentialVault, MAX_AUTH_FAILURES };

@@ -37,3 +37,31 @@ test("forgot-password reset deletes the vault irreversibly", async t => {
   assert.equal((await vault.state()).configured, false);
   assert.throws(() => readFileSync(filename), /ENOENT/);
 });
+
+test("blocks a rejected SSH credential after three failures until it is updated", async t => {
+  const { vault } = fixture(t);
+  await vault.create(master);
+  const entry = await vault.save({ label:"Prod", target:"prod.test", username:"dev", secret:"old-secret" });
+  await vault.recordAuthFailure(entry.id);
+  await vault.recordAuthFailure(entry.id);
+  assert.equal(await vault.getSecret(entry.id, { target:"prod.test", username:"dev" }), "old-secret");
+  const blocked = await vault.recordAuthFailure(entry.id);
+  assert.equal(blocked.authFailures, 3);
+  assert.equal(blocked.blocked, true);
+  await assert.rejects(vault.getSecret(entry.id, { target:"prod.test", username:"dev" }), /bloqueada.*Actualiza/);
+
+  const updated = await vault.save({ id:entry.id, label:"Prod", target:"prod.test", username:"dev", secret:"new-secret" });
+  assert.equal(updated.authFailures, 0);
+  assert.equal(updated.blocked, false);
+  assert.equal(await vault.getSecret(entry.id, { target:"prod.test", username:"dev" }), "new-secret");
+});
+
+test("successful authentication clears the failure counter", async t => {
+  const { vault } = fixture(t);
+  await vault.create(master);
+  const entry = await vault.save({ label:"Prod", secret:"server-secret" });
+  await vault.recordAuthFailure(entry.id);
+  assert.equal((await vault.list())[0].authFailures, 1);
+  await vault.recordAuthSuccess(entry.id);
+  assert.equal((await vault.list())[0].authFailures, 0);
+});

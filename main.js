@@ -1836,6 +1836,7 @@ function startNativeSshStream(event, payload) {
   }
 
   client.on("ready", () => {
+    recordVaultAuthSuccess(payload);
     logEntry("INFO", "remote", `SSH nativo conectado: ${label}`);
     client.exec(tailScript, (err, channel) => {
       if (err) {
@@ -1874,11 +1875,12 @@ function startNativeSshStream(event, payload) {
     });
   });
 
-  client.on("error", (e) => {
+  client.on("error", async (e) => {
     remoteStreams.delete(streamId);
     if (stream.stopped) return;
+    const authState = await recordVaultAuthFailure(payload, e);
     const fingerprintHint = seenFingerprint ? ` Huella (fingerprint) del servidor: ${seenFingerprint}` : "";
-    const msg = `${e.message}${fingerprintHint}`;
+    const msg = authState?.blocked ? blockedVaultCredentialMessage() : `${e.message}${fingerprintHint}`;
     logEntry("ERROR", "remote", `${label}: ${msg}`);
     showRemoteStreamAlert(event, payload, mt("err_ssh"), msg);
     send("remote:error", streamId, msg);
@@ -2040,11 +2042,14 @@ handleTrusted("remote:test", async (event, payload) => {
   assertTrustedSender(event);
   try {
     payload = await resolveVaultSecrets(payload);
-    return payload?.mode === "ssh-native"
+    const result = payload?.mode === "ssh-native"
       ? await testNativeSsh(payload)
       : await testSystemSsh(payload);
+    await recordVaultAuthSuccess(payload);
+    return result;
   } catch (error) {
-    return { ok:false, error:error?.message ?? String(error) };
+    const authState = await recordVaultAuthFailure(payload, error);
+    return { ok:false, error:authState?.blocked ? blockedVaultCredentialMessage() : (error?.message ?? String(error)) };
   }
 });
 
@@ -2067,9 +2072,11 @@ handleTrusted("remote:docker-list", async (event, payload) => {
         });
       });
     }
+    await recordVaultAuthSuccess(payload);
     return { ok:true, containers:parseDockerContainers(stdout) };
   } catch (error) {
-    return { ok:false, error:error?.message ?? String(error) };
+    const authState = await recordVaultAuthFailure(payload, error);
+    return { ok:false, error:authState?.blocked ? blockedVaultCredentialMessage() : (error?.message ?? String(error)) };
   }
 });
 
@@ -2080,10 +2087,12 @@ handleTrusted("remote:list-dir", async (event, payload) => {
     const result = payload?.mode === "ssh-native"
       ? await listNativeRemoteDirectory(payload)
       : await listSystemRemoteDirectory(payload);
+    await recordVaultAuthSuccess(payload);
     logEntry("INFO", "remote", `Directorio remoto listado: ${result.cwd || payload?.dirPath || "~"}`);
     return result;
   } catch (error) {
-    const message = error?.message ?? String(error);
+    const authState = await recordVaultAuthFailure(payload, error);
+    const message = authState?.blocked ? blockedVaultCredentialMessage() : (error?.message ?? String(error));
     logEntry("ERROR", "remote", `Error explorando directorio remoto: ${message}`);
     return { ok:false, error:message };
   }
@@ -2312,7 +2321,28 @@ async function resolveVaultSecrets(payload) {
   const secret = await credentialVault.getSecret(vaultId(id), {
     kind, target:String(payload?.target || "").trim(), username:String(payload?.user || "").trim(),
   });
-  return { ...payload, [kind === "ssh-passphrase" ? "passphrase" : "password"]:secret };
+  return { ...payload, __vaultCredentialId:vaultId(id), [kind === "ssh-passphrase" ? "passphrase" : "password"]:secret };
+}
+
+function isSshAuthenticationError(error) {
+  const level = String(error?.level || "").toLowerCase();
+  const message = String(error?.message || error || "");
+  return level === "client-authentication"
+    || /all configured authentication methods failed|authentication (?:failed|failure)|permission denied.*(?:password|publickey)|unable to authenticate/i.test(message);
+}
+
+const blockedVaultCredentialMessage = () => "La credencial quedó bloqueada después de 3 rechazos de autenticación. Actualiza la contraseña guardada en la bóveda.";
+
+async function recordVaultAuthSuccess(payload) {
+  const id = payload?.__vaultCredentialId;
+  if (!id) return;
+  try { await credentialVault.recordAuthSuccess(id); } catch {}
+}
+
+async function recordVaultAuthFailure(payload, error) {
+  const id = payload?.__vaultCredentialId;
+  if (!id || !isSshAuthenticationError(error)) return null;
+  try { return await credentialVault.recordAuthFailure(id); } catch { return null; }
 }
 
 handleTrusted("vault:state", () => credentialVault.state());
