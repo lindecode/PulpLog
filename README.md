@@ -1,6 +1,6 @@
 # PulpLog
 
-PulpLog es un visor de logs de escritorio hecho con Electron, React y Vite. Está pensado para abrir archivos grandes, seguir logs en vivo, inspeccionar stack traces y conectarse rápidamente a logs de contenedores Docker.
+PulpLog es un visor de logs de escritorio hecho con Electron, React y Vite. Está pensado para abrir archivos grandes, seguir logs en vivo, inspeccionar stack traces, agrupar bitácoras en workspaces y conectarse a logs de contenedores (Docker, Podman, nerdctl y Kubernetes) y servidores remotos por SSH.
 
 Funciona en Windows, macOS y Linux.
 
@@ -277,14 +277,34 @@ se corrigen al actualizar las dependencias del repositorio.
 | Archivo truncado | Detecta `copytruncate`, avisa y recarga |
 | Archivo recreado | Reanuda el seguimiento cuando vuelve a existir |
 
-### Docker
+### Contenedores
 
 | Función | Detalle |
 |---------|---------|
-| Lista de contenedores | Muestra contenedores Docker en ejecución |
-| Stream de logs | Abre una pestaña con `docker logs --follow --tail=500` |
-| Filtros y marcadores | Los logs de Docker usan las mismas herramientas de búsqueda, niveles y marcadores |
-| Diagnóstico de errores | Informa si Docker no está corriendo o no es accesible |
+| Runtimes | Docker, Podman, nerdctl y Kubernetes (`kubectl`) en un solo selector, con etiqueta de origen, búsqueda y filtro por runtime |
+| Docker | Se lista con `docker ps`, así que respeta `docker context`, `DOCKER_HOST` y `minikube docker-env` |
+| Kubernetes | Una tarjeta por contenedor con estado y workload; al abrir el selector solo se lee el kubeconfig local y los pods se consultan al pulsar **Cargar pods** o elegir un contexto |
+| Stream de logs | Abre una pestaña con los últimos 500 registros y sigue los nuevos |
+| Filtros y marcadores | Los logs de contenedores usan las mismas herramientas de búsqueda, niveles y marcadores |
+| Diagnóstico de errores | Cada runtime informa sus errores sin bloquear a los demás; los no instalados se omiten |
+
+### Workspaces
+
+Un workspace agrupa con nombre y color archivos locales, contenedores y logs
+remotos para abrirlos juntos.
+
+| Función | Detalle |
+|---------|---------|
+| Activar y desactivar | Activar abre sus bitácoras; desactivar cierra las que abrió, salvo las compartidas con otro workspace activo. Puede haber varios activos a la vez |
+| Vista | **Pestañas** (una por bitácora) o **Combinada**, que intercala archivos locales por timestamp en una sola pestaña |
+| Patrones | Rutas con comodines: solo el archivo más reciente o hasta 20 coincidencias |
+| Pestañas | Marcadas con el color de sus workspaces; el menú contextual agrega o quita una bitácora de un workspace |
+| Exportar e importar | Archivos `.pulpworkspace`, sin contraseñas |
+| Atajo | `Ctrl+Alt+W` y las teclas `1`–`9` |
+
+Los workspaces se guardan en `workspaces.json` dentro de los datos de la app.
+Kubernetes se reabre por workload (por ejemplo `deployment/api`), porque el
+nombre del pod cambia.
 
 ### Análisis con IA: Ollama y vLLM
 
@@ -502,6 +522,10 @@ con `--max-model-len`; aumentar el ajuste de PulpLog no amplía esa capacidad.
 
 Las respuestas se muestran en streaming y se pueden detener. Cambiar de proveedor
 o de URL detiene la generación anterior e inicia una conversación nueva.
+
+Las conversaciones se guardan en el equipo y se recuperan al volver a abrir el
+panel. Cuando la conversación ya no cabe en el contexto del modelo, los turnos
+antiguos se conservan como extractos para mantener la continuidad.
 
 Al abrir el panel se comprueba el servicio. Si no responde o no ofrece modelos de
 chat, se reintenta cada 10 segundos, sin consultas simultáneas. Los reintentos
