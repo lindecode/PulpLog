@@ -38,7 +38,7 @@
     "productName": "PulpLog",
     "publish": {
       "provider": "github",
-      "owner": "lindecode.cloud",
+      "owner": "lindecode",
       "repo": "PulpLog"
     },
     "directories": {
