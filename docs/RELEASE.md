@@ -37,6 +37,7 @@ electron-builder deja en `release/`:
 |---|---|
 | `PulpLog Setup 4.0.1.exe` | Instalador NSIS |
 | `PulpLog-4.0.1-win.zip` | Aplicación sin instalar (portable) |
+| `latest.yml` | Metadatos y checksums para `electron-updater` (auto-actualización) |
 
 Los archivos que se publican tienen otro nombre y se preparan así (PowerShell,
 desde la raíz del proyecto):
@@ -50,7 +51,8 @@ Compress-Archive -Path "release\PulpLog Setup $v.exe" `
   -DestinationPath "release\PulpLog-Setup-$v-win.zip" -CompressionLevel NoCompression -Force
 ```
 
-Resultado: `PulpLog-Setup-4.0.1-win.zip` y `PulpLog-Portable-4.0.1-win.zip`.
+Resultado: `PulpLog-Setup-4.0.1-win.zip`, `PulpLog-Portable-4.0.1-win.zip`, el instalador suelto `release\PulpLog Setup $v.exe` y `release\latest.yml`.
+*(Nota: Para que la auto-actualización con `electron-updater` funcione de forma transparente en los equipos instalados, el release de GitHub debe incluir también el `.exe` del instalador y el archivo `latest.yml`).*
 
 Los paquetes de macOS (`dmg`) y Linux (`AppImage`, `deb`) se generan con
 `npm run dist:mac` y `npm run dist:linux` en cada sistema.
@@ -119,6 +121,7 @@ notas en `notes.md` (plantilla abajo):
 ```bash
 gh release create v4.0.1 -R lindecode/PulpLog \
   --title "PulpLog v4.0.1" --notes-file notes.md --verify-tag --latest \
+  "release/PulpLog Setup 4.0.1.exe" release/latest.yml \
   release/PulpLog-Setup-4.0.1-win.zip release/PulpLog-Portable-4.0.1-win.zip \
   pulplog-4.0.1-1.png pulplog-4.0.1-2.png pulplog-4.0.1-3.png \
   pulplog-4.0.1-4.png pulplog-4.0.1-5.png

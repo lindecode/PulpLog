@@ -1,5 +1,9 @@
 // Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell, globalShortcut, clipboard, safeStorage, powerMonitor } = require("electron");
+let autoUpdater = null;
+try {
+  ({ autoUpdater } = require("electron-updater"));
+} catch {}
 const path = require("path");
 const { pathToFileURL } = require("url");
 const fs   = require("fs");
@@ -142,8 +146,14 @@ const MENU_STRINGS = {
     export_dialog:"Exportar resultados", filter_logs:"Logs", filter_all:"Todos", filter_ssh_keys:"Llaves SSH",
     ok:"Aceptar", cancel:"Cancelar", tech_detail:"Detalle técnico",
     updates_title:"Actualizaciones de PulpLog",
+    update_checking:"Buscando actualizaciones…",
     update_available:(latest, current) => `Hay una nueva versión disponible: ${latest}\nVersión instalada: ${current}`,
     update_available_detail:(name, publishedAt) => [name, publishedAt ? `Publicado: ${publishedAt}` : ""].filter(Boolean).join("\n"),
+    update_download_action:"Descargar e instalar",
+    update_downloading:(latest) => `Descargando versión ${latest} en segundo plano…`,
+    update_downloaded_title:"Actualización lista",
+    update_downloaded:(latest) => `La versión ${latest} se descargó correctamente.\n¿Deseas reiniciar PulpLog ahora para completar la actualización?`,
+    update_restart_now:"Reiniciar ahora",
     update_open_release:"Abrir GitHub Releases",
     update_later:"Después",
     update_skip_version:"No volver a mostrar esta versión",
@@ -185,8 +195,14 @@ const MENU_STRINGS = {
     export_dialog:"Export results", filter_logs:"Logs", filter_all:"All files", filter_ssh_keys:"SSH keys",
     ok:"OK", cancel:"Cancel", tech_detail:"Technical detail",
     updates_title:"PulpLog Updates",
+    update_checking:"Checking for updates…",
     update_available:(latest, current) => `A new version is available: ${latest}\nInstalled version: ${current}`,
     update_available_detail:(name, publishedAt) => [name, publishedAt ? `Published: ${publishedAt}` : ""].filter(Boolean).join("\n"),
+    update_download_action:"Download and install",
+    update_downloading:(latest) => `Downloading version ${latest} in the background…`,
+    update_downloaded_title:"Update ready",
+    update_downloaded:(latest) => `Version ${latest} was downloaded successfully.\nDo you want to restart PulpLog now to apply the update?`,
+    update_restart_now:"Restart Now",
     update_open_release:"Open GitHub Releases",
     update_later:"Later",
     update_skip_version:"Do not show this version again",
@@ -278,8 +294,54 @@ function fetchJson(url) {
   });
 }
 
+function isInstalledEnvironment() {
+  if (!app.isPackaged) return false;
+  if (process.platform === "win32") {
+    return !process.env.PORTABLE_EXECUTABLE_DIR && Boolean(process.env.LOCALAPPDATA && app.getPath("exe").toLowerCase().includes(process.env.LOCALAPPDATA.toLowerCase()));
+  }
+  if (process.platform === "darwin") {
+    return app.getPath("exe").includes("/Applications/");
+  }
+  return !process.env.APPIMAGE;
+}
+
+let autoUpdaterInitialized = false;
+function initAutoUpdater() {
+  if (!autoUpdater || autoUpdaterInitialized || !app.isPackaged || !isInstalledEnvironment()) return;
+  autoUpdaterInitialized = true;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = {
+    info: (msg) => logEntry("INFO", "updater", String(msg)),
+    warn: (msg) => logEntry("WARN", "updater", String(msg)),
+    error: (msg) => logEntry("ERROR", "updater", String(msg)),
+  };
+
+  autoUpdater.on("update-downloaded", async (info) => {
+    const version = info?.version || "";
+    logEntry("INFO", "updater", `Actualizacion descargada: ${version}`);
+    const { response } = await dialog.showMessageBox({
+      type: "info",
+      title: mt("update_downloaded_title"),
+      message: mtf("update_downloaded", version ? `v${version}` : ""),
+      buttons: [mt("update_restart_now"), mt("update_later")],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (response === 0) {
+      setImmediate(() => autoUpdater.quitAndInstall(false, true));
+    }
+  });
+
+  autoUpdater.on("error", (err) => {
+    logEntry("WARN", "updater", `Error en autoUpdater: ${err?.message || err}`);
+  });
+}
+
 async function checkForUpdates(win) {
   const currentVersion = app.getVersion();
+  const canAutoUpdate = Boolean(autoUpdater && app.isPackaged && isInstalledEnvironment());
   try {
     const release = await fetchJson(GITHUB_LATEST_RELEASE_API);
     const latestTag = String(release?.tag_name || "").trim();
@@ -304,23 +366,43 @@ async function checkForUpdates(win) {
         return;
       }
 
-      logEntry("INFO", "system", `Nueva version disponible: ${latestTag} (instalada ${currentVersion})`);
+      logEntry("INFO", "system", `Nueva version disponible: ${latestTag} (instalada ${currentVersion}, autoUpdate: ${canAutoUpdate})`);
+      const buttons = canAutoUpdate
+        ? [mt("update_download_action"), mt("update_open_release"), mt("update_later")]
+        : [mt("update_open_release"), mt("update_later")];
+
       const { response, checkboxChecked } = await dialog.showMessageBox(win || undefined, {
         type: "info",
         title: mt("updates_title"),
         message: mtf("update_available", latestTag, `v${currentVersion}`),
         detail: mtf("update_available_detail", release?.name || "", formatReleaseDate(release?.published_at)),
-        buttons: [mt("update_open_release"), mt("update_later")],
+        buttons,
         checkboxLabel: mt("update_skip_version"),
         checkboxChecked: false,
         defaultId: 0,
-        cancelId: 1,
+        cancelId: buttons.length - 1,
         noLink: true,
       });
       if (checkboxChecked) {
         await updateSettings(current => ({ ...current, skippedUpdateVersion: latestTag }));
       }
-      if (response === 0) shell.openExternal(latestUrl);
+      if (canAutoUpdate && response === 0) {
+        initAutoUpdater();
+        dialog.showMessageBox(win || undefined, {
+          type: "info",
+          title: mt("updates_title"),
+          message: mtf("update_downloading", latestTag),
+          buttons: [mt("ok")],
+          noLink: true,
+        });
+        autoUpdater.downloadUpdate().catch((err) => {
+          logEntry("ERROR", "updater", `Fallo al descargar actualizacion: ${err?.message || err}`);
+        });
+        return;
+      }
+      if ((canAutoUpdate && response === 1) || (!canAutoUpdate && response === 0)) {
+        shell.openExternal(latestUrl);
+      }
       return;
     }
 
