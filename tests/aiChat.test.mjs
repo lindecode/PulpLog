@@ -61,3 +61,58 @@ test("preserves extractive memory when old turns leave the recent window", () =>
   assert.equal(messages.at(-1).content, history.at(-1).content);
   assert.ok(buildConversationMemory(history, history.slice(-2), 4096).length > 0);
 });
+
+import { questionTerms, selectSmartRows, summarizeRows, messageTemplate, evenOrder } from "../src/aiChat.mjs";
+
+const bigLog = Array.from({ length: 20000 }, (_, i) => {
+  const n = i + 1;
+  if (n === 5000) return { origLine: n, raw: "2026-11-17 03:15:02 INFO payment accepted order=4821 user=ana", type: "info" };
+  if (n === 7000) return { origLine: n, raw: "2026-11-17 04:00:00 ERROR db timeout after 30000ms", type: "error" };
+  return { origLine: n, raw: `2026-11-17 05:00:00 INFO healthcheck ok ${n}`, type: "info" };
+});
+
+test("questionTerms keeps ids, times and rare words; drops filler", () => {
+  const terms = questionTerms("¿Cuándo falló el pedido 4821 a las 03:15 en «payment gateway»? Explica los errores");
+  assert.ok(terms.includes("4821"));
+  assert.ok(terms.includes("03:15"));
+  assert.ok(terms.includes("payment gateway"));
+  assert.ok(!terms.includes("errores"));
+  assert.ok(!terms.includes("explica"));
+});
+
+test("smart context finds a matching line in the middle of a big log", () => {
+  const picked = selectSmartRows(bigLog, { question: "¿qué pasó con el pedido 4821?", charBudget: 6000 });
+  assert.ok(picked.lines.some(line => line.startsWith("5000\t")));
+  assert.deepEqual(picked.terms, ["4821"]);
+  assert.equal(picked.matchCount, 3); // line 5000 plus "healthcheck ok 4821" and "…14821"
+});
+
+test("smart context always includes errors, and marks omitted gaps", () => {
+  const picked = selectSmartRows(bigLog, { question: "resumen", charBudget: 6000 });
+  assert.ok(picked.lines.some(line => line.startsWith("7000\t")));
+  assert.ok(picked.lines.some(line => /^… \[\d+ lines omitted\]$/.test(line)));
+  assert.ok(picked.lines.at(-1).startsWith("20000\t"));
+  assert.equal(picked.truncated, true);
+});
+
+test("repeated messages share a template and show up in the summary", () => {
+  assert.equal(messageTemplate("10:00:01 INFO healthcheck ok 12"), messageTemplate("11:22:33 INFO healthcheck ok 99"));
+  const summary = summarizeRows(bigLog);
+  assert.equal(summary.levels.error, 1);
+  assert.ok(summary.top[0].count >= 19000);
+  assert.equal(summary.from, "2026-11-17 05:00:00");
+});
+
+test("small logs are sent whole, without gap markers", () => {
+  const small = rows.map(row => ({ ...row, type: "info" }));
+  const picked = selectSmartRows(small, { question: "x", charBudget: 100000 });
+  assert.equal(picked.included, 100);
+  assert.equal(picked.truncated, false);
+  assert.ok(!picked.lines.some(line => line.startsWith("…")));
+});
+
+test("evenOrder spreads any prefix across the list", () => {
+  const order = evenOrder(Array.from({ length: 9 }, (_, i) => i));
+  assert.deepEqual(order.slice(0, 3), [0, 8, 4]);
+  assert.equal(new Set(order).size, 9);
+});

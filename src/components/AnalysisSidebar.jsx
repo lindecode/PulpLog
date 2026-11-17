@@ -10,8 +10,6 @@ import { redactSecrets } from "../redaction.mjs";
 
 const MAX_PROMPT_LINES = 2000;
 const MAX_PROMPT_CHARS = 220000;
-// Rows considered for the Ollama snapshot; the token budget usually keeps far fewer.
-const MAX_AI_CANDIDATE_ROWS = 20000;
 const WIDTH_KEY = "pulplog.ai.width";
 const TABLE_KEY = "pulplog.ai.tableFormat";
 const MIN_WIDTH = 380;
@@ -300,13 +298,14 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
     cancelAnimationFrame(rafRef.current);
   }, []);
 
-  const makeSnapshot = useCallback(() => {
-    const candidates = baseRows.slice(-MAX_AI_CANDIDATE_ROWS);
-    const rows = redact ? candidates.map(item => ({ ...item, raw: redactSecrets(item.raw) })) : candidates;
+  // The whole scope is summarised and searched; only the rows actually sent are redacted.
+  const makeSnapshot = useCallback((question = "") => {
     const built = buildContextSnapshot({
       instructions: t("analysis_system"),
       metadata:redact ? redactSecrets(metadata) : metadata,
-      rows,
+      rows: baseRows,
+      question,
+      transform: redact ? redactSecrets : null,
       contextTokens,
       describeRows: included => `- ${t("analysis_prompt_rows")}: ${t("analysis_rows_included", fmtNum(included), fmtNum(baseRows.length))}`,
     });
@@ -316,11 +315,9 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
   const send = useCallback((content, label) => {
     const text = String(content || "").trim();
     if (!text || isGenerating || !canChat) return;
-    let snap = snapshot;
-    if (!snap || snap.contextTokens !== contextTokens || snap.model !== selectedModel) {
-      snap = makeSnapshot();
-      setSnapshot(snap);
-    }
+    // Rebuilt on every question: rows are picked for this question and new live lines are seen.
+    const snap = makeSnapshot(text);
+    setSnapshot(snap);
     const stamp = Date.now();
     if (!activeConversationId) setActiveConversationId(`conversation-${stamp}-${Math.random().toString(36).slice(2, 8)}`);
     const userMsg = { id:`u${stamp}`, role:"user", content:text, label };
@@ -349,7 +346,7 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
         onError: err => finishMessage(assistantId, { error:String(err || "") }),
       },
     );
-  }, [provider, serverUrl, isGenerating, canChat, snapshot, contextTokens, selectedModel, makeSnapshot, messages, tableFormat, t, activeModel, flushPending, finishMessage, activeConversationId]);
+  }, [provider, serverUrl, isGenerating, canChat, selectedModel, makeSnapshot, messages, tableFormat, t, activeModel, flushPending, finishMessage, activeConversationId]);
 
   const toggleTableFormat = value => {
     setTableFormat(value);
@@ -407,7 +404,6 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
     await window.electronAPI.clearConversations();
   };
 
-  const refreshContext = () => setSnapshot(canChat ? makeSnapshot() : null);
 
   const copyConversation = () => copyResultText(messages
     .filter(m => m.content)
@@ -457,7 +453,6 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
     if (el) stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   };
 
-  const contextChanged = !!snapshot && snapshot.signature !== contextSignature;
   // Default questions, in the UI language; ones already asked in this conversation are hidden.
   const pendingSuggestions = useMemo(() => {
     const list = t(selectedRows.length ? "analysis_suggested_selection" : "analysis_suggested");
@@ -567,14 +562,8 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
                 ? t("analysis_ctx_snapshot", fmtNum(snapshot.included), fmtNum(snapshot.total), fmtNum(snapshot.tokens), fmtCtx(snapshot.contextTokens))
                 : t("analysis_ctx_pending", fmtNum(baseRows.length), scope, fmtCtx(contextTokens))}
             </span>
-            {snapshot?.truncated && <span style={{ color:"var(--pl-status-warn)" }}>{t("analysis_ctx_truncated")}</span>}
-            {contextChanged && (
-              <button type="button" onClick={refreshContext} disabled={isGenerating}
-                style={{ background:"none", border:0, padding:0, color:"var(--pl-accent-hover)", cursor:"pointer",
-                  fontFamily:"inherit", fontSize:10, textDecoration:"underline" }}>
-                {t("analysis_ctx_changed")}
-              </button>
-            )}
+            {snapshot?.truncated && <span title={t("analysis_ctx_detail", snapshot)}
+              style={{ color:"var(--pl-status-warn)", cursor:"help" }}>{t("analysis_ctx_truncated")}</span>}
             <label title={t("analysis_table_format_title")}
               style={{ marginLeft:"auto", display:"inline-flex", alignItems:"center", gap:5, color:"var(--pl-text-4)",
                 fontSize:11, cursor:"pointer", whiteSpace:"nowrap" }}>
@@ -639,6 +628,7 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
             {snapshot
               ? t("analysis_ctx_snapshot", fmtNum(snapshot.included), fmtNum(snapshot.total), fmtNum(snapshot.tokens), fmtCtx(snapshot.contextTokens))
               : t("analysis_ctx_pending", fmtNum(baseRows.length), scope, fmtCtx(contextTokens))}
+            {snapshot?.truncated && <div style={{ marginTop:4 }}>{t("analysis_ctx_detail", snapshot)}</div>}
           </div>
           {snapshot && (
             <details>
