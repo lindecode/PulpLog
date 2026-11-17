@@ -1012,7 +1012,8 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
       ? `${config.distro} → ${sshTarget}:${config.filePath}`
       : `${sshTarget}:${config.filePath}`;
   const sourceLabel = remoteDocker
-    ? `Docker · ${sshTarget} · ${config.containerName || config.containerId} (${String(config.containerId).slice(0, 12)})`
+    // reopened from a workspace the "id" is the name: don't repeat it
+    ? `Docker · ${sshTarget} · ${config.containerName || config.containerId}${config.containerName && config.containerId !== config.containerName ? ` (${String(config.containerId).slice(0, 12)})` : ""}`
     : `${modeLabel} ${targetLabel}`;
 
   const BADGES = [

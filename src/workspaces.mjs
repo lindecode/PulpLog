@@ -31,6 +31,8 @@ export function entryFromTab(tab) {
   if (tab.remote) {
     const remote = { ...tab.remote };
     SECRET_KEYS.forEach(key => delete remote[key]);
+    // remote containers reopen by name: the id dies when the container is re-created
+    if (remote.source === "docker" && remote.containerName) remote.containerId = remote.containerName;
     return { type:"remote", remote, label:tab.label };
   }
   return null;
@@ -163,7 +165,10 @@ export function useWorkspaces({ panes, remoteTabLabel, onMissing, enabled }) {
       }
       return [{ ...base, label:entry.label || containerTabLabel(docker), docker }];
     }
-    return [{ ...base, label:entry.label || remoteTabLabel(entry.remote), remote:{ ...entry.remote } }];
+    const remote = { ...entry.remote };
+    // also fixes entries saved before: they stored the id of a container that may no longer exist
+    if (remote.source === "docker" && remote.containerName) remote.containerId = remote.containerName;
+    return [{ ...base, label:entry.label || remoteTabLabel(remote), remote }];
   };
 
   const openWorkspaceTabs = async (ws) => {

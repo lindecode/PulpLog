@@ -1208,7 +1208,9 @@ handleTrusted("tabmenu:show", (event, payload) => {
       label: mt("ws_add_to"),
       submenu: [
         ...addable.map(ws => ({ label: ws.name.slice(0, 80), click: () => sendAction("ws-add", ws.id) })),
-        ...(addable.length ? [{ type: "separator" }] : []),
+        // already included (same file / same container name): shown checked so it's clear why it can't be added
+        ...removable.map(ws => ({ label: ws.name.slice(0, 80), type: "checkbox", checked: true, enabled: false })),
+        ...(workspaces.length ? [{ type: "separator" }] : []),
         { label: mt("ws_new_with_tab"), click: () => sendAction("ws-new") },
       ],
     });

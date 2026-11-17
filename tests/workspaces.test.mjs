@@ -161,3 +161,13 @@ test("mergeByTimestamp interleaves files and keeps continuation lines with their
   ]);
   assert.deepEqual(mergeByTimestamp([{ label:"x", lines:["a", "b", "c"] }], 2), ["[x] b", "[x] c"]);
 });
+
+test("remote docker entries are saved by container name so a re-created container still matches", () => {
+  const tab = { label: "Docker crisol-web-1 · dev", remote: { mode: "ssh", target: "dev", source: "docker",
+    containerId: "183341bb605e", containerName: "crisol-web-1", password: "x" } };
+  const entry = entryFromTab(tab);
+  assert.equal(entry.remote.containerId, "crisol-web-1");
+  assert.equal(entry.remote.password, undefined);
+  const recreated = { ...tab, remote: { ...tab.remote, containerId: "9f00aa11bb22" } };
+  assert.equal(rendererKey(entryFromTab(recreated)), rendererKey(entry));
+});
