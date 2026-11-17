@@ -97,3 +97,28 @@ export function createMergedStream(files, { onSpawned, onLines, onEnd, onError }
     cleanups.forEach(fn => { try { fn?.(); } catch { /* already closed */ } });
   };
 }
+
+/* Pure: open tabs → files for a merged tab. Local file tabs contribute their
+   path; merged tabs contribute all of theirs. Duplicate paths are dropped and
+   repeated labels get a " (2)", " (3)"… suffix so every line stays traceable. */
+export const isCombinableTab = tab =>
+  !!(tab && (tab.merged?.files?.length || (tab.filePath && tab.filePath !== "__web__" && !tab.docker && !tab.remote)));
+
+export function combineTabFiles(tabs) {
+  const seen = new Set();
+  const labelCount = new Map();
+  const files = [];
+  const add = (filePath, rawLabel) => {
+    if (!filePath || seen.has(filePath)) return;
+    seen.add(filePath);
+    const base = rawLabel || filePath.split(/[\/]/).pop();
+    const n = (labelCount.get(base) || 0) + 1;
+    labelCount.set(base, n);
+    files.push({ filePath, label: n === 1 ? base : `${base} (${n})` });
+  };
+  tabs.filter(isCombinableTab).forEach(tab => {
+    if (tab.merged) tab.merged.files.forEach(f => add(f.filePath, f.label));
+    else add(tab.filePath, tab.filePath.split(/[\/]/).pop());
+  });
+  return files;
+}

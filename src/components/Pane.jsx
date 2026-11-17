@@ -7,7 +7,8 @@ import { DockerTab, DockerPicker } from "./DockerTab.jsx";
 import { RemoteTab, RemotePicker } from "./RemoteTab.jsx";
 import { Welcome } from "./Welcome.jsx";
 import { tabKey, entryKey } from "../workspaces.mjs";
-import { createMergedStream } from "../mergedSource.mjs";
+import { createMergedStream, isCombinableTab } from "../mergedSource.mjs";
+import { CombinePicker } from "./CombinePicker.jsx";
 import { containerTabLabel, containerTooltip, tabDockerFromItem } from "../containers.mjs";
 
 /* Workspace merged view: several local files interleaved by timestamp */
@@ -206,6 +207,22 @@ function usePaneTabs(setSettings, notifyFileMissing) {
     setActive(id);
   };
 
+  /* Several logs → one merged tab, placed after the first source */
+  const combineTabs = ({ title, files, sourceIds = [] }) => {
+    if (files.length < 2) return;
+    const id = nextId++;
+    const tab = { id, label: title, filePath: null, fileSize: null, merged: { title, files } };
+    setTabs(prev => {
+      const drop = new Set(sourceIds);
+      const firstIdx = prev.findIndex(t => drop.has(t.id));
+      const kept = prev.filter(t => isContentTab(t) && !drop.has(t.id));
+      const at = firstIdx === -1 ? kept.length : prev.slice(0, firstIdx).filter(t => isContentTab(t) && !drop.has(t.id)).length;
+      kept.splice(at, 0, tab);
+      return kept;
+    });
+    setActive(id);
+  };
+
   /* Bulk helpers used by workspaces */
   const appendTabs = (newTabs) => {
     if (!newTabs.length) return;
@@ -241,7 +258,7 @@ function usePaneTabs(setSettings, notifyFileMissing) {
     addTab, openDockerTab, openRemoteTab, openFile, openFileByPath,
     closeTab, duplicateTab, reloadTab, renameTab,
     closeOtherTabs, closeTabsToRight, closeActiveTab, reopenLastClosedTab,
-    toggleGroupStart, reorderTab, appendTabs, removeTabsWhere,
+    toggleGroupStart, reorderTab, appendTabs, removeTabsWhere, combineTabs,
   };
 }
 
@@ -265,8 +282,10 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
     addTab, openDockerTab, openRemoteTab, openFile, openFileByPath,
     closeTab, duplicateTab, reloadTab, renameTab,
     closeOtherTabs, closeTabsToRight, closeActiveTab, reopenLastClosedTab,
-    toggleGroupStart, reorderTab,
+    toggleGroupStart, reorderTab, combineTabs,
   } = pane;
+  // null | { initialIds:[tabId] } — the "combine logs" dialog
+  const [combinePicker, setCombinePicker] = useState(null);
 
   const isFocusedRef = useRef(focused);
   const [mountedTabIds, setMountedTabIds] = useState(() => new Set([active]));
@@ -312,6 +331,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
       else if (action === "close-others") closeOtherTabs(tabId);
       else if (action === "close-right") closeTabsToRight(tabId);
       else if (action === "toggle-group-start") toggleGroupStart(tabId);
+      else if (action === "combine") setCombinePicker({ initialIds: [tabId] });
       else if (action.startsWith("ws-")) {
         const ws = workspacesRef.current;
         const tab = pane.tabsRef.current.find(x => x.id === tabId);
@@ -397,6 +417,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
                   filePath: tab.filePath && tab.filePath !== "__web__" ? tab.filePath : null,
                   hasContent: !!(tab.docker || tab.remote || tab.merged || (tab.filePath && tab.filePath !== "__web__")),
                   workspaceable: !!tabKey(tab),
+                  combinable: isCombinableTab(tab),
                   tabCount: visibleTabs.length,
                   canCloseRight: idx < visibleTabs.length - 1,
                   groupStart: !!tab.groupStart,
@@ -473,6 +494,14 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
           title={t("open_file_title")}>+</button>
 
         {IS_ELECTRON && (
+          <button onClick={() => setCombinePicker({ initialIds: [] })}
+            style={{ background:"transparent", border:"none", color:"var(--pl-text-6)",
+                     padding:"0 12px", cursor:"pointer", fontSize:15,
+                     borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}
+            title={t("combine_btn_title")} aria-label={t("combine_btn_title")}>⧉</button>
+        )}
+
+        {IS_ELECTRON && (
           <button onClick={() => dockerEnabled && setDockerPicker(true)}
             disabled={!dockerEnabled}
             style={{ background:"transparent", border:"none", color: dockerEnabled ? "var(--pl-cat-docker)" : "var(--pl-text-7)",
@@ -535,6 +564,11 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
         </div>
       ))}
 
+      {combinePicker && (
+        <CombinePicker candidates={tabs.filter(isCombinableTab)} initialIds={combinePicker.initialIds}
+          onClose={() => setCombinePicker(null)}
+          onCombine={spec => { combineTabs(spec); setCombinePicker(null); }} />
+      )}
       {dockerPicker && <DockerPicker onSelect={openDockerTab} onClose={() => setDockerPicker(false)} />}
       {remotePicker && <RemotePicker onSelect={submitRemotePicker} onClose={() => setRemotePicker(false)}
         capabilities={capabilities} profiles={settings.remoteProfiles || []}

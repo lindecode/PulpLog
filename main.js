@@ -138,7 +138,7 @@ const MENU_STRINGS = {
     file_unavailable_title:"Archivo no disponible", file_unavailable_msg:"No se pudo abrir el archivo reciente",
     open_location:"Abrir ubicación del archivo", copy_path:"Copiar ruta del archivo",
     duplicate_tab:"Duplicar bitácora", reload_tab:"Recargar bitácora", rename_tab:"Renombrar pestaña",
-    group_start_off:"Quitar separador de grupo", group_start_on:"Iniciar grupo aquí",
+    combine_tabs:"Combinar con otras bitácoras…", group_start_off:"Quitar separador de grupo", group_start_on:"Iniciar grupo aquí",
     close_others:"Cerrar otras pestañas", close_right:"Cerrar pestañas a la derecha",
     ws_export_dialog:"Exportar workspaces", ws_import_dialog:"Importar workspaces", ws_filter:"Workspaces de PulpLog",
     ws_add_to:"Agregar a workspace", ws_remove_from:"Quitar de workspace", ws_new_with_tab:"Nuevo workspace con esta bitácora…",
@@ -187,7 +187,7 @@ const MENU_STRINGS = {
     file_unavailable_title:"File unavailable", file_unavailable_msg:"Could not open the recent file",
     open_location:"Show in folder", copy_path:"Copy file path",
     duplicate_tab:"Duplicate tab", reload_tab:"Reload tab", rename_tab:"Rename tab",
-    group_start_off:"Remove group separator", group_start_on:"Start group here",
+    combine_tabs:"Combine with other logs…", group_start_off:"Remove group separator", group_start_on:"Start group here",
     close_others:"Close other tabs", close_right:"Close tabs to the right",
     ws_export_dialog:"Export workspaces", ws_import_dialog:"Import workspaces", ws_filter:"PulpLog workspaces",
     ws_add_to:"Add to workspace", ws_remove_from:"Remove from workspace", ws_new_with_tab:"New workspace with this log…",
@@ -1218,6 +1218,10 @@ handleTrusted("tabmenu:show", (event, payload) => {
         submenu: removable.map(ws => ({ label: ws.name.slice(0, 80), click: () => sendAction("ws-remove", ws.id) })),
       });
     }
+    template.push({ type: "separator" });
+  }
+  if (payload?.combinable) {
+    template.push({ label: mt("combine_tabs"), click: () => sendAction("combine") });
     template.push({ type: "separator" });
   }
   template.push({ label: mt("rename_tab"), click: () => sendAction("rename") });
