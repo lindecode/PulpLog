@@ -13,6 +13,12 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
   const [height,    setHeight]    = useState(500);
   const [contextMenu, setContextMenu] = useState(null);
   const containerRef = useRef(null);
+  // Only a real gesture (wheel, keys, scrollbar drag, touch) may turn off
+  // "anchor to bottom". Scroll events caused by new lines arriving, trimming
+  // or our own scrollToBottom must not count as the user scrolling up.
+  const lastUserInputRef = useRef(0);
+  const lastScrollTopRef = useRef(0);
+  const markUserInput = () => { lastUserInputRef.current = performance.now(); };
   const total  = items.length;
   const totalH = total * ROW_H;
   const maxScrollTop = Math.max(0, totalH - height);
@@ -145,6 +151,11 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
          tabIndex={0}
          aria-label="Log lines"
          style={{ overflow:"auto", flex:1, minHeight:0, outline:"none", overflowAnchor:"none" }}
+         onWheel={markUserInput}
+         onTouchMove={markUserInput}
+         onPointerDown={markUserInput}
+         onPointerMove={event => { if (event.buttons) markUserInput(); }}
+         onKeyDownCapture={markUserInput}
          onMouseDown={() => {
            containerRef.current?.focus({ preventScroll:true });
            onUserInteract?.();
@@ -182,7 +193,10 @@ function VirtualList({ items, sourceItems, showNums, bookmarks, onToggleBookmark
            setScrollTop(next);
            setRememberedScroll(stateKey, next);
            setContextMenu(null);
-           if (onUserScrollUp && scrollH - next - clientH > 50) {
+           const movedUp = next < lastScrollTopRef.current - 1;
+           lastScrollTopRef.current = next;
+           const byUser = performance.now() - lastUserInputRef.current < 400;
+           if (onUserScrollUp && byUser && movedUp && scrollH - next - clientH > 50) {
              onUserScrollUp();
            }
          }}>
