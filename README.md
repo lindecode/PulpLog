@@ -515,11 +515,34 @@ sin clave siguen disponibles; no cifran el contenido de las bitácoras.
 6. Para acotar el análisis, selecciona filas o aplica filtros antes de comenzar.
 
 El chat utiliza las filas seleccionadas; si no hay selección, usa las visibles
-según los filtros. El presupuesto de contexto puede recortar el contenido y da
-prioridad a las filas más recientes. Usa **Contexto de IA (tokens)** para ajustar
+según los filtros. En cada pregunta el modelo recibe un resumen de todas esas
+filas (niveles, rango de horas, mensajes más repetidos), las que coinciden con lo
+preguntado, los errores y avisos con su contexto y las más recientes. Usa **Contexto de IA (tokens)** para ajustar
 el presupuesto; cuando el servidor anuncia el límite del modelo, PulpLog lo
 respeta. En vLLM la capacidad del motor se configura en el servidor, por ejemplo
 con `--max-model-len`; aumentar el ajuste de PulpLog no amplía esa capacidad.
+
+##### Datos exactos calculados por PulpLog
+
+Un modelo local pequeño no puede contar ni recorrer decenas de miles de líneas, así
+que PulpLog calcula los datos y el modelo los interpreta. Según la pregunta, PulpLog
+ejecuta sobre **todas** las filas del alcance:
+
+| Pregunta de ejemplo | Qué calcula |
+|---|---|
+| "Dime todos los errores", "¿qué avisos hay?" | Catálogo de mensajes distintos con veces, primera y última hora |
+| "¿Hay picos?", "¿cuándo empezó?" | Línea de tiempo por tramos con picos detectados |
+| "¿Cuántas veces aparece LockTimeOut?" | Conteo exacto y cuándo ocurre |
+| "¿Qué pasó entre las 17:18 y las 17:24?" | Búsqueda por rango de horas |
+| "¿Qué pasó antes de la línea 33972?" | Las filas alrededor de esa línea |
+| "¿Qué cambió después de las 17:18?" | Errores y avisos antes y después: nuevos y desaparecidos |
+| "¿Qué usuario / IP / endpoint aparece más?" | Valores más frecuentes |
+| "¿Cuántas bitácoras hay?" | Filas, errores y avisos por bitácora combinada |
+
+Las preguntas habituales se reconocen al instante. Si ninguna encaja, una consulta
+breve al modelo elige qué calcular. Los resultados aparecen en el chat como tablas
+exactas, con números de línea que llevan a la fila, encima de la interpretación del
+modelo.
 
 Las respuestas se muestran en streaming y se pueden detener. Cambiar de proveedor
 o de URL detiene la generación anterior e inicia una conversación nueva.

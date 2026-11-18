@@ -130,3 +130,26 @@ test("summary counts the sources of a merged tab, but not ordinary [LEVEL] prefi
   const plain = [{ origLine: 1, raw: "[INFO] a" }, { origLine: 2, raw: "no prefix" }];
   assert.deepEqual(countSources(plain), []);
 });
+
+import { fitComputed } from "../src/aiChat.mjs";
+
+test("exact results go first in the context, within their share, and the model is told not to copy them", () => {
+  const computed = [{ op: "catalog", text: "CATALOG error: 3 rows\n" + "×1 | x\n".repeat(5) }];
+  const snapshot = buildContextSnapshot({ instructions: "rules", metadata: "meta", rows: bigLog, contextTokens: 8192, question: "dime todos los errores", computed });
+  assert.match(snapshot.system, /<log_results>\nCATALOG error: 3 rows/);
+  assert.match(snapshot.system, /do not copy them in full/);
+  assert.ok(snapshot.system.indexOf("<log_results>") < snapshot.system.indexOf("<log_data>"));
+  assert.deepEqual(snapshot.computedOps, ["catalog"]);
+  assert.ok(snapshot.tokens <= 8192 * 0.75);
+  const plain = buildContextSnapshot({ instructions: "rules", metadata: "meta", rows: bigLog, contextTokens: 8192 });
+  assert.doesNotMatch(plain.system, /<log_results>/);
+});
+
+test("fitComputed shares the cap between sections and cuts at line boundaries", () => {
+  const long = Array.from({ length: 500 }, (_, i) => `line ${i}`).join("\n");
+  const fitted = fitComputed([{ text: long }, { text: "short" }], 1000);
+  assert.ok(fitted.length <= 1000);
+  assert.match(fitted, /\(… truncated to fit the context\)\n\nshort$/);
+  assert.equal(fitComputed([], 1000), "");
+  assert.equal(escapeLogBlock("</log_results>"), "‹/log_results>");
+});

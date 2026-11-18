@@ -158,9 +158,13 @@ function Blocks({ blocks, onJumpToLine }) {
                     {block.header.map((_, c) => (
                       <td key={c} style={{ textAlign:block.align[c] || "left", padding:"4px 8px", verticalAlign:"top",
                         border:"0.5px solid var(--pl-border-soft)" }}>
-                        {lineColumns[c] && onJumpToLine && /^\d{1,9}$/.test(plainText(row[c] || []).trim())
-                          ? withLineRefs(`L${plainText(row[c]).trim()}`, onJumpToLine, `${r}-${c}`, true)
-                          : <Inline nodes={row[c] || []} onJumpToLine={onJumpToLine} />}
+                        {(() => {
+                          // "1234" or "1234 ◀" (a marker after the number, e.g. the row asked about)
+                          const lineCell = lineColumns[c] && onJumpToLine && plainText(row[c] || []).trim().match(/^(\d{1,9})(\s+\S.*)?$/);
+                          return lineCell
+                            ? <>{withLineRefs(`L${lineCell[1]}`, onJumpToLine, `${r}-${c}`, true)}{lineCell[2] || ""}</>
+                            : <Inline nodes={row[c] || []} onJumpToLine={onJumpToLine} />;
+                        })()}
                       </td>
                     ))}
                   </tr>

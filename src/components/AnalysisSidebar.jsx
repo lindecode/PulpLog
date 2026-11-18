@@ -2,7 +2,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLang } from "../i18n.jsx";
 import { buildResultText, copyResultText, fmtBytes, fmtNum, getModelLabel, getModelName, isChatModel } from "../utils.mjs";
-import { buildChatMessages, buildContextSnapshot, effectiveContextTokens } from "../aiChat.mjs";
+import { buildChatMessages, buildContextSnapshot, effectiveContextTokens, formatSummary, summarizeRows } from "../aiChat.mjs";
+import { runOps } from "../logOps.mjs";
+import { planByRules, plannerMessages, parsePlan } from "../aiPlanner.mjs";
 import { selectedLogRows } from "./LogRow.jsx";
 import { Btn } from "./SharedUI.jsx";
 import { Markdown } from "./Markdown.jsx";
@@ -299,12 +301,13 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
   }, []);
 
   // The whole scope is summarised and searched; only the rows actually sent are redacted.
-  const makeSnapshot = useCallback((question = "") => {
+  const makeSnapshot = useCallback((question = "", computed = []) => {
     const built = buildContextSnapshot({
       instructions: t("analysis_system"),
       metadata:redact ? redactSecrets(metadata) : metadata,
       rows: baseRows,
       question,
+      computed,
       transform: redact ? redactSecrets : null,
       contextTokens,
       describeRows: included => `- ${t("analysis_prompt_rows")}: ${t("analysis_rows_included", fmtNum(included), fmtNum(baseRows.length))}`,
@@ -312,38 +315,85 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
     return { ...built, total: baseRows.length, scope, signature: contextSignature, model: selectedModel };
   }, [baseRows, redact, t, metadata, contextTokens, scope, contextSignature, selectedModel]);
 
-  const send = useCallback((content, label) => {
+  /* One non-streamed model call (the planner). Resolves "" on error or timeout. */
+  const completeOnce = useCallback((chatMessages, timeoutMs = 45000) => new Promise(resolve => {
+    let text = "";
+    let settled = false;
+    const done = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const stopCall = window.electronAPI.streamOllamaChat(
+      { provider, serverUrl, model:selectedModel, messages:chatMessages, maxContext:activeModel?.contextLength || 0 },
+      { onChunk: chunk => { text += chunk; }, onDone: () => done(text), onError: () => done("") },
+    );
+    const timer = setTimeout(() => { stopCall?.(); done(""); }, timeoutMs);
+    stopStreamRef.current = () => { stopCall?.(); done(""); };
+  }), [provider, serverUrl, selectedModel, activeModel]);
+
+  const send = useCallback(async (content, label) => {
     const text = String(content || "").trim();
     if (!text || isGenerating || !canChat) return;
-    // Rebuilt on every question: rows are picked for this question and new live lines are seen.
-    const snap = makeSnapshot(text);
-    setSnapshot(snap);
     const stamp = Date.now();
+    const assistantId = `a${stamp}`;
     if (!activeConversationId) setActiveConversationId(`conversation-${stamp}-${Math.random().toString(36).slice(2, 8)}`);
+
     // Each question remembers the data it was asked about. When that changed (selection
-    // cleared, new filter, more live lines…) the model is told so: small models otherwise
-    // repeat what they answered about the previous data.
-    const ctx = { scope: snap.scope, total: snap.total };
+    // cleared, new filter…) the model is told so: small models otherwise repeat what they
+    // answered about the previous data.
+    const ctx = { scope, total: baseRows.length };
     const previousCtx = [...messages].reverse().find(m => m.role === "user" && m.ctx)?.ctx;
     // live logs grow a little between questions: only a new scope or a big jump (filter) counts
     const ctxChanged = !!previousCtx && (previousCtx.scope !== ctx.scope
       || Math.abs(previousCtx.total - ctx.total) > Math.max(50, 0.2 * Math.max(previousCtx.total, ctx.total)));
     const userMsg = { id:`u${stamp}`, role:"user", content:text, label, ctx,
                       ...(ctxChanged ? { ctxNote: t("analysis_ctx_changed_note", ctx.scope, fmtNum(ctx.total), previousCtx.scope, fmtNum(previousCtx.total)) } : {}) };
-    const assistantId = `a${stamp}`;
     const history = [...messages.filter(m => !m.error && m.content.trim()), userMsg]
       .map(({ role, content: body }) => ({ role, content: body }));
     // The format request only travels with the question being sent; the chat shows the plain question.
     if (tableFormat) history[history.length - 1].content += `\n\n${t("analysis_table_instruction")}`;
     if (ctxChanged) history[history.length - 1].content = `${t("analysis_ctx_changed_prompt", ctx.scope, ctx.total, previousCtx.scope, previousCtx.total)}\n\n${history[history.length - 1].content}`;
 
-    setMessages(prev => [...prev, userMsg, { id:assistantId, role:"assistant", content:"", streaming:true }]);
+    setMessages(prev => [...prev, userMsg, { id:assistantId, role:"assistant", content:"", streaming:true, phase:"planning" }]);
     setInput("");
     setIsGenerating(true);
     setTab("chat");
     stickToBottomRef.current = true;
     pendingRef.current = { id:assistantId, text:"" };
+    const stillCurrent = () => pendingRef.current.id === assistantId;
+    const patchAssistant = patch => setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, ...patch } : m));
+    const yieldToUi = () => new Promise(resolve => setTimeout(resolve, 0));
 
+    // 1. Which exact operations answer this? Rules first; the model only when none apply.
+    let plan = planByRules(text);
+    let planSource = plan.length ? "rules" : "none";
+    if (!plan.length && baseRows.length) {
+      const reply = await completeOnce(plannerMessages(text, formatSummary(summarizeRows(baseRows))));
+      if (!stillCurrent()) return;
+      plan = parsePlan(reply);
+      planSource = plan.length ? "model" : "none";
+    }
+
+    // 2. Run them over every row in scope (PulpLog, exact).
+    let computed = [];
+    if (plan.length) {
+      patchAssistant({ phase:"computing" });
+      await yieldToUi();
+      computed = runOps(baseRows, plan).map(result => redact
+        ? { ...result, text: redactSecrets(result.text), markdown: redactSecrets(result.markdown) }
+        : result);
+      if (!stillCurrent()) return;
+    }
+    const pulplog = computed.filter(result => result.markdown).map(result => result.markdown).join("\n\n");
+    patchAssistant({ phase:"answering", ...(pulplog ? { pulplog } : {}), plan: { source: planSource, ops: plan.map(step => step.op) } });
+
+    // 3. Smart context + exact results → the model interprets.
+    const snap = makeSnapshot(text, computed);
+    setSnapshot(snap);
+    await yieldToUi();
+    if (!stillCurrent()) return;
     stopStreamRef.current = window.electronAPI.streamOllamaChat(
       { provider, serverUrl, model:selectedModel, messages:buildChatMessages(snap, history), maxContext:activeModel?.contextLength || 0 },
       {
@@ -352,11 +402,12 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
           pendingRef.current.text += chunk;
           if (!rafRef.current) rafRef.current = requestAnimationFrame(flushPending);
         },
-        onDone: meta => finishMessage(assistantId, { meta }),
-        onError: err => finishMessage(assistantId, { error:String(err || "") }),
+        onDone: meta => finishMessage(assistantId, { meta, phase:null }),
+        onError: err => finishMessage(assistantId, { error:String(err || ""), phase:null }),
       },
     );
-  }, [provider, serverUrl, isGenerating, canChat, selectedModel, makeSnapshot, messages, tableFormat, t, activeModel, flushPending, finishMessage, activeConversationId]);
+  }, [provider, serverUrl, isGenerating, canChat, selectedModel, makeSnapshot, messages, tableFormat, t, activeModel,
+      flushPending, finishMessage, activeConversationId, scope, baseRows, redact, completeOnce]);
 
   const toggleTableFormat = value => {
     setTableFormat(value);
@@ -366,7 +417,8 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
   const stop = useCallback(() => {
     const id = pendingRef.current.id;
     stopStreamRef.current?.();
-    if (id) finishMessage(id, { stopped:true });
+    pendingRef.current = { id:null, text:"" }; // also cancels a pending plan/compute step
+    if (id) finishMessage(id, { stopped:true, phase:null });
   }, [finishMessage]);
 
   const newConversation = useCallback(() => {
@@ -772,10 +824,26 @@ function ChatMessage({ t, message, model, onJumpToLine }) {
   };
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+      {message.pulplog && (
+        <details open style={{ border:"0.5px solid var(--pl-border)", borderRadius:8, padding:"6px 10px",
+          background:"color-mix(in srgb, var(--pl-status-live) 5%, var(--pl-bg-input))" }}>
+          <summary style={{ cursor:"pointer", fontSize:10, fontWeight:700, color:"var(--pl-text-4)" }}>
+            {t("analysis_pulplog_title")}
+            {message.plan?.source === "model" && <span style={{ fontWeight:400 }}> · {t("analysis_plan_by_model")}</span>}
+          </summary>
+          <div style={{ marginTop:6, overflowX:"auto" }}>
+            <Markdown text={message.pulplog} onJumpToLine={onJumpToLine} />
+          </div>
+        </details>
+      )}
       <div style={{ fontSize:10, color:"var(--pl-text-6)", fontWeight:700 }}>{model}</div>
       {message.content
         ? <Markdown text={message.content} onJumpToLine={onJumpToLine} />
-        : message.streaming && <div style={{ color:"var(--pl-accent)", fontSize:11 }}>{t("analysis_ollama_analyzing")}</div>}
+        : message.streaming && <div style={{ color:"var(--pl-accent)", fontSize:11 }}>
+            {message.phase === "planning" ? t("analysis_phase_planning")
+              : message.phase === "computing" ? t("analysis_phase_computing")
+              : t("analysis_ollama_analyzing")}
+          </div>}
       {message.streaming && message.content && <span style={{ color:"var(--pl-accent)", fontSize:11 }}>▍</span>}
       {message.error && (
         <Notice warn>{t("analysis_ollama_error_prefix")} {message.error}</Notice>

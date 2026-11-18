@@ -26,7 +26,22 @@ export function formatLogLine(item) {
 }
 
 // The log block is untrusted input: neutralise anything that could close the wrapper tag.
-export const escapeLogBlock = text => String(text).replace(/<(\/?log_(?:data|summary))/gi, "‹$1");
+export const escapeLogBlock = text => String(text).replace(/<(\/?log_(?:data|summary|results))/gi, "‹$1");
+
+/* Exact results take priority, but never more than `cap` chars: each section
+   gets a fair share and is cut at a line boundary. */
+export const COMPUTED_SHARE = 0.55;
+export function fitComputed(sections, cap) {
+  const list = sections.filter(section => section?.text);
+  if (!list.length) return "";
+  const share = Math.floor(cap / list.length);
+  return list.map(section => {
+    const text = String(section.text);
+    if (text.length <= share) return text;
+    const cut = text.slice(0, Math.max(0, share - 40));
+    return `${cut.slice(0, Math.max(0, cut.lastIndexOf("\n")))}\n(… truncated to fit the context)`;
+  }).join("\n\n");
+}
 
 // Keeps the most recent rows that fit in the budget: in logs, the latest events usually matter most.
 export function selectTailRows(rows, charBudget) {
@@ -61,7 +76,9 @@ const STOPWORDS = new Set((
   + "registro registros mensaje mensajes primero primera último ultima última después antes durante "
   + "explain explica explicame explícame resumen resume summary summarize happened happen what which "
   + "where there their about before after first last should could would during message messages lines "
-  + "analiza analizar analyze muestra mostrar tienen sobre entre desde hasta ocurrió ocurre fallos falla fallo"
+  + "analiza analizar analyze muestra mostrar tienen sobre entre desde hasta ocurrió ocurre fallos falla fallo "
+  + "aparece aparecen apareció sucede sucedió sucedio existe existen generan genera encuentra encuentras appears happens "
+  + "cuántas cuántos veces times usuario usuarios bitácora"
 ).split(" "));
 
 const DATE_TIME_RE = /\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/;
@@ -287,13 +304,15 @@ export function selectSmartRows(rows, { question = "", charBudget, transform = n
   };
 }
 
-export function buildContextSnapshot({ instructions, metadata, rows, contextTokens, describeRows = null, question = "", transform = null }) {
+export function buildContextSnapshot({ instructions, metadata, rows, contextTokens, describeRows = null, question = "", transform = null, computed = [] }) {
   const formatOne = item => formatLogLine(transform ? { ...item, raw: transform(item.raw) } : item);
   const summary = summarizeRows(rows);
   const summaryText = formatSummary(summary, formatOne);
   const fixedChars = instructions.length + metadata.length + summaryText.length + 700;
   const budgetTokens = Math.max(512, Math.floor(contextTokens * (1 - HISTORY_SHARE)) - ANSWER_RESERVE_TOKENS);
-  const charBudget = Math.max(2000, Math.floor(budgetTokens * CHARS_PER_TOKEN) - fixedChars);
+  const totalBudget = Math.max(2000, Math.floor(budgetTokens * CHARS_PER_TOKEN) - fixedChars);
+  const computedText = fitComputed(computed, Math.floor(totalBudget * COMPUTED_SHARE));
+  const charBudget = Math.max(1500, totalBudget - computedText.length);
   // ~6% headroom for the "… [N lines omitted]" markers between picked rows
   const picked = selectSmartRows(rows, { question, charBudget: Math.floor(charBudget * 0.94), transform });
   const system = [
@@ -306,6 +325,14 @@ export function buildContextSnapshot({ instructions, metadata, rows, contextToke
     escapeLogBlock(summaryText),
     "</log_summary>",
     "",
+    ...(computedText ? [
+      "Exact results computed by PulpLog over ALL rows in scope for this question. Trust these numbers over your own counting.",
+      "The user already sees these results as tables in the chat: do not copy them in full. Interpret them: what matters, what is related, likely causes, next steps; cite line numbers.",
+      "<log_results>",
+      escapeLogBlock(computedText),
+      "</log_results>",
+      "",
+    ] : []),
     "Selected rows (line number TAB text), in log order. They include rows matching the user's question"
       + (picked.terms.length ? ` (search terms: ${picked.terms.join(", ")}; ${picked.matchCount} matching rows in the whole scope)` : "")
       + ", errors/warnings with nearby lines (a repeated message is shown at its first and last occurrence), and the most recent rows."
@@ -320,6 +347,8 @@ export function buildContextSnapshot({ instructions, metadata, rows, contextToke
     terms: picked.terms, matchCount: picked.matchCount, matchesIncluded: picked.matchesIncluded,
     issueCount: picked.issueCount, issueKinds: picked.issueKinds, issuesIncluded: picked.issuesIncluded,
     tailFromLine: picked.tailFromLine, lastLine: summary.lastLine,
+    computedOps: computed.filter(section => section?.text).map(section => section.op),
+    summaryText,
   };
 }
 

@@ -33,6 +33,12 @@ function normalizeMessage(message) {
     ...(message.ctx && typeof message.ctx === "object" && Number.isFinite(message.ctx.total)
       ? { ctx:{ scope:cleanText(message.ctx.scope, 100), total:Math.max(0, Math.floor(message.ctx.total)) } } : {}),
     ...(cleanText(message.ctxNote, 500) ? { ctxNote:cleanText(message.ctxNote, 500) } : {}),
+    // exact tables computed by PulpLog for this answer (logOps.mjs)
+    ...(cleanText(message.pulplog, MAX_CONTENT) ? { pulplog:cleanText(message.pulplog, MAX_CONTENT) } : {}),
+    ...(message.plan && typeof message.plan === "object" ? { plan:{
+      source:["rules", "model", "none"].includes(message.plan.source) ? message.plan.source : "none",
+      ops:(Array.isArray(message.plan.ops) ? message.plan.ops : []).map(op => cleanText(op, 20)).filter(Boolean).slice(0, 4),
+    } } : {}),
   };
 }
 
