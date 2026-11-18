@@ -6,6 +6,7 @@ import { useLang } from "../i18n.jsx";
 import { useEscapeToClose } from "../hooks.mjs";
 import { IS_ELECTRON } from "../utils.mjs";
 import { combineTabFiles } from "../mergedSource.mjs";
+import { containerSource } from "../containers.mjs";
 
 const fileName = fp => fp.split(/[\\/]/).pop();
 
@@ -29,7 +30,8 @@ export function CombinePicker({ candidates, initialIds, onCombine, onClose }) {
   }, []);
 
   const chosenTabs = candidates.filter(tab => selected.has(tab.id));
-  const files = combineTabFiles([...chosenTabs, ...extra.map(filePath => ({ filePath }))]);
+  const files = combineTabFiles([...chosenTabs, ...extra.map(filePath => ({ filePath }))],
+    { containerSource: docker => ({ source: containerSource(docker) }) });
   const canCombine = files.length >= 2;
   const defaultTitle = files.slice(0, 3).map(f => f.label).join(" + ") + (files.length > 3 ? " …" : "");
 
@@ -56,7 +58,7 @@ export function CombinePicker({ candidates, initialIds, onCombine, onClose }) {
 
         <div style={{ overflowY:"auto", minHeight:0, border:"0.5px solid var(--pl-border-soft)", borderRadius:6, padding:4 }}>
           {candidates.map(tab => (
-            <label key={tab.id} style={row} title={tab.merged ? tab.merged.files.map(f => f.filePath).join("\n") : tab.filePath}>
+            <label key={tab.id} style={row} title={tab.merged ? tab.merged.files.map(f => f.filePath || f.label).join("\n") : tab.filePath || tab.label}>
               <input type="checkbox" checked={selected.has(tab.id)} onChange={() => toggle(tab.id)} />
               <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                 {tab.merged ? `⧉ ${tab.label} · ${tab.merged.files.length}` : tab.label}

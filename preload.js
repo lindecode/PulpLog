@@ -129,6 +129,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     }
     return () => { cleanup(); ipcRenderer.invoke("remote:logs:stop", streamId); };
   },
+  /* Tees a container/remote stream into a private temp file (merged view). → { filePath, error } */
+  startCapture: (captureId, kind, payload) => ipcRenderer.invoke("capture:start", { captureId, kind, payload }),
+  stopCapture: (captureId) => ipcRenderer.invoke("capture:stop", captureId),
   testRemoteConnection: (config) => ipcRenderer.invoke("remote:test", config),
   listRemoteDirectory: (config) => ipcRenderer.invoke("remote:list-dir", config),
   listRemoteDocker: (config) => ipcRenderer.invoke("remote:docker-list", config),

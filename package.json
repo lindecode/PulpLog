@@ -48,6 +48,7 @@
       "dist/**/*",
       "main.js",
       "remoteDocker.cjs",
+      "captures.cjs",
       "vllm.cjs",
       "workspaces.cjs",
       "containerRuntimes.cjs",

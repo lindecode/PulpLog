@@ -433,7 +433,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
               }}
               title={(tab.workspaceIds?.length
                   ? `${t("ws_tab_in")}: ${tab.workspaceIds.map(id => wsById.get(id)?.name).filter(Boolean).join(", ")}\n` : "") + (
-                tab.merged   ? tab.merged.files.map(f => f.filePath).join("\n") :
+                tab.merged   ? tab.merged.files.map(f => f.filePath || f.label).join("\n") :
                 tab.docker   ? containerTooltip(tab.docker) :
                 tab.remote   ? `${tab.remote.mode === "wsl" ? "WSL" : "SSH"}\n${tab.remote.filePath}` :
                 tab.filePath ? tab.filePath :

@@ -251,6 +251,7 @@ se corrigen al actualizar las dependencias del repositorio.
 | Pestañas | Abre varios archivos o streams en la misma ventana |
 | Auto-scroll | Sigue automáticamente el final del archivo cuando está activo |
 | Limpiar y recargar | `Limpiar` vacía sólo la vista actual para mostrar lo nuevo; `Recargar` vuelve a leer desde el origen |
+| Combinar bitácoras | Botón ⧉ o clic derecho en una pestaña: intercala por hora archivos locales, contenedores y bitácoras remotas en una sola pestaña, siguiéndolas en vivo |
 | Restauración de sesión | Reabre las pestañas de archivos guardadas al iniciar la app |
 | Archivos recientes | Guarda hasta 10 archivos recientes y permite reabrirlos desde bienvenida o configuración |
 
@@ -725,6 +726,10 @@ El desinstalador interactivo de Windows pregunta si también debe eliminar todos
   esa acción no lo envía automáticamente a ningún modelo.
 - **Buscar actualizaciones** consulta la API pública de GitHub Releases; PulpLog
   no descarga ni instala una actualización automáticamente.
+- Al combinar bitácoras de contenedores o remotas, PulpLog guarda temporalmente
+  lo recibido en la carpeta `capture` de los datos de la app, tal cual llega.
+  Cada archivo se borra al cerrar la pestaña combinada o la app, nunca supera
+  200 MB y los que queden de un cierre inesperado se eliminan al arrancar.
 - Docker, SSH y WSL ejecutan herramientas del sistema con los parámetros que
   proporciona el usuario. Verifica siempre el host y la ruta antes de conectar.
 

@@ -23,6 +23,7 @@ const { isTrustedSender, assertStreamOwner } = require("./ipcSecurity.cjs");
 const { createLineDecoder, MAX_FILE_BYTES, MAX_AI_BYTES } = require("./streamLimits.cjs");
 const { createConversationStore } = require("./conversationStore.cjs");
 const { createCredentialVault } = require("./credentialVault.cjs");
+const { createCaptureManager } = require("./captures.cjs");
 
 const IS_SMOKE_TEST = process.env.PULPLOG_SMOKE_TEST === "1";
 const IS_DEV = !IS_SMOKE_TEST && (process.env.NODE_ENV === "development" || !app.isPackaged);
@@ -489,7 +490,8 @@ function showErrorAlert(sender, category, title, msg) {
   alertCooldowns.set(key, now);
   activeErrorAlerts.add(key);
 
-  const win = sender && !sender.isDestroyed() ? BrowserWindow.fromWebContents(sender) : BrowserWindow.getFocusedWindow();
+  const contents = sender?.realSender || sender; // captures pass an internal sender
+  const win = contents && !contents.isDestroyed() ? BrowserWindow.fromWebContents(contents) : BrowserWindow.getFocusedWindow();
   dialog.showMessageBox(win || undefined, {
     type: "error",
     title,
@@ -1295,8 +1297,10 @@ handleTrusted("containers:list", async (_event, options) => {
 
 const dockerStreams = new Map(); // streamId → { proc, stopped }
 
-handleTrusted("docker:logs:start", (event, payload) => {
-  assertTrustedSender(event);
+handleTrusted("docker:logs:start", (event, payload) => startDockerLogs(event, payload));
+
+/* event.sender may be a real webContents or a capture's internal sender (captures.cjs) */
+function startDockerLogs(event, payload) {
   const streamId = normalizeIdentifier(payload?.streamId, "stream id");
   if (!streamId) throw new Error("Invalid docker stream request");
   // legacy payload { containerId } = Docker
@@ -1367,7 +1371,7 @@ handleTrusted("docker:logs:start", (event, payload) => {
   });
 
   dockerStreams.set(streamId, stream);
-});
+}
 
 handleTrusted("docker:logs:stop", (_e, streamId) => {
   assertStreamOwner(dockerStreams.get(streamId), _e.sender);
@@ -1988,8 +1992,10 @@ function startNativeSshStream(event, payload) {
   config.passphrase = null;
 }
 
-handleTrusted("remote:logs:start", async (event, payload) => {
-  assertTrustedSender(event);
+handleTrusted("remote:logs:start", (event, payload) => startRemoteLogs(event, payload));
+
+/* event.sender may be a real webContents or a capture's internal sender (captures.cjs) */
+async function startRemoteLogs(event, payload) {
   const streamId = normalizeIdentifier(payload?.streamId, "stream id");
   if (!streamId) throw new Error("Invalid remote stream request");
   assertStreamOwner(remoteStreams.get(streamId), event.sender);
@@ -2124,7 +2130,27 @@ handleTrusted("remote:logs:start", async (event, payload) => {
   });
 
   remoteStreams.set(streamId, stream);
+}
+
+/* ─── Captures: container/remote streams teed to private temp files for the merged view ─── */
+const captures = createCaptureManager({
+  dir: path.join(path.dirname(logsDir), "capture"),
+  startStream: (kind, event, payload) => kind === "docker" ? startDockerLogs(event, payload) : startRemoteLogs(event, payload),
+  stopStream: (kind, streamId) => kind === "docker" ? stopDockerStream(streamId) : stopRemoteStream(streamId),
+  log: logEntry,
 });
+captures.sweepStale(0); // single-instance app: at start-up nothing is being captured, leftovers come from a crash
+
+handleTrusted("capture:start", (event, payload) => captures.start({
+  captureId: normalizeIdentifier(payload?.captureId, "capture id"),
+  kind: payload?.kind === "docker" ? "docker" : "remote",
+  payload: payload?.kind === "docker"
+    ? { source: containerRuntimes.normalizeSource(payload?.payload?.source) }
+    : { ...(payload?.payload || {}) },
+  owner: event.sender,
+}));
+
+handleTrusted("capture:stop", (event, captureId) => { captures.stop(captureId, event.sender); });
 
 handleTrusted("remote:test", async (event, payload) => {
   assertTrustedSender(event);
@@ -2966,7 +2992,7 @@ app.whenReady().then(async () => {
   }
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
-app.on("will-quit", () => globalShortcut.unregisterAll());
+app.on("will-quit", () => { globalShortcut.unregisterAll(); captures.stopAll(); });
 app.on("window-all-closed", () => {
   activeReads.forEach((stream) => { try { stream.destroy(); } catch {} });
   activeReads.clear();
