@@ -49,6 +49,7 @@
       "main.js",
       "remoteDocker.cjs",
       "captures.cjs",
+      "sshInvocation.cjs",
       "vllm.cjs",
       "workspaces.cjs",
       "containerRuntimes.cjs",

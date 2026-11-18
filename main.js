@@ -12,7 +12,8 @@ const { StringDecoder } = require("string_decoder");
 const http           = require("http");
 const https          = require("https");
 const zlib           = require("zlib");
-const { execFile, spawn } = require("child_process");
+const { execFile, execFileSync, spawn } = require("child_process");
+const os = require("os");
 const { Client: SshClient } = require("ssh2");
 const { dockerListScript, dockerReadCheck, dockerLogsScript, parseDockerContainers } = require("./remoteDocker.cjs");
 const vllm = require("./vllm.cjs");
@@ -24,6 +25,7 @@ const { createLineDecoder, MAX_FILE_BYTES, MAX_AI_BYTES } = require("./streamLim
 const { createConversationStore } = require("./conversationStore.cjs");
 const { createCredentialVault } = require("./credentialVault.cjs");
 const { createCaptureManager } = require("./captures.cjs");
+const { buildSshArgs, buildJumpConfig, parseJumpHosts, validateProxyJump } = require("./sshInvocation.cjs");
 
 const IS_SMOKE_TEST = process.env.PULPLOG_SMOKE_TEST === "1";
 const IS_DEV = !IS_SMOKE_TEST && (process.env.NODE_ENV === "development" || !app.isPackaged);
@@ -1553,6 +1555,68 @@ function validateSshTarget(config) {
   };
 }
 
+/* ─── Jump hosts: per-hop ssh_config (see sshInvocation.cjs) ─── */
+const jumpConfigDir = path.join(path.dirname(logsDir), "ssh");
+try { fs.rmSync(jumpConfigDir, { recursive:true, force:true }); } catch { /* regenerated on demand */ }
+const wslPathCache = new Map();
+
+function windowsToWslPath(winPath, distro) {
+  const key = `${distro}|${winPath}`;
+  if (wslPathCache.has(key)) return wslPathCache.get(key);
+  let converted = null;
+  try {
+    converted = execFileSync("wsl.exe", [...(distro ? ["-d", distro] : []), "--", "wslpath", "-a", winPath.replace(/\\/g, "/")],
+      { timeout:8000, windowsHide:true, encoding:"utf8" }).trim();
+  } catch { /* fall back to the default automount root */ }
+  if (!converted) {
+    const drive = winPath.match(/^([A-Za-z]):[\\/](.*)$/);
+    converted = drive ? `/mnt/${drive[1].toLowerCase()}/${drive[2].replace(/\\/g, "/")}` : winPath;
+  }
+  wslPathCache.set(key, converted);
+  return converted;
+}
+
+/* Path of the jump config, as the ssh that will run sees it; null without -J. */
+function jumpConfigFile(config, { inWsl = false, distro = "" } = {}) {
+  const proxyJump = validateProxyJump(config?.proxyJump);
+  if (!proxyJump) return null;
+  const includes = inWsl
+    ? ["~/.ssh/config", "/etc/ssh/ssh_config"]
+    : [path.join(os.homedir(), ".ssh", "config"), path.join(process.env.ProgramData || "C:\\ProgramData", "ssh", "ssh_config")]
+        .filter(file => process.platform !== "win32" || !file.startsWith("C:\\ProgramData") || fs.existsSync(file))
+        .map(file => file.replace(/\\/g, "/"));
+  const text = buildJumpConfig(parseJumpHosts(proxyJump), { includes });
+  const name = `jump-${crypto.createHash("sha256").update(text).digest("hex").slice(0, 16)}.conf`;
+  const file = path.join(jumpConfigDir, name);
+  if (!fs.existsSync(file)) {
+    fs.mkdirSync(jumpConfigDir, { recursive:true });
+    fs.writeFileSync(file, text, { mode:0o600 });
+  }
+  return inWsl ? windowsToWslPath(file, distro) : file;
+}
+
+/* ssh / ssh-wsl invocation shared by stream, listing and connection test. */
+function systemSshInvocation(config, remoteCommand, { keepalive = false } = {}) {
+  const { target, user, port, identityFile } = {
+    ...validateSshTarget(config),
+    user: String(config?.user || "").trim(),
+    port: String(config?.port || "").trim(),
+  };
+  const viaWsl = config?.mode === "ssh-wsl";
+  const distro = String(config?.distro || "").trim();
+  if (viaWsl) {
+    if (process.platform !== "win32") throw new Error("SSH desde WSL2 solo está disponible en Windows");
+    if (distro.startsWith("-")) throw new Error("Nombre de distro WSL inválido");
+  }
+  const args = buildSshArgs({ port, identityFile, proxyJump: config?.proxyJump },
+    { keepalive, jumpConfigFile: jumpConfigFile(config, { inWsl: viaWsl, distro }) });
+  const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
+  args.push(sshTarget, remoteCommand);
+  return viaWsl
+    ? { command:"wsl.exe", args:[...(distro ? ["-d", distro] : []), "--", "ssh", ...args], sshTarget, viaWsl, distro }
+    : { command:"ssh", args, sshTarget, viaWsl, distro };
+}
+
 function buildRemoteCommand(config) {
   const mode = ["wsl", "ssh-wsl"].includes(config?.mode) ? config.mode : "ssh";
   const filePath = String(config?.filePath || "").trim();
@@ -1573,33 +1637,9 @@ function buildRemoteCommand(config) {
     };
   }
 
-  const { target, user, port, identityFile } = {
-    ...validateSshTarget(config),
-    user: String(config?.user || "").trim(),
-    port: String(config?.port || "").trim(),
-  };
-
-  const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-    "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
-  if (port) args.push("-p", port);
-  if (identityFile) args.push("-i", identityFile, "-o", "IdentitiesOnly=yes");
-  const proxyJump = String(config?.proxyJump || "").trim();
-  if (proxyJump) {
-    if (proxyJump.startsWith("-") || /\s/.test(proxyJump)) throw new Error("Servidor intermedio inválido");
-    args.push("-J", proxyJump);
-  }
-  const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
-  args.push(sshTarget, tailScript);
-  if (mode === "ssh-wsl") {
-    if (process.platform !== "win32") throw new Error("SSH desde WSL2 solo está disponible en Windows");
-    const distro = String(config?.distro || "").trim();
-    if (distro.startsWith("-")) throw new Error("Nombre de distro WSL inválido");
-    const wslArgs = [];
-    if (distro) wslArgs.push("-d", distro);
-    wslArgs.push("--", "ssh", ...args);
-    return { command:"wsl.exe", args:wslArgs, label:`WSL SSH:${distro || "default"}:${sshTarget}:${filePath}` };
-  }
-  return { command: "ssh", args, label: `${sshTarget}:${filePath}` };
+  const spec = systemSshInvocation({ ...config, mode }, tailScript, { keepalive:true });
+  return { command:spec.command, args:spec.args,
+           label: spec.viaWsl ? `WSL SSH:${spec.distro || "default"}:${spec.sshTarget}:${filePath}` : `${spec.sshTarget}:${filePath}` };
 }
 
 function buildRemoteListCommand(config, script = null) {
@@ -1621,28 +1661,9 @@ function buildRemoteListCommand(config, script = null) {
     };
   }
 
-  const { target, user, port, identityFile } = {
-    ...validateSshTarget(config),
-    user: String(config?.user || "").trim(),
-    port: String(config?.port || "").trim(),
-  };
-  const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new"];
-  if (port) args.push("-p", port);
-  if (identityFile) args.push("-i", identityFile, "-o", "IdentitiesOnly=yes");
-  const proxyJump = String(config?.proxyJump || "").trim();
-  if (proxyJump) {
-    if (proxyJump.startsWith("-") || /\s/.test(proxyJump)) throw new Error("Servidor intermedio inválido");
-    args.push("-J", proxyJump);
-  }
-  const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
-  args.push(sshTarget, asRemoteShCommand(listScript));
-  if (mode === "ssh-wsl") {
-    if (process.platform !== "win32") throw new Error("SSH desde WSL2 solo está disponible en Windows");
-    const distro = String(config?.distro || "").trim();
-    if (distro.startsWith("-")) throw new Error("Nombre de distro WSL inválido");
-    return { command:"wsl.exe", args:[...(distro ? ["-d", distro] : []), "--", "ssh", ...args], label:`WSL SSH:${distro || "default"}:${sshTarget}:${dirPath || "~"}` };
-  }
-  return { command:"ssh", args, label:`${sshTarget}:${dirPath || "~"}` };
+  const spec = systemSshInvocation({ ...config, mode }, asRemoteShCommand(listScript));
+  return { command:spec.command, args:spec.args,
+           label: spec.viaWsl ? `WSL SSH:${spec.distro || "default"}:${spec.sshTarget}:${dirPath || "~"}` : `${spec.sshTarget}:${dirPath || "~"}` };
 }
 
 function listSystemRemoteDirectory(config) {
@@ -1658,26 +1679,10 @@ function listSystemRemoteDirectory(config) {
 function testSystemSsh(config) {
   const filePath = String(config?.filePath || "").trim();
   if (!filePath && config?.source !== "docker") return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
-  const { target, user, port, identityFile } = { ...validateSshTarget(config), user:String(config?.user || "").trim(), port:String(config?.port || "").trim() };
-  const args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new"];
-  if (port) args.push("-p", port);
-  if (identityFile) args.push("-i", identityFile, "-o", "IdentitiesOnly=yes");
-  const proxyJump = String(config?.proxyJump || "").trim();
-  if (proxyJump) {
-    if (proxyJump.startsWith("-") || /\s/.test(proxyJump)) return Promise.reject(new Error("Servidor intermedio inválido"));
-    args.push("-J", proxyJump);
-  }
-  const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
-  args.push(sshTarget, buildRemoteReadCheck(filePath, config));
-  let command = "ssh";
-  let commandArgs = args;
-  if (config?.mode === "ssh-wsl") {
-    if (process.platform !== "win32") return Promise.reject(new Error("SSH desde WSL2 solo está disponible en Windows"));
-    const distro = String(config?.distro || "").trim();
-    if (distro.startsWith("-")) return Promise.reject(new Error("Nombre de distro WSL inválido"));
-    command = "wsl.exe";
-    commandArgs = [...(distro ? ["-d", distro] : []), "--", "ssh", ...args];
-  }
+  let spec;
+  try { spec = systemSshInvocation(config, buildRemoteReadCheck(filePath, config)); }
+  catch (error) { return Promise.reject(error); }
+  const { command, args:commandArgs } = spec;
   return new Promise((resolve, reject) => {
     execFile(command, commandArgs, { timeout:15000, windowsHide:true }, (error, _stdout, stderr) => {
       if (error) return reject(new Error(String(stderr || error.message).trim()));
