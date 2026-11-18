@@ -320,12 +320,22 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
     setSnapshot(snap);
     const stamp = Date.now();
     if (!activeConversationId) setActiveConversationId(`conversation-${stamp}-${Math.random().toString(36).slice(2, 8)}`);
-    const userMsg = { id:`u${stamp}`, role:"user", content:text, label };
+    // Each question remembers the data it was asked about. When that changed (selection
+    // cleared, new filter, more live lines…) the model is told so: small models otherwise
+    // repeat what they answered about the previous data.
+    const ctx = { scope: snap.scope, total: snap.total };
+    const previousCtx = [...messages].reverse().find(m => m.role === "user" && m.ctx)?.ctx;
+    // live logs grow a little between questions: only a new scope or a big jump (filter) counts
+    const ctxChanged = !!previousCtx && (previousCtx.scope !== ctx.scope
+      || Math.abs(previousCtx.total - ctx.total) > Math.max(50, 0.2 * Math.max(previousCtx.total, ctx.total)));
+    const userMsg = { id:`u${stamp}`, role:"user", content:text, label, ctx,
+                      ...(ctxChanged ? { ctxNote: t("analysis_ctx_changed_note", ctx.scope, fmtNum(ctx.total), previousCtx.scope, fmtNum(previousCtx.total)) } : {}) };
     const assistantId = `a${stamp}`;
     const history = [...messages.filter(m => !m.error && m.content.trim()), userMsg]
       .map(({ role, content: body }) => ({ role, content: body }));
     // The format request only travels with the question being sent; the chat shows the plain question.
     if (tableFormat) history[history.length - 1].content += `\n\n${t("analysis_table_instruction")}`;
+    if (ctxChanged) history[history.length - 1].content = `${t("analysis_ctx_changed_prompt", ctx.scope, ctx.total, previousCtx.scope, previousCtx.total)}\n\n${history[history.length - 1].content}`;
 
     setMessages(prev => [...prev, userMsg, { id:assistantId, role:"assistant", content:"", streaming:true }]);
     setInput("");
@@ -507,14 +517,14 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
       </div>
 
       {/* tabs */}
-      <div style={{ display:"flex", alignItems:"center", gap:4, borderBottom:"0.5px solid var(--pl-border)", paddingBottom:6 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:4, rowGap:6, flexWrap:"wrap", borderBottom:"0.5px solid var(--pl-border)", paddingBottom:6 }}>
         <button type="button" onClick={() => setTab("chat")} style={tabBtn(tab === "chat")}>{t("analysis_tab_chat")}</button>
         <button type="button" onClick={() => setTab("context")} style={tabBtn(tab === "context")}>{t("analysis_tab_context")}</button>
         {tab === "chat" && (
           <select value={activeConversationId || ""} disabled={isGenerating}
             onChange={event => event.target.value ? openConversation(event.target.value) : newConversation()}
             title={t("analysis_chat_history")}
-            style={{ minWidth:120, maxWidth:240, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+            style={{ flex:"1 1 120px", minWidth:0, maxWidth:240, background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
               borderRadius:5, color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:10, padding:"3px 5px" }}>
             <option value="">{t("analysis_new_chat")}</option>
             {conversations.map(conversation => (
@@ -525,7 +535,7 @@ function AnalysisSidebarContent({ open = true, anchorRef, sourceLabel, filter, e
           </select>
         )}
         {tab === "chat" && messages.length > 0 && (
-          <div style={{ marginLeft:"auto", display:"flex", gap:6 }}>
+          <div style={{ marginLeft:"auto", display:"flex", gap:6, flexWrap:"wrap", justifyContent:"flex-end" }}>
             <Btn onClick={copyConversation} title={t("analysis_copy_chat_title")}>{t("analysis_copy_chat")}</Btn>
             {activeConversationId && <Btn onClick={renameConversation} title={t("analysis_rename_chat")}>{t("analysis_rename_chat")}</Btn>}
             {activeConversationId && <Btn onClick={deleteConversation} title={t("analysis_delete_chat")}>{t("analysis_delete_chat")}</Btn>}
@@ -737,12 +747,20 @@ function EmptyChat({ t, disabled, suggestions, onAsk, onTask }) {
 function ChatMessage({ t, message, model, onJumpToLine }) {
   const [copied, setCopied] = useState(false);
   if (message.role === "user") {
-    return (
+    const bubble = (
       <div style={{ alignSelf:"flex-end", maxWidth:"85%", background:"color-mix(in srgb, var(--pl-accent) 14%, var(--pl-bg-input))",
         border:"0.5px solid color-mix(in srgb, var(--pl-accent) 35%, var(--pl-border))", borderRadius:"10px 10px 2px 10px",
         padding:"7px 10px", color:"var(--pl-text-1)", fontSize:12, lineHeight:1.5, whiteSpace:"pre-wrap", wordBreak:"break-word" }}>
         {message.label ? <span style={{ fontWeight:700 }}>{message.label}</span> : message.content}
       </div>
+    );
+    if (!message.ctxNote) return bubble;
+    return (
+      <>
+        <div role="note" style={{ alignSelf:"stretch", textAlign:"center", fontSize:10, color:"var(--pl-text-6)",
+          borderTop:"0.5px dashed var(--pl-border)", paddingTop:6 }}>{message.ctxNote}</div>
+        {bubble}
+      </>
     );
   }
   const meta = message.meta || {};

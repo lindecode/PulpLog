@@ -122,6 +122,23 @@ function edgeTimestamp(rows, fromEnd = false) {
   return null;
 }
 
+/* Merged tabs prefix every line with "[source] ": count rows per source.
+   Only reported when nearly every row has a prefix, so ordinary "[INFO]" logs don't count. */
+const SOURCE_PREFIX = /^\[([^\]]{1,120})\] /;
+export function countSources(rows, total = rows.length) {
+  const counts = new Map();
+  let prefixed = 0;
+  for (const row of rows) {
+    if (row.separator) continue;
+    const match = SOURCE_PREFIX.exec(String(row.raw || ""));
+    if (!match) continue;
+    prefixed++;
+    counts.set(match[1], (counts.get(match[1]) || 0) + 1);
+  }
+  if (!total || prefixed < total * 0.95 || counts.size > 50) return [];
+  return [...counts].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count);
+}
+
 export function summarizeRows(rows, topN = 5) {
   const levels = { error:0, warn:0, info:0, debug:0, other:0 };
   const templates = new Map();
@@ -146,6 +163,7 @@ export function summarizeRows(rows, topN = 5) {
     .sort((a, b) => b.count - a.count).slice(0, topN);
   return {
     total,
+    sources: countSources(rows, total),
     firstLine: rows[0]?.origLine ?? null,
     lastLine: rows[rows.length - 1]?.origLine ?? null,
     from: edgeTimestamp(rows),
@@ -161,6 +179,9 @@ export function formatSummary(summary, format = formatLogLine) {
     summary.from || summary.to ? `time ${summary.from || "?"} → ${summary.to || "?"}` : null,
     `levels: error=${summary.levels.error} warn=${summary.levels.warn} info=${summary.levels.info} debug=${summary.levels.debug} other=${summary.levels.other}`,
   ].filter(Boolean);
+  if (summary.sources?.length) {
+    parts.push(`${summary.sources.length} combined logs: ${summary.sources.map(s => `[${s.label}]=${s.count}`).join(", ")}`);
+  }
   const top = summary.top.map(entry => `×${entry.count}\t${format(entry.sample)}`);
   return [parts.join(" · "), ...(top.length ? ["most repeated messages (count, example line):", ...top] : [])].join("\n");
 }

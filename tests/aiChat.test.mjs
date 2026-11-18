@@ -116,3 +116,17 @@ test("evenOrder spreads any prefix across the list", () => {
   assert.deepEqual(order.slice(0, 3), [0, 8, 4]);
   assert.equal(new Set(order).size, 9);
 });
+
+import { countSources, formatSummary } from "../src/aiChat.mjs";
+
+test("summary counts the sources of a merged tab, but not ordinary [LEVEL] prefixes", () => {
+  const merged = [
+    { origLine: 1, raw: "[app.log] 10:00:00 INFO a", type: "info" },
+    { origLine: 2, raw: "[SSH beta] 10:00:01 INFO b", type: "info" },
+    { origLine: 3, raw: "[app.log] 10:00:02 ERROR c", type: "error" },
+  ];
+  assert.deepEqual(countSources(merged), [{ label: "app.log", count: 2 }, { label: "SSH beta", count: 1 }]);
+  assert.match(formatSummary(summarizeRows(merged)), /2 combined logs: \[app\.log\]=2, \[SSH beta\]=1/);
+  const plain = [{ origLine: 1, raw: "[INFO] a" }, { origLine: 2, raw: "no prefix" }];
+  assert.deepEqual(countSources(plain), []);
+});

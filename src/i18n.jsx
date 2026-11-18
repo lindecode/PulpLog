@@ -208,6 +208,8 @@ const T = {
     analysis_quick_h:"ANÁLISIS RÁPIDOS",
     analysis_table_format:"Responder en tabla",
     analysis_table_format_title:"Pide al modelo una tabla Línea | Mensaje | Interpretación con la evidencia, seguida de la causa y los próximos pasos",
+    analysis_ctx_changed_note:(scope, total, prevScope, prevTotal) => `Los datos cambiaron: ahora ${scope} · ${total} filas (antes ${prevScope} · ${prevTotal})`,
+    analysis_ctx_changed_prompt:(scope, total, prevScope, prevTotal) => `[Aviso de PulpLog: los datos cambiaron desde la pregunta anterior. Antes: ${prevScope}, ${prevTotal} filas. Ahora: ${scope}, ${total} filas. Las respuestas anteriores hablaban de otros datos: no las repitas ni las uses como evidencia; responde solo con el <log_summary> y el <log_data> actuales.]`,
     analysis_table_instruction:"Formato de respuesta: presenta la evidencia en una tabla Markdown con las columnas «Línea | Mensaje | Interpretación» (una fila por línea relevante; en la columna Línea pon solo el número). Después de la tabla, resume en listas breves la causa probable y los próximos pasos.",
     analysis_suggested:[
       "¿Cuál es el error más grave y desde cuándo ocurre?",
@@ -659,6 +661,8 @@ const T = {
     analysis_quick_h:"QUICK ANALYSES",
     analysis_table_format:"Answer as a table",
     analysis_table_format_title:"Ask the model for a Line | Message | Interpretation evidence table, followed by the cause and next steps",
+    analysis_ctx_changed_note:(scope, total, prevScope, prevTotal) => `Data changed: now ${scope} · ${total} rows (before ${prevScope} · ${prevTotal})`,
+    analysis_ctx_changed_prompt:(scope, total, prevScope, prevTotal) => `[PulpLog notice: the data changed since the previous question. Before: ${prevScope}, ${prevTotal} rows. Now: ${scope}, ${total} rows. Earlier answers were about different data: do not repeat them or use them as evidence; answer only from the current <log_summary> and <log_data>.]`,
     analysis_table_instruction:"Answer format: present the evidence in a Markdown table with the columns \"Line | Message | Interpretation\" (one row per relevant line; put only the number in the Line column). After the table, summarize the probable cause and next steps in short lists.",
     analysis_suggested:[
       "What is the most severe error and since when does it happen?",
