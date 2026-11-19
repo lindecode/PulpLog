@@ -1,6 +1,6 @@
 # Propuesta: rediseño de SSH y WSL
 
-Estado: planteamiento · Fases 0 y 1 implementadas · Fecha: 2026-11-18
+Estado: planteamiento · Fases 0, 1 y 4 implementadas · Fecha: 2026-11-18
 
 ## 1. Situación actual
 
@@ -211,12 +211,13 @@ Perfiles que comparten host, usuario y saltos se agrupan en un mismo servidor.
 | 1 | Contraseña en el SSH del sistema con `SSH_ASKPASS` (Windows y WSL); diálogo para peticiones 2FA; contraseña interactiva en el motor directo | **Hecho** (`askpass.cjs`) |
 | 2 | Cadena de saltos visual con campos por salto, tipos de salto y prueba salto a salto | |
 | 3 | Modelo servidor/bitácoras, lista de servidores, entornos con color, migración de perfiles | |
-| 4 | WSL local como archivos `\\wsl.localhost`; "SSH desde WSL" como opción | |
+| 4 | WSL local como archivos `\\wsl.localhost`; "SSH desde WSL" como opción | **Hecho** (`src/wslPaths.mjs`) |
 | 5 | `sudo`, `journalctl`, zona horaria y codificación | |
 | 6 | Importar `~/.ssh/config`, exportar sin secretos, `Ctrl+K`, bloqueo de la bóveda | |
 
 ## 13. Pendiente de verificar
 
 - ~~`SSH_ASKPASS_REQUIRE=force` con OpenSSH para Windows 9.5~~: verificado (Windows 9.5 y Ubuntu 9.6, con interop desde WSL).
-- Lectura de logs de root por `\\wsl.localhost`.
+- ~~Lectura de logs de root por `\\wsl.localhost`~~: verificado. Se leen con los permisos del usuario
+  predeterminado (grupo `adm` incluido); los exclusivos de root dan `EPERM` y se abren con `wsl -u root`.
 - Comportamiento de `ProxyJump` en el motor directo con 2FA en el salto.

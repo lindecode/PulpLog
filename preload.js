@@ -2,7 +2,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
-  openFileDialog: () => ipcRenderer.invoke("dialog:open"),
+  openFileDialog: (options) => ipcRenderer.invoke("dialog:open", options || {}),
   openSshKeyDialog: () => ipcRenderer.invoke("dialog:ssh-key"),
   statFile:  (p) => ipcRenderer.invoke("file:stat", p),
   getPathForFile: (file) => webUtils.getPathForFile(file),

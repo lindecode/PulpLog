@@ -592,14 +592,19 @@ abrir, filtrar ni exportar bitácoras.
 
 ### SSH y WSL2
 
-PulpLog puede seguir una bitácora remota mediante `tail -F`. Para archivos `.gz`, lee y descomprime con `gzip -cd` de forma estática. La ventana **SSH / WSL** detecta las herramientas disponibles en el ordenador y sólo muestra WSL2 en Windows.
+PulpLog puede seguir una bitácora remota mediante `tail -F`. Para archivos `.gz`, lee y descomprime con `gzip -cd` de forma estática. La ventana **SSH** detecta las herramientas disponibles en el ordenador.
 
 | Tipo de conexión | Uso recomendado |
 |------------------|-----------------|
-| SSH del sistema | Cuando `ssh alias` ya funciona en una terminal. Reutiliza OpenSSH, `~/.ssh/config`, llaves, aliases, SSH Agent y `ProxyJump` |
-| SSH desde WSL2 | Windows ejecuta SSH dentro de la distribución elegida y usa su configuración y llaves Linux |
-| SSH con credenciales | Solicita host, usuario y contraseña o una llave privada con passphrase |
-| WSL2 local | Abre un log dentro de una distribución instalada, sin conectarse a otro servidor |
+| SSH | Cuando `ssh alias` ya funciona en una terminal. Usa el cliente OpenSSH con `~/.ssh/config`, llaves, aliases, SSH Agent y `ProxyJump`. En Windows, **Configuración SSH de** permite elegir la de Windows o la de una distribución WSL2 |
+| SSH con credenciales | Motor propio de PulpLog, para equipos sin cliente `ssh`. Solicita host, usuario y contraseña o una llave privada con passphrase |
+
+**Logs de WSL2 en este equipo.** Ya no son un tipo de conexión: se abren como archivos locales por
+`\\wsl.localhost\<distro>\…`, con el botón 🐧 de la barra de pestañas, desde la pantalla de
+bienvenida o con **Abrir archivo** → Linux. Así se pueden combinar, usar en patrones de workspace y
+aparecen en recientes. Windows los lee con los permisos del usuario predeterminado de la distribución;
+si un archivo solo lo puede leer root, PulpLog ofrece **Abrir como root**, que usa `wsl -u root`.
+Los perfiles guardados como «WSL2 local» abren su archivo de esta forma.
 
 Las rutas remotas `.gz` requieren que el host remoto, WSL2 o la distribución Linux tenga `gzip` disponible. Al ser archivos comprimidos cerrados, se muestran como una lectura puntual y no activan seguimiento en vivo.
 

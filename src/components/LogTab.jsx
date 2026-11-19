@@ -1,6 +1,7 @@
 // Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useLang } from "../i18n.jsx";
+import { isPermissionError } from "../wslPaths.mjs";
 import { useDebouncedValue, useRowSelection, useSearchShortcuts } from "../hooks.mjs";
 import { useRememberedState, useFilteredLogs, useAvailableLogDates, setRememberedScroll } from "../logHooks.mjs";
 import { classifyLines, countLevels, splitTextChunk } from "../logProcessing.mjs";
@@ -14,7 +15,7 @@ import { RotationBanner } from "./Modals.jsx";
 /* ═══════════════════════════════════════════
    LogTab
 ═══════════════════════════════════════════ */
-function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadingChange,
+function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadingChange, onOpenAsRoot = null,
                   autoScrollDefault = false, showNumsDefault = true, isActive = false }) {
   const t = useLang();
   const selectionSource = fileName || filePath || "pulplog";
@@ -644,6 +645,17 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
                       fontSize:13, textAlign:"center" }}>
           <span style={{ fontSize:20 }}>⚠</span>
           {t("file_open_error", loadError)}
+          {onOpenAsRoot && isPermissionError(loadError) && (
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:8, marginTop:6,
+                          color:"var(--pl-text-4)", fontSize:12 }}>
+              {t("wsl_root_hint")}
+              <button type="button" onClick={onOpenAsRoot}
+                style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-accent)", borderRadius:6,
+                         color:"var(--pl-text-1)", fontFamily:"inherit", fontSize:12, padding:"7px 16px", cursor:"pointer" }}>
+                🐧 {t("wsl_open_as_root")}
+              </button>
+            </div>
+          )}
         </div>
       ) : filtered.length === 0 ? (
         <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",

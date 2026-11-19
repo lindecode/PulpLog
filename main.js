@@ -898,9 +898,14 @@ function refreshApplicationMenu(settings) {
   if (win && !win.isDestroyed()) buildMenu(win, settings?.recentFiles || []);
 }
 /* ─── IPC: open dialog ─── */
-handleTrusted("dialog:open", async () => {
+handleTrusted("dialog:open", async (_event, options) => {
+  // only WSL folders may be suggested as the starting folder (\\wsl.localhost\<distro>\…)
+  const requested = typeof options?.defaultPath === "string" ? options.defaultPath : "";
+  const defaultPath = requested.length < 1024 && /^[\\/]{2}wsl(?:\.localhost|\$)[\\/][^\\/]+/i.test(requested)
+    && !/[\0*?"<>|]/.test(requested) ? requested : undefined;
   const { canceled, filePaths } = await dialog.showOpenDialog({
     title: mt("open_log_dialog"),
+    defaultPath,
     filters: [
       { name:mt("filter_logs"), extensions:["log","txt","out","gz"] },
       { name:mt("filter_all"), extensions:["*"] },
@@ -1740,11 +1745,13 @@ function buildRemoteCommand(config) {
     if (distro.startsWith("-")) throw new Error("Nombre de distro WSL inválido");
     const args = [];
     if (distro) args.push("-d", distro);
+    // files only root may read (opened from a \wsl.localhost path that failed with EPERM)
+    if (config?.asRoot === true) args.push("-u", "root");
     args.push("--", "sh", "-lc", tailScript);
     return {
       command: process.platform === "win32" ? "wsl.exe" : "wsl",
       args,
-      label: distro ? `WSL:${distro}:${filePath}` : `WSL:${filePath}`,
+      label: `WSL${config?.asRoot === true ? " root" : ""}:${distro || "default"}:${filePath}`,
     };
   }
 

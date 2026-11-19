@@ -2,7 +2,7 @@
 import React from "react";
 import { useLang } from "../i18n.jsx";
 
-function Welcome({ onOpen, isElectron, recentFiles, onOpenRecent }) {
+function Welcome({ onOpen, isElectron, recentFiles, onOpenRecent, wslDistros = [], onOpenWsl }) {
   const t = useLang();
   return (
     <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center",
@@ -15,6 +15,17 @@ function Welcome({ onOpen, isElectron, recentFiles, onOpenRecent }) {
                  padding:"10px 24px", cursor:"pointer" }}>
         {t("open_file_btn")}
       </button>
+      {isElectron && wslDistros.length > 0 && (
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", justifyContent:"center" }}>
+          {wslDistros.map(distro => (
+            <button key={distro} onClick={() => onOpenWsl(distro)} title={t("wsl_open_title", distro)}
+              style={{ background:"transparent", border:"0.5px solid var(--pl-border)", borderRadius:6,
+                       color:"var(--pl-text-4)", fontFamily:"inherit", fontSize:11, padding:"6px 14px", cursor:"pointer" }}>
+              🐧 {t("wsl_open_btn", distro)}
+            </button>
+          ))}
+        </div>
+      )}
 
       {recentFiles?.length > 0 && (
         <div style={{ marginTop:8, width:440 }}>

@@ -9,6 +9,7 @@ import { Welcome } from "./Welcome.jsx";
 import { tabKey, entryKey } from "../workspaces.mjs";
 import { createMergedStream, isCombinableTab } from "../mergedSource.mjs";
 import { CombinePicker } from "./CombinePicker.jsx";
+import { parseWslUncPath, wslUncPath } from "../wslPaths.mjs";
 import { containerTabLabel, containerTooltip, tabDockerFromItem } from "../containers.mjs";
 
 /* Workspace merged view: several local files interleaved by timestamp */
@@ -35,7 +36,7 @@ export function remoteTabLabel(config) {
     : config.mode === "ssh-wsl"
       ? `${config.distro || "WSL"} → ${config.target}`
     : (config.user && !config.target.includes("@") ? `${config.user}@${config.target}` : config.target);
-  const prefix = config.mode === "wsl" ? "WSL2" : config.mode === "ssh-wsl" ? "SSH WSL2" : config.mode === "ssh-native" ? "SSH directo" : "SSH";
+  const prefix = config.mode === "wsl" ? (config.asRoot ? "WSL2 root" : "WSL2") : config.mode === "ssh-wsl" ? "SSH WSL2" : config.mode === "ssh-native" ? "SSH directo" : "SSH";
   return config.source === "docker" ? `Docker ${config.containerName || config.containerId} · ${name}` : `${prefix} ${name}`;
 }
 
@@ -346,6 +347,22 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
 
   const visibleTabs = tabs;
   const activeTab = tabs.find(tab => tab.id === active) || tabs[0];
+
+  /* WSL files open as local files through \\wsl.localhost\<distro>\… */
+  const wslDistros = capabilities?.wsl?.available ? (capabilities.wsl.distros || []) : [];
+  const [wslMenu, setWslMenu] = useState(false);
+  const openWslFile = async (distro) => {
+    setWslMenu(false);
+    const fp = await window.electronAPI.openFileDialog({ defaultPath: wslUncPath(distro, "/var/log") });
+    if (fp) await openFileByPath(fp);
+  };
+  /* Root-only WSL file: same file through `wsl -u root` (a remote-style tab). */
+  const openWslAsRoot = (filePath) => {
+    const wsl = parseWslUncPath(filePath);
+    if (!wsl) return;
+    openRemoteTab({ mode:"wsl", distro:wsl.distro, filePath:wsl.linuxPath, asRoot:true, source:"file",
+                    tailLines:500, historyMode:"lines", maxInitialMb:100, target:"" });
+  };
   const dockerCap = capabilities?.docker;
   const sshCap = capabilities?.ssh;
   const wslCap = capabilities?.wsl;
@@ -520,8 +537,33 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
                      borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0,
                      fontFamily:"inherit", fontWeight:700 }}
             title={remoteEnabled ? t("remote_btn_title") : (sshCap?.reason || wslCap?.reason || t("capability_checking"))}>
-            SSH / WSL
+            SSH
           </button>
+        )}
+
+        {IS_ELECTRON && wslDistros.length > 0 && (
+          <div style={{ position:"relative", display:"flex", borderRight:"0.5px solid var(--pl-border-soft)", flexShrink:0 }}>
+            <button onClick={() => wslDistros.length === 1 ? openWslFile(wslDistros[0]) : setWslMenu(open => !open)}
+              style={{ background:"transparent", border:"none", color:"var(--pl-text-5)", padding:"0 12px",
+                       cursor:"pointer", fontSize:13, fontFamily:"inherit" }}
+              title={t("wsl_open_title", wslDistros.join(", "))} aria-label={t("wsl_open_title", wslDistros.join(", "))}>
+              🐧
+            </button>
+            {wslMenu && (
+              <div data-float role="menu" onMouseLeave={() => setWslMenu(false)}
+                style={{ position:"fixed", marginTop:34, zIndex:50, background:"var(--pl-bg-panel)",
+                         border:"0.5px solid var(--pl-border-strong)", borderRadius:6, padding:4,
+                         boxShadow:"0 8px 24px rgba(0,0,0,.5)", minWidth:160 }}>
+                {wslDistros.map(distro => (
+                  <button key={distro} role="menuitem" onClick={() => openWslFile(distro)}
+                    style={{ display:"block", width:"100%", textAlign:"left", background:"transparent", border:0,
+                             color:"var(--pl-text-2)", fontFamily:"inherit", fontSize:12, padding:"6px 10px", cursor:"pointer" }}>
+                    🐧 {distro}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         {!IS_ELECTRON && (
@@ -556,10 +598,12 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
                           tabKey={String(tab.id)} filePath={tab.filePath} webFile={tab.webFile || null}
                           fileName={tab.label} fileSize={tab.fileSize}
                           onLoadingChange={setTabLoading}
+                          onOpenAsRoot={parseWslUncPath(tab.filePath) ? () => openWslAsRoot(tab.filePath) : null}
                           autoScrollDefault={settings.autoScrollDefault}
                           showNumsDefault={settings.showNumsDefault}
                           isActive={tab.id === activeTab.id && focused} />
                 : <Welcome onOpen={openFile} isElectron={IS_ELECTRON}
+                           wslDistros={wslDistros} onOpenWsl={openWslFile}
                            recentFiles={settings.recentFiles} onOpenRecent={openFileByPath} />}
         </div>
       ))}
@@ -573,6 +617,11 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
       {remotePicker && <RemotePicker onSelect={submitRemotePicker} onClose={() => setRemotePicker(false)}
         capabilities={capabilities} profiles={settings.remoteProfiles || []}
         onProfilesChange={onRemoteProfilesChange}
+        onOpenWslFile={profile => {
+          setRemotePicker(false);
+          const distro = profile.distro || wslDistros[0];
+          if (distro) openFileByPath(wslUncPath(distro, profile.filePath || "/"));
+        }}
         sshAgentPollingEnabled={settings.sshAgentPollingEnabled === true}
         onToggleSshAgentPolling={(value) => onTogglePref?.("sshAgentPollingEnabled", value)}
         initialConfig={typeof remotePicker === "object" ? remotePicker.config : null} />}

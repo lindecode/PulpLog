@@ -181,7 +181,7 @@ function RemoteFileBrowser({ config, initialDir, onPick, onClose }) {
   );
 }
 
-function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfilesChange,
+function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfilesChange, onOpenWslFile = null,
   sshAgentPollingEnabled = false, onToggleSshAgentPolling, initialConfig = null }) {
   const t = useLang();
   const [mode, setMode] = useState(() => initialConfig?.mode || (capabilities?.ssh?.available ? "ssh" : "ssh-native"));
@@ -232,6 +232,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const configuredHosts = mode === "ssh" ? (sshCap?.hosts || [])
     : mode === "ssh-wsl" ? (wslCap?.sshHosts?.[selectedWslDistro] || []) : [];
   const wslDistrosKey = wslDistros.join("|");
+  const modeGroup = mode === "ssh-wsl" ? "ssh" : mode;
   const modeAvailable = mode === "wsl" || mode === "ssh-wsl" ? wslCap?.available : mode === "ssh-native" ? true : sshCap?.available;
   const hasNativeAuth = mode !== "ssh-native" || (user.trim() && (password || vaultCredentialId || identityFile.trim()));
   const hostAccepted = mode !== "ssh-native" || Boolean(fingerprint.trim() && trustHostForSession);
@@ -316,6 +317,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     setTestResult(null);
     const profile = profiles.find(item => item.id === id);
     if (!profile) return;
+    if (profile.mode === "wsl" && onOpenWslFile) { onOpenWslFile(profile); return; }
     setMode(profile.mode || "ssh"); setTarget(profile.target || ""); setUser(profile.user || "");
     setAdvanced(profile.mode === "ssh-native");
     setPort(profile.port || ""); setIdentityFile(profile.identityFile || "");
@@ -480,22 +482,22 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
         </div>
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:8, marginBottom:14 }}>
           {[
-            ["ssh", t("remote_mode_ssh"), sshCap, t("remote_mode_ssh_help")],
-            ["ssh-wsl", t("remote_mode_ssh_wsl"), wslCap, t("remote_mode_ssh_wsl_help")],
+            ["ssh", t("remote_mode_ssh"), { available: sshCap?.available || (isWindows && wslCap?.available),
+                                            reason: sshCap?.reason }, t("remote_mode_ssh_help")],
             ["ssh-native", t("remote_mode_native"), { available:true }, t("remote_mode_native_help")],
-            ["wsl", t("remote_mode_wsl"), wslCap, t("remote_mode_wsl_help")],
-          ].filter(([key]) => isWindows || (key !== "ssh-wsl" && key !== "wsl")).map(([key, label, cap, help]) => (
-            <button key={key} type="button" onClick={() => cap?.available && setMode(key)}
+          ].map(([key, label, cap, help]) => (
+            <button key={key} type="button"
+              onClick={() => cap?.available && setMode(key === "ssh" && !sshCap?.available ? "ssh-wsl" : key)}
               disabled={!cap?.available}
               title={cap?.available ? help : `${help}\n\n${cap?.reason || t("capability_unavailable")}`}
               aria-label={`${label}. ${help}`}
-              style={{ background: mode === key ? "var(--pl-bg-hover)" : "var(--pl-bg-input)", textAlign:"left",
-                       border:`0.5px solid ${mode === key ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
-                       borderRadius:6, color: mode === key ? "var(--pl-accent-hover)" : cap?.available ? "var(--pl-text-5)" : "var(--pl-text-7)",
+              style={{ background: modeGroup === key ? "var(--pl-bg-hover)" : "var(--pl-bg-input)", textAlign:"left",
+                       border:`0.5px solid ${modeGroup === key ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+                       borderRadius:6, color: modeGroup === key ? "var(--pl-accent-hover)" : cap?.available ? "var(--pl-text-5)" : "var(--pl-text-7)",
                        fontFamily:"inherit", fontSize:12, padding:"9px 11px",
                        cursor: cap?.available ? "pointer" : "not-allowed",
                        opacity: cap?.available ? 1 : 0.45,
-                       fontWeight: mode === key ? 700 : 400 }}>
+                       fontWeight: modeGroup === key ? 700 : 400 }}>
               <span style={{ display:"block" }}>{label}</span>
               <span style={{ display:"block", marginTop:3, fontSize:9, fontWeight:400,
                 color:cap?.available ? "var(--pl-status-live)" : "var(--pl-text-7)" }}>
@@ -510,6 +512,31 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
           color:"var(--pl-text-4)", fontSize:10, lineHeight:1.5 }}>
           {selectedModeHelp}
         </div>
+
+        {modeGroup === "ssh" && isWindows && wslCap?.available && wslDistros.length > 0 && (
+          <label style={{ display:"flex", alignItems:"center", gap:10, color:"var(--pl-text-3)", fontSize:11, marginBottom:12 }}>
+            {t("remote_ssh_config_from")}
+            <select style={{ ...inputStyle, width:"auto", flex:"0 1 260px" }}
+              value={mode === "ssh-wsl" ? `wsl:${distro || wslDistros[0]}` : "windows"}
+              onChange={event => {
+                const value = event.target.value;
+                if (value === "windows") { setMode("ssh"); return; }
+                setMode("ssh-wsl"); setDistro(value.slice(4));
+              }}>
+              <option value="windows" disabled={!sshCap?.available}>
+                {t("remote_ssh_config_windows")}{sshCap?.available ? "" : ` — ${t("remote_unavailable")}`}
+              </option>
+              {wslDistros.map(name => <option key={name} value={`wsl:${name}`}>WSL · {name}</option>)}
+            </select>
+          </label>
+        )}
+
+        {mode === "wsl" && (
+          <div role="note" style={{ marginBottom:12, padding:"7px 9px", borderLeft:"2px solid var(--pl-status-warn)",
+            background:"var(--pl-bg-input)", color:"var(--pl-text-4)", fontSize:10, lineHeight:1.5 }}>
+            {t("remote_wsl_moved")}
+          </div>
+        )}
 
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, padding:"9px 10px",
           border:"0.5px solid var(--pl-border)", borderRadius:6, background:"var(--pl-bg-input)" }}>
@@ -597,17 +624,10 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
             placeholder={`${t("remote_proxy_jump")} (bastion, usuario@host)`} />
         )}
 
-        {mode === "ssh-wsl" && (
+        {mode === "ssh-wsl" && wslDistros.length === 0 && (
           <div style={{ marginBottom:10 }}>
-            {wslDistros.length > 0 ? (
-              <select style={inputStyle} value={distro} onChange={e => setDistro(e.target.value)}>
-                <option value="">WSL2 predeterminado</option>
-                {wslDistros.map(name => <option key={name} value={name}>{name}</option>)}
-              </select>
-            ) : (
-              <input style={inputStyle} value={distro} onChange={e => setDistro(e.target.value)}
-                placeholder={`${t("remote_distro")} (Ubuntu)`} />
-            )}
+            <input style={inputStyle} value={distro} onChange={e => setDistro(e.target.value)}
+              placeholder={`${t("remote_distro")} (Ubuntu)`} />
           </div>
         )}
 
