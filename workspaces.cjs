@@ -4,6 +4,7 @@
 // from settings.json. Secrets (password/passphrase) are never persisted.
 "use strict";
 const fs = require("fs");
+const { publicJumps } = require("./sshInvocation.cjs");
 const path = require("path");
 const containerRuntimes = require("./containerRuntimes.cjs");
 
@@ -41,6 +42,7 @@ function normalizeRemote(value) {
     identityFile: str(value.identityFile, 32767),
     fingerprint: str(value.fingerprint, 160),
     proxyJump: str(value.proxyJump, 255),
+    jumps: publicJumps(value.jumps),
     distro: str(value.distro, 160),
     filePath: str(value.filePath, 4096),
     source: value.source === "docker" ? "docker" : "file",

@@ -1,6 +1,6 @@
 # Propuesta: rediseño de SSH y WSL
 
-Estado: planteamiento · Fases 0, 1 y 4 implementadas · Fecha: 2026-11-18
+Estado: planteamiento · Fases 0, 1, 2 y 4 implementadas · Fecha: 2026-11-18
 
 ## 1. Situación actual
 
@@ -209,7 +209,7 @@ Perfiles que comparten host, usuario y saltos se agrupan en un mismo servidor.
 |---|---|---|
 | 0 | Argumentos de `ssh` unificados (`sshInvocation.cjs`); opciones por salto con `ssh_config` temporal | **Hecho** |
 | 1 | Contraseña en el SSH del sistema con `SSH_ASKPASS` (Windows y WSL); diálogo para peticiones 2FA; contraseña interactiva en el motor directo | **Hecho** (`askpass.cjs`) |
-| 2 | Cadena de saltos visual con campos por salto, tipos de salto y prueba salto a salto | |
+| 2 | Cadena de saltos visual con campos por salto, tipos de salto y prueba salto a salto | **Hecho**: túnel y comando (primer salto), credenciales y bóveda por salto, prueba salto a salto. Pendiente: tipo «entrar desde el salto» y saltos en el motor directo |
 | 3 | Modelo servidor/bitácoras, lista de servidores, entornos con color, migración de perfiles | |
 | 4 | WSL local como archivos `\\wsl.localhost`; "SSH desde WSL" como opción | **Hecho** (`src/wslPaths.mjs`) |
 | 5 | `sudo`, `journalctl`, zona horaria y codificación | |

@@ -140,6 +140,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   startCapture: (captureId, kind, payload) => ipcRenderer.invoke("capture:start", { captureId, kind, payload }),
   stopCapture: (captureId) => ipcRenderer.invoke("capture:stop", captureId),
   testRemoteConnection: (config) => ipcRenderer.invoke("remote:test", config),
+  testRemoteChain: (config) => ipcRenderer.invoke("remote:test-chain", config),
   listRemoteDirectory: (config) => ipcRenderer.invoke("remote:list-dir", config),
   listRemoteDocker: (config) => ipcRenderer.invoke("remote:docker-list", config),
 

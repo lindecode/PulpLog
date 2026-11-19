@@ -91,3 +91,49 @@ test("env and wrappers", () => {
   assert.equal(windowsWrapper("C:\\P\\PulpLog.exe", "C:\\d\\h.cjs"), '@echo off\r\n"C:\\P\\PulpLog.exe" "C:\\d\\h.cjs" %*\r\n');
   assert.match(wslWrapper("/mnt/c/P/Pulp'Log.exe", "C:\\d\\h.cjs"), /exec '\/mnt\/c\/P\/Pulp'\\''Log\.exe' 'C:\\d\\h\.cjs' "\$@"/);
 });
+
+test("each jump host gets its own password and each key its own passphrase", async () => {
+  const asked = [];
+  const broker = createAskpassBroker({ askUser: async req => { asked.push(req.prompt); return null; } });
+  const { token, session } = broker.register({
+    password: "dest-pw", user: "deploy", host: "prod-api", identityFile: "C:/keys/dest",
+    passphrase: "dest-pp",
+    hops: [
+      { host: "bastion", user: "diego", password: "bastion-pw", identityFile: String.raw`C:\keys\bastion`, passphrase: "bastion-pp" },
+      { host: "inner", user: "ops" },
+    ],
+  });
+  assert.equal(await broker.answer({ token, prompt: "diego@bastion's password: " }), "bastion-pw");
+  assert.equal(await broker.answer({ token, prompt: "deploy@prod-api's password: " }), "dest-pw");
+  // a hop without a saved password → the user is asked; never another host's secret
+  assert.equal(await broker.answer({ token, prompt: "ops@inner's password: " }), null);
+  assert.deepEqual(asked, ["ops@inner's password: "]);
+  // passphrases by key path (slashes and case don't matter)
+  assert.equal(await broker.answer({ token, prompt: "Enter passphrase for key 'c:/KEYS/bastion': " }), "bastion-pp");
+  assert.equal(await broker.answer({ token, prompt: "Enter passphrase for key 'C:/keys/dest': " }), "dest-pp");
+  // asked again for the bastion password → refused, not re-sent
+  assert.equal(await broker.answer({ token, prompt: "diego@bastion's password: " }), null);
+  assert.equal(session.rejected, true);
+});
+
+test("a key that belongs to a hop without passphrase never gets the destination's passphrase", async () => {
+  const broker = createAskpassBroker({ askUser: async () => "typed" });
+  const { token } = broker.register({ passphrase: "dest-pp", host: "d", hops: [{ host: "b", identityFile: "/k/b" }] });
+  assert.equal(await broker.answer({ token, prompt: "Enter passphrase for key '/k/b': " }), "typed");
+  assert.equal(await broker.answer({ token, prompt: "Enter passphrase for key '/k/other': " }), "dest-pp");
+});
+
+test("truncated key paths (OpenSSH for Windows cuts long prompts): prefix if unique, otherwise ask", async () => {
+  const asked = [];
+  const broker = createAskpassBroker({ askUser: async req => { asked.push(req.prompt); return "typed"; } });
+  const dir = "C:/Users/someone/AppData/Local/Temp/very/long/folder/with/many/levels/keys";
+  const { token } = broker.register({ host: "d", identityFile: `${dir}/dest_key`, passphrase: "dest-pp",
+    hops: [{ host: "b", identityFile: `${dir}/hop_key`, passphrase: "hop-pp" }] });
+  // unique prefix
+  assert.equal(await broker.answer({ token, prompt: `Enter passphrase for key '${dir}/hop_k': ` }), "hop-pp");
+  // ambiguous prefix (both keys live there) → the user decides, no secret guessed
+  assert.equal(await broker.answer({ token, prompt: `Enter passphrase for key '${dir}/': ` }), "typed");
+  // a key nobody declared while the destination declares its own → ask
+  assert.equal(await broker.answer({ token, prompt: "Enter passphrase for key 'C:/elsewhere/k': " }), "typed");
+  assert.equal(asked.length, 2);
+});

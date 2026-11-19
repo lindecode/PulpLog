@@ -25,7 +25,7 @@ const { createLineDecoder, MAX_FILE_BYTES, MAX_AI_BYTES } = require("./streamLim
 const { createConversationStore } = require("./conversationStore.cjs");
 const { createCredentialVault } = require("./credentialVault.cjs");
 const { createCaptureManager } = require("./captures.cjs");
-const { buildSshArgs, buildJumpConfig, parseJumpHosts, validateProxyJump } = require("./sshInvocation.cjs");
+const { buildSshArgs, jumpsFromConfig, chainPlan, buildChainConfig, publicJumps, hopSpec } = require("./sshInvocation.cjs");
 const { createAskpassBroker, askpassEnv, HELPER_SOURCE, windowsWrapper, wslWrapper } = require("./askpass.cjs");
 const net = require("net");
 
@@ -445,6 +445,7 @@ const ERROR_EXPLANATIONS = {
     remote_fingerprint:"No se pudo validar la huella (fingerprint) del servidor. Comprueba la huella mostrada antes de continuar.",
     remote_auth:"Autenticacion SSH rechazada. Revisa usuario, contrasena, llave o passphrase.",
     remote_secret_rejected:"El servidor rechazó la contraseña o passphrase guardada. PulpLog no la reintentó para no bloquear la cuenta.",
+    remote_chain_system_only:"La prueba por saltos usa el cliente SSH del sistema (Windows o WSL).",
     remote_timeout:"No se pudo conectar al host remoto. Revisa host, puerto, VPN/firewall o red.",
     remote_path:"No se pudo leer la ruta remota. Revisa que el archivo exista y que el usuario tenga permisos.",
     generic:"Ocurrio un error inesperado.",
@@ -456,6 +457,7 @@ const ERROR_EXPLANATIONS = {
     remote_fingerprint:"Could not validate the server fingerprint. Check the fingerprint shown before continuing.",
     remote_auth:"SSH authentication was rejected. Check the user, password, key, or passphrase.",
     remote_secret_rejected:"The server rejected the saved password or passphrase. PulpLog did not retry it to avoid locking the account.",
+    remote_chain_system_only:"The hop-by-hop test uses the system SSH client (Windows or WSL).",
     remote_timeout:"Could not connect to the remote host. Check host, port, VPN/firewall, or network.",
     remote_path:"Could not read the remote path. Check that the file exists and the user has permission.",
     generic:"An unexpected error occurred.",
@@ -1586,22 +1588,24 @@ function windowsToWslPath(winPath, distro) {
 }
 
 /* Path of the jump config, as the ssh that will run sees it; null without -J. */
-function jumpConfigFile(config, { inWsl = false, distro = "", interactive = false } = {}) {
-  const proxyJump = validateProxyJump(config?.proxyJump);
-  if (!proxyJump) return null;
+/* Writes the chain's ssh_config; returns its path as the ssh that runs will see it
+   (null without hops). */
+function chainConfigFile(plan, destHost, { inWsl = false, distro = "", interactive = false } = {}) {
+  if (!plan.tunnels.length && !plan.command) return null;
   const includes = inWsl
     ? ["~/.ssh/config", "/etc/ssh/ssh_config"]
     : [path.join(os.homedir(), ".ssh", "config"), path.join(process.env.ProgramData || "C:\\ProgramData", "ssh", "ssh_config")]
         .filter(file => process.platform !== "win32" || !file.startsWith("C:\\ProgramData") || fs.existsSync(file))
         .map(file => file.replace(/\\/g, "/"));
-  const text = buildJumpConfig(parseJumpHosts(proxyJump), { includes, interactive });
+  const text = buildChainConfig(plan, { includes, interactive, destHost });
   const name = `jump-${crypto.createHash("sha256").update(text).digest("hex").slice(0, 16)}.conf`;
   const file = path.join(jumpConfigDir, name);
   if (!fs.existsSync(file)) {
     fs.mkdirSync(jumpConfigDir, { recursive:true });
     fs.writeFileSync(file, text, { mode:0o600 });
   }
-  return inWsl ? windowsToWslPath(file, distro) : file;
+  // forward slashes: OpenSSH re-passes -F to each jump's ssh and the backslashes get lost on the way
+  return inWsl ? windowsToWslPath(file, distro) : file.replace(/\\/g, "/");
 }
 
 /* ssh2: answer keyboard-interactive (PAM password prompts, 2FA). The saved password
@@ -1645,15 +1649,19 @@ function systemSshInvocation(config, remoteCommand, { keepalive = false } = {}) 
     if (process.platform !== "win32") throw new Error("SSH desde WSL2 solo está disponible en Windows");
     if (distro.startsWith("-")) throw new Error("Nombre de distro WSL inválido");
   }
-  // credentials to hand over (or the user asked to be prompted) → answered through SSH_ASKPASS
-  const interactive = Boolean(config?.password || config?.passphrase || config?.interactiveAuth);
-  const args = buildSshArgs({ port, identityFile, proxyJump: config?.proxyJump },
-    { keepalive, interactive, jumpConfigFile: jumpConfigFile(config, { inWsl: viaWsl, distro, interactive }) });
+  const hops = jumpsFromConfig(config);
+  const plan = chainPlan(hops, validateSshTarget(config).host);
+  // credentials to hand over (here or on a hop), or the user asked to be prompted → SSH_ASKPASS
+  const interactive = Boolean(config?.password || config?.passphrase || config?.interactiveAuth
+    || plan.tunnels.some(hop => hop.password || hop.passphrase));
+  const args = buildSshArgs({ port, identityFile, proxyJump: plan.jumpSpec },
+    { keepalive, interactive,
+      jumpConfigFile: chainConfigFile(plan, validateSshTarget(config).host, { inWsl: viaWsl, distro, interactive }) });
   const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
   args.push(sshTarget, remoteCommand);
   return viaWsl
-    ? { command:"wsl.exe", args:[...(distro ? ["-d", distro] : []), "--", "ssh", ...args], sshTarget, viaWsl, distro, interactive }
-    : { command:"ssh", args, sshTarget, viaWsl, distro, interactive };
+    ? { command:"wsl.exe", args:[...(distro ? ["-d", distro] : []), "--", "ssh", ...args], sshTarget, viaWsl, distro, interactive, plan }
+    : { command:"ssh", args, sshTarget, viaWsl, distro, interactive, plan };
 }
 
 /* ─── SSH_ASKPASS: passwords, passphrases and 2FA for the system ssh (askpass.cjs) ─── */
@@ -1718,9 +1726,11 @@ async function sshAskpass(config, spec, owner) {
   if (!spec?.interactive) return { env:undefined, session:null, dispose() {} };
   await askpassBroker.start();
   const { host, username } = validateSshTarget(config);
+  const hops = spec.plan?.tunnels || [];
   const registration = askpassBroker.register({
     password:String(config?.password || ""), passphrase:String(config?.passphrase || ""),
-    user:username || "", host, hasJumps:Boolean(String(config?.proxyJump || "").trim()),
+    identityFile:String(config?.identityFile || ""), user:username || "", host,
+    hasJumps:hops.length > 0 || Boolean(spec.plan?.command), hops,
     owner:owner?.realSender || owner || null, label:spec.sshTarget,
   });
   const env = askpassEnv({ askpassPath:askpassProgram(spec.viaWsl, spec.distro), pipePath:askpassPipe,
@@ -2310,6 +2320,63 @@ handleTrusted("remote:test", async (event, payload) => {
   }
 });
 
+/* Tries every hop in order (each one reached through the previous ones), then the
+   destination and the log; stops at the first failure. Only the system ssh. */
+async function testSshChain(config, owner) {
+  const hops = jumpsFromConfig(config);
+  const steps = [];
+  const run = async (stepConfig, label, remoteCommand) => {
+    const started = Date.now();
+    let spec;
+    try { spec = systemSshInvocation(stepConfig, remoteCommand); }
+    catch (error) { steps.push({ label, ok:false, error:error.message }); return false; }
+    const auth = await sshAskpass(stepConfig, spec, owner);
+    return new Promise(resolve => {
+      execFile(spec.command, spec.args, { timeout: auth.env ? 200000 : 20000, windowsHide:true, env:auth.env }, (error, _out, stderr) => {
+        const rejected = error ? rejectedSecretMessage(auth.session, stderr) : null;
+        auth.dispose();
+        const newKey = /Permanently added/i.test(String(stderr || ""));
+        if (error) {
+          const message = rejected || String(stderr || error.message).trim().split(/\r?\n/).filter(Boolean).slice(-2).join(" · ");
+          steps.push({ label, ok:false, error:message, ms:Date.now() - started });
+          return resolve(false);
+        }
+        steps.push({ label, ok:true, ms:Date.now() - started, newKey });
+        resolve(true);
+      });
+    });
+  };
+  const tunnels = hops.filter(hop => hop.type === "tunnel");
+  const command = hops[0]?.type === "command" ? [hops[0]] : [];
+  for (let index = 0; index < tunnels.length; index++) {
+    const hop = tunnels[index];
+    const stepConfig = {
+      ...config, target:hop.host, user:hop.user, port:hop.port, identityFile:hop.identityFile,
+      password:hop.password || "", passphrase:hop.passphrase || "", vaultCredentialId:"",
+      jumps:[...command, ...tunnels.slice(0, index)], proxyJump:"",
+    };
+    if (!await run(stepConfig, hopSpec(hop), "exit 0")) return { ok:false, steps };
+  }
+  const destination = `${config.user ? `${config.user}@` : ""}${config.target}`;
+  if (!await run(config, destination, "exit 0")) return { ok:false, steps };
+  const filePath = String(config?.filePath || "").trim();
+  if (filePath || config?.source === "docker") {
+    if (!await run(config, config?.source === "docker" ? `docker ${config.containerName || config.containerId}` : filePath,
+                   buildRemoteReadCheck(filePath, config))) return { ok:false, steps };
+  }
+  return { ok:true, steps };
+}
+
+handleTrusted("remote:test-chain", async (event, payload) => {
+  try {
+    payload = await resolveVaultSecrets(payload);
+    if (!["ssh", "ssh-wsl"].includes(payload?.mode)) throw new Error(mt("remote_chain_system_only"));
+    return await testSshChain(payload, event.sender);
+  } catch (error) {
+    return { ok:false, steps:[{ label:"", ok:false, error:error?.message ?? String(error) }] };
+  }
+});
+
 handleTrusted("remote:docker-list", async (event, payload) => {
   assertTrustedSender(event);
   try {
@@ -2403,6 +2470,7 @@ function normalizeRemoteProfiles(value) {
     identityFile: typeof profile.identityFile === "string" ? profile.identityFile.slice(0, 32767) : "",
     fingerprint: typeof profile.fingerprint === "string" ? profile.fingerprint.slice(0, 160) : "",
     proxyJump: typeof profile.proxyJump === "string" ? profile.proxyJump.slice(0, 255) : "",
+    jumps: publicJumps(profile.jumps),
     distro: typeof profile.distro === "string" ? profile.distro.slice(0, 160) : "",
     filePath: typeof profile.filePath === "string" ? profile.filePath.slice(0, 4096) : "",
     source: profile.source === "docker" ? "docker" : "file",
@@ -2577,6 +2645,7 @@ const credentialVault = createCredentialVault({
 const vaultId = value => normalizeIdentifier(value, "vault credential id");
 
 async function resolveVaultSecrets(payload) {
+  payload = await resolveHopVaultSecrets(payload);
   const id = payload?.vaultCredentialId;
   if (!id || payload?.password || payload?.passphrase) return payload;
   const kind = payload?.vaultCredentialKind === "ssh-passphrase" ? "ssh-passphrase" : "ssh-password";
@@ -2584,6 +2653,19 @@ async function resolveVaultSecrets(payload) {
     kind, target:String(payload?.target || "").trim(), username:String(payload?.user || "").trim(),
   });
   return { ...payload, __vaultCredentialId:vaultId(id), [kind === "ssh-passphrase" ? "passphrase" : "password"]:secret };
+}
+
+/* Each jump host may point to its own saved password. */
+async function resolveHopVaultSecrets(payload) {
+  if (!Array.isArray(payload?.jumps) || !payload.jumps.some(hop => hop?.vaultCredentialId && !hop.password)) return payload;
+  const jumps = await Promise.all(payload.jumps.map(async hop => {
+    if (!hop?.vaultCredentialId || hop.password) return hop;
+    const secret = await credentialVault.getSecret(vaultId(hop.vaultCredentialId), {
+      kind:"ssh-password", target:String(hop.host || "").trim(), username:String(hop.user || "").trim(),
+    });
+    return { ...hop, password:secret };
+  }));
+  return { ...payload, jumps };
 }
 
 function isSshAuthenticationError(error) {

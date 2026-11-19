@@ -31,6 +31,8 @@ export function entryFromTab(tab) {
   if (tab.remote) {
     const remote = { ...tab.remote };
     SECRET_KEYS.forEach(key => delete remote[key]);
+    // each jump host's secrets too
+    if (Array.isArray(remote.jumps)) remote.jumps = remote.jumps.map(({ password, passphrase, ...hop }) => hop);
     // remote containers reopen by name: the id dies when the container is re-created
     if (remote.source === "docker" && remote.containerName) remote.containerId = remote.containerName;
     return { type:"remote", remote, label:tab.label };

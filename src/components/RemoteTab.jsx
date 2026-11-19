@@ -9,6 +9,8 @@ import { IS_ELECTRON, reportMetric, safeFileName, buildResultText, copyResultTex
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
 import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
+import { JumpChainEditor } from "./JumpChainEditor.jsx";
+import { initialJumps, jumpsForConnection, chainProblem } from "../jumpChain.mjs";
 
 function remoteDirname(value) {
   const text = String(value || "").trim();
@@ -188,7 +190,10 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const [target, setTarget] = useState(initialConfig?.target || "");
   const [user, setUser] = useState(initialConfig?.user || "");
   const [port, setPort] = useState(initialConfig?.port || "");
-  const [proxyJump, setProxyJump] = useState(initialConfig?.proxyJump || "");
+  // jump chain (older profiles keep it as ProxyJump text: converted here)
+  const [jumps, setJumps] = useState(() => initialJumps(initialConfig));
+  const [chainResult, setChainResult] = useState(null);
+  const [testingChain, setTestingChain] = useState(false);
   const [identityFile, setIdentityFile] = useState(initialConfig?.identityFile || "");
   const [password, setPassword] = useState(initialConfig?.password || "");
   const [passphrase, setPassphrase] = useState(initialConfig?.passphrase || "");
@@ -209,7 +214,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const [loadingContainers, setLoadingContainers] = useState(false);
   const [containerError, setContainerError] = useState(null);
   const containerRequestRef = useRef(0);
-  const connectionKey = JSON.stringify([mode, target, user, port, identityFile, proxyJump, password, passphrase, vaultCredentialId,
+  const connectionKey = JSON.stringify([mode, target, user, port, identityFile, jumpsForConnection(jumps), password, passphrase, vaultCredentialId,
     fingerprint, trustHostForSession, distro, source]);
   const previousConnectionRef = useRef(connectionKey);
   const [tailLines, setTailLines] = useState(initialConfig?.tailLines || 500);
@@ -240,7 +245,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const hasSource = source === "docker" ? Boolean(containerId) : Boolean(filePath.trim());
   const canTest = modeAvailable && mode !== "wsl" && target.trim() && (discoveringHost || hasSource)
     && (mode !== "ssh-native" || discoveringHost || hasNativeAuth);
-  const canSubmit = modeAvailable && hasSource && (mode === "wsl" || target.trim()) && hasNativeAuth && hostAccepted
+  const canSubmit = modeAvailable && hasSource && (mode === "wsl" || target.trim()) && hasNativeAuth && hostAccepted && !chainProblem(jumps)
     && !(source === "docker" && mode === "wsl");
   const canBrowse = IS_ELECTRON && modeAvailable && (mode === "wsl" || target.trim())
     && (mode !== "ssh-native" || (hasNativeAuth && hostAccepted));
@@ -275,7 +280,26 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     setDistro(wslDistros[0]);
   }, [mode, distro, wslDistrosKey]);
 
-  const persistPassword = async config => {
+  /* Saves the passwords of hops marked "save in vault"; the config keeps only their ids. */
+  const persistHopPasswords = async config => {
+    const toSave = jumps.filter(hop => hop.type !== "command" && hop.rememberPassword && hop.password);
+    if (!toSave.length) return config;
+    if (!vaultState.unlocked) throw new Error(t("vault_unlock_before_save"));
+    const savedIds = new Map();
+    for (const hop of toSave) {
+      const saved = await window.electronAPI.saveVaultCredential({
+        id:hop.vaultCredentialId || undefined, label:`${hop.user.trim() ? `${hop.user.trim()}@` : ""}${hop.host.trim()}`,
+        kind:"ssh-password", target:hop.host.trim(), username:hop.user.trim(), secret:hop.password,
+      });
+      savedIds.set(hop, saved.id);
+    }
+    const updated = jumps.map(hop => savedIds.has(hop) ? { ...hop, vaultCredentialId:savedIds.get(hop), rememberPassword:false } : hop);
+    setJumps(updated);
+    return { ...config, jumps:config.jumps?.length ? jumpsForConnection(updated) : config.jumps };
+  };
+
+  const persistPassword = async inputConfig => {
+    const config = await persistHopPasswords(inputConfig);
     if (!rememberPassword || !password) return config;
     if (!vaultState.unlocked) throw new Error(t("vault_unlock_before_save"));
     const saved = await window.electronAPI.saveVaultCredential({
@@ -305,7 +329,8 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   };
 
   const connectionConfig = () => ({ mode, target:target.trim(), user:user.trim(), port:String(port).trim(),
-    identityFile:identityFile.trim(), proxyJump:proxyJump.trim(), password, passphrase,
+    identityFile:identityFile.trim(), proxyJump:"", password, passphrase,
+    jumps:(mode === "ssh" || mode === "ssh-wsl") ? jumpsForConnection(jumps) : [],
     vaultCredentialId, vaultCredentialKind:"ssh-password", fingerprint:fingerprint.trim(),
     interactiveAuth: mode === "ssh" || mode === "ssh-wsl" ? interactiveAuth : false,
     trustHostForSession, distro:distro.trim(), filePath:source === "docker" ? "" : filePath.trim(), tailLines,
@@ -321,7 +346,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     setMode(profile.mode || "ssh"); setTarget(profile.target || ""); setUser(profile.user || "");
     setAdvanced(profile.mode === "ssh-native");
     setPort(profile.port || ""); setIdentityFile(profile.identityFile || "");
-    setProxyJump(profile.proxyJump || "");
+    setJumps(initialJumps(profile)); setChainResult(null);
     setInteractiveAuth(profile.interactiveAuth === true);
     setVaultCredentialId(profile.vaultCredentialId || ""); setRememberPassword(false);
     setFingerprint(profile.fingerprint || ""); setDistro(profile.distro || "");
@@ -341,6 +366,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     try { safe = { ...(await persistPassword(connectionConfig())), id, name }; }
     catch (error) { setVaultError(error.message); return; }
     delete safe.password; delete safe.passphrase; delete safe.trustHostForSession;
+    if (Array.isArray(safe.jumps)) safe.jumps = safe.jumps.map(({ password, passphrase, rememberPassword, ...hop }) => hop);
     const next = [...profiles.filter(item => item.id !== id), safe];
     setSelectedProfile(id); setProfileName(name); onProfilesChange?.(next);
   };
@@ -371,6 +397,13 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     } catch (error) {
       setTestResult({ ok:false, message:error?.message ?? String(error) });
     } finally { setTesting(false); }
+  };
+
+  const testChain = async () => {
+    setTestingChain(true); setChainResult(null);
+    try { setChainResult(await window.electronAPI.testRemoteChain(connectionConfig())); }
+    catch (error) { setChainResult({ ok:false, steps:[{ label:"", ok:false, error:error?.message ?? String(error) }] }); }
+    finally { setTestingChain(false); }
   };
 
   const refreshContainers = async () => {
@@ -618,10 +651,15 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
           </div>
         )}
 
-        {advanced && (mode === "ssh" || mode === "ssh-wsl") && (
-          <input style={{ ...inputStyle, marginBottom:10 }} value={proxyJump}
-            onChange={e => setProxyJump(e.target.value)}
-            placeholder={`${t("remote_proxy_jump")} (bastion, usuario@host)`} />
+        {(mode === "ssh" || mode === "ssh-wsl") && (
+          <JumpChainEditor jumps={jumps} onChange={next => { setJumps(next); setChainResult(null); }}
+            destination={`${user.trim() ? `${user.trim()}@` : ""}${target.trim() || "?"}`}
+            inputStyle={inputStyle} configuredHosts={configuredHosts}
+            allowKeyFiles={mode === "ssh"} onPickKey={() => window.electronAPI.openSshKeyDialog()}
+            vaultUnlocked={vaultState.unlocked} chainResult={chainResult} />
+        )}
+        {mode === "ssh-native" && jumpsForConnection(jumps).length > 0 && (
+          <div role="note" style={{ marginBottom:10, color:"var(--pl-status-warn)", fontSize:10 }}>{t("jump_native_unsupported")}</div>
         )}
 
         {mode === "ssh-wsl" && wslDistros.length === 0 && (
@@ -749,6 +787,28 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
                      padding:"7px 14px", cursor:canTest && !testing ? "pointer" : "not-allowed", marginRight:10 }}>
             {testing ? t("remote_testing") : discoveringHost ? t("remote_detect_identity") : t("remote_test")}
           </button>
+        )}
+        {(mode === "ssh" || mode === "ssh-wsl") && (
+          <>
+            {chainResult && (
+              <ol aria-label={t("jump_test")} style={{ margin:"0 0 10px", padding:"6px 10px 6px 26px", fontSize:11,
+                background:"var(--pl-bg-input)", borderRadius:6, border:"0.5px solid var(--pl-border)" }}>
+                {chainResult.steps.map((step, index) => (
+                  <li key={index} style={{ color: step.ok ? "var(--pl-status-live)" : "var(--pl-error-text)", margin:"2px 0" }}>
+                    {step.ok ? "✓" : "✗"} {step.label}
+                    {step.ok ? ` · ${step.ms} ms${step.newKey ? ` · ${t("jump_new_key")}` : ""}` : step.error ? ` · ${step.error}` : ""}
+                  </li>
+                ))}
+              </ol>
+            )}
+            <button type="button" onClick={testChain} disabled={!canTest || testingChain || !!chainProblem(jumps)}
+              title={t("jump_test_title")}
+              style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)",
+                       borderRadius:6, color:"var(--pl-text-3)", fontFamily:"inherit", fontSize:11,
+                       padding:"7px 14px", cursor:canTest && !testingChain ? "pointer" : "not-allowed", marginRight:10 }}>
+              {testingChain ? t("remote_testing") : t("jump_test")}
+            </button>
+          </>
         )}
         <button type="submit" disabled={!canSubmit}
           style={{ background: canSubmit ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",

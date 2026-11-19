@@ -38,6 +38,26 @@ const sameHost = (a, b) => {
   return !!a && !!b && clean(a) === clean(b);
 };
 
+/* Whose key is OpenSSH asking about? It names the key, but OpenSSH for Windows
+   cuts long prompts (~120 chars), so a truncated path is matched as a prefix.
+   Never guess: several candidates, or a declared key that matches nothing → null
+   (the user is asked). The destination's passphrase is only a fallback when the
+   destination declares no key (it then uses the default ones). */
+function passphraseOwner(creds, prompt) {
+  const clean = value => String(value || "").replace(/\\/g, "/").toLowerCase();
+  const match = String(prompt).match(/passphrase for key '([^']*)'?/i);
+  const key = match ? clean(match[1]) : "";
+  if (key) {
+    const exact = creds.filter(c => c.identityFile && clean(c.identityFile) === key);
+    if (exact.length === 1) return exact[0];
+    const prefix = creds.filter(c => c.identityFile && key.length >= 8 && clean(c.identityFile).startsWith(key));
+    if (exact.length > 1 || prefix.length > 1) return null;
+    if (prefix.length === 1) return prefix[0];
+  }
+  const dest = creds.find(c => c.role === "dest");
+  return dest && !dest.identityFile ? dest : null;
+}
+
 function createAskpassBroker({ pipePath, askUser = async () => null, log = () => {} } = {}) {
   const sessions = new Map(); // token → session
   let server = null;
@@ -75,38 +95,52 @@ function createAskpassBroker({ pipePath, askUser = async () => null, log = () =>
     const info = classifyPrompt(request?.prompt);
     const seen = session.asked.get(info.prompt) || 0;
     session.asked.set(info.prompt, seen + 1);
+    const give = (cred, kind) => {
+      const flag = kind === "password" ? "passwordUsed" : "passphraseUsed";
+      if (cred[flag]) { // asked again for the same secret → it was refused
+        log("WARN", "askpass", `${kind === "password" ? "Contraseña" : "Passphrase"} rechazada por ${cred.label}`);
+        session.rejected = true;
+        return null;
+      }
+      cred[flag] = true;
+      session.used = true;
+      return cred[kind];
+    };
 
     if (info.kind === "hostkey") return "no";
-    if (info.kind === "password" && session.password) {
-      // only the destination's own prompt; with no host in the prompt, only when there are no jumps
-      const forDestination = info.host ? sameHost(info.host, session.host) && (!info.user || !session.user || info.user === session.user)
-        : !session.hasJumps;
-      if (forDestination) {
-        if (seen > 0) { log("WARN", "askpass", `Contraseña rechazada por ${session.label}`); session.rejected = true; return null; }
-        session.used = true;
-        return session.password;
-      }
+    if (info.kind === "password") {
+      // the host that asks gets ITS password; a bare "Password:" only when there are no jumps
+      const cred = info.host
+        ? session.creds.find(c => c.password && sameHost(info.host, c.host) && (!info.user || !c.user || info.user === c.user))
+        : (!session.hasJumps ? session.creds.find(c => c.role === "dest" && c.password) : null);
+      if (cred) return give(cred, "password");
     }
-    if (info.kind === "passphrase" && session.passphrase) {
-      if (seen > 0) { session.rejected = true; return null; }
-      session.used = true;
-      return session.passphrase;
+    if (info.kind === "passphrase") {
+      const cred = passphraseOwner(session.creds, info.prompt);
+      if (cred?.passphrase) return give(cred, "passphrase");
     }
     if (seen > 2) return null; // the same question again and again: stop
     return askUser({ label: session.label, prompt: info.prompt, kind: info.kind, host: info.host || null }, session);
   }
 
-  /* One registration per ssh process. Returns the env OpenSSH needs and a dispose(). */
-  function register({ password = "", passphrase = "", user = "", host = "", hasJumps = false, label = "", owner = null } = {}) {
+  /* One registration per ssh process: the destination's credentials plus each jump host's.
+     Returns the token for the env OpenSSH needs, and dispose(). */
+  function register({ password = "", passphrase = "", user = "", host = "", identityFile = "", hasJumps = false,
+                      hops = [], label = "", owner = null } = {}) {
     const token = crypto.randomBytes(24).toString("hex");
-    const session = { password, passphrase, user, host, hasJumps, owner, label: label || `${user ? `${user}@` : ""}${host}`, asked: new Map(), rejected: false, used: false };
+    const credential = (role, c) => ({ role, host: c.host || "", user: c.user || "", password: c.password || "",
+      passphrase: c.passphrase || "", identityFile: c.identityFile || "",
+      label: `${c.user ? `${c.user}@` : ""}${c.host || ""}`, passwordUsed: false, passphraseUsed: false });
+    const creds = [credential("dest", { host, user, password, passphrase, identityFile }),
+                   ...hops.filter(h => h && h.host).map(h => credential("hop", h))];
+    const session = { creds, hasJumps: hasJumps || hops.length > 0, owner,
+                      label: label || `${user ? `${user}@` : ""}${host}`, asked: new Map(), rejected: false, used: false };
     sessions.set(token, session);
     return {
       token,
       session,
       dispose() {
-        session.password = "";
-        session.passphrase = "";
+        for (const cred of creds) { cred.password = ""; cred.passphrase = ""; }
         sessions.delete(token);
       },
     };

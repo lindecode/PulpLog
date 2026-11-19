@@ -606,6 +606,25 @@ aparecen en recientes. Windows los lee con los permisos del usuario predetermina
 si un archivo solo lo puede leer root, PulpLog ofrece **Abrir como root**, que usa `wsl -u root`.
 Los perfiles guardados como «WSL2 local» abren su archivo de esta forma.
 
+#### Servidores intermedios (cadena de saltos)
+
+Con **SSH** se puede definir una cadena: `Tu equipo → bastion → servidor interno → destino`.
+Cada salto tiene su host o alias de `~/.ssh/config`, usuario, puerto, llave y contraseña
+(opcionalmente guardada en la bóveda). Detalles:
+
+- **Túnel (ProxyJump)**: el salto solo reenvía el tráfico; te autenticas en cada servidor con tus
+  propias credenciales, que no salen de tu equipo. Los nombres de cada salto los resuelve el anterior.
+- **Comando (ProxyCommand)**, solo como primer salto: para accesos que no son SSH directo, como
+  `aws ssm start-session`, `gcloud compute start-iap-tunnel`, `cloudflared access ssh` o
+  `tsh proxy ssh`. El comando se ejecuta en tu equipo.
+- Cada salto recibe las opciones de PulpLog (tiempo de espera, keepalive, aceptar huella nueva) y su
+  propia llave; la contraseña de cada salto solo se entrega a ese salto.
+- **Probar cadena** prueba cada salto en orden y se detiene en el primero que falla, indicando el
+  tiempo y si se guardó una huella nueva.
+- Los perfiles con el antiguo campo de texto ProxyJump se convierten solos en saltos.
+- La cadena funciona con el cliente SSH del sistema (Windows o WSL); **SSH con credenciales** no
+  admite saltos.
+
 Las rutas remotas `.gz` requieren que el host remoto, WSL2 o la distribución Linux tenga `gzip` disponible. Al ser archivos comprimidos cerrados, se muestran como una lectura puntual y no activan seguimiento en vivo.
 
 #### Docker por SSH
