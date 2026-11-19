@@ -35,3 +35,16 @@ test("buildSshArgs: same base options everywhere, keepalive for streams, -F only
   assert.ok(!buildSshArgs({ proxyJump: "" }, { jumpConfigFile: "/tmp/j.conf" }).includes("-F"));
   assert.throws(() => buildSshArgs({ proxyJump: "-oProxyCommand=calc" }), /intermedio/);
 });
+
+test("interactive mode drops BatchMode and limits password prompts", () => {
+  const args = buildSshArgs({}, { interactive: true });
+  assert.ok(!args.includes("BatchMode=yes"));
+  assert.ok(args.includes("NumberOfPasswordPrompts=1"));
+  assert.ok(args.includes("StrictHostKeyChecking=accept-new"));
+});
+
+test("interactive jump blocks let the jump host ask too", () => {
+  const text = buildJumpConfig(["bastion"], { interactive: true });
+  assert.match(text, /Host bastion\n {2}BatchMode no\n/);
+  assert.match(text, /NumberOfPasswordPrompts 1/);
+});

@@ -384,4 +384,59 @@ function HelpGuideModal({ lang, onClose }) {
 }
 
 
-export { RotationBanner, DiagPanel, SettingsModal, AboutModal, HelpGuideModal };
+/* ═══════════════════════════════════════════
+   SSH asks for something PulpLog can't answer on its own:
+   a jump host's password, a 2FA / verification code…
+   Requests queue up; each one is answered or cancelled.
+═══════════════════════════════════════════ */
+function AskpassPrompt() {
+  const t = useLang();
+  const [queue, setQueue] = useState([]);
+  const [value, setValue] = useState("");
+  const inputRef = useRef(null);
+  const current = queue[0] || null;
+
+  useEffect(() => window.electronAPI?.onAskpassPrompt?.(request => setQueue(prev => [...prev, request])), []);
+  useEffect(() => { setValue(""); if (current) setTimeout(() => inputRef.current?.focus(), 0); }, [current?.id]);
+
+  if (!current) return null;
+  const reply = answer => {
+    window.electronAPI.answerAskpass(current.id, answer);
+    setQueue(prev => prev.slice(1));
+  };
+  // codes and menus are not secret; passwords and passphrases are
+  const secret = current.kind === "password" || current.kind === "passphrase";
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.65)", display:"flex",
+                  alignItems:"center", justifyContent:"center", zIndex:1100 }}>
+      <form data-float role="dialog" aria-modal="true" aria-label={t("askpass_title")}
+        onSubmit={event => { event.preventDefault(); reply(value); }}
+        onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); reply(null); } }}
+        style={{ background:"var(--pl-bg-panel)", border:"0.5px solid var(--pl-border-strong)", borderRadius:10,
+                 padding:"20px 22px", width:"min(440px, 92vw)", display:"flex", flexDirection:"column", gap:10,
+                 boxShadow:"0 8px 40px rgba(0,0,0,.8)", fontFamily:"inherit" }}>
+        <div style={{ fontSize:14, fontWeight:700, color:"var(--pl-text-1)" }}>🔐 {t("askpass_title")}</div>
+        <div style={{ fontSize:11, color:"var(--pl-text-5)" }}>{t("askpass_from", current.label || current.host || "SSH")}</div>
+        <div style={{ fontSize:12, color:"var(--pl-text-2)", whiteSpace:"pre-wrap", wordBreak:"break-word",
+                      background:"var(--pl-bg-input)", borderRadius:6, padding:"8px 10px" }}>{current.prompt}</div>
+        <input ref={inputRef} type={secret ? "password" : "text"} value={value} autoComplete="off"
+          onChange={event => setValue(event.target.value)}
+          style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-border)", borderRadius:5,
+                   color:"var(--pl-text-1)", fontSize:13, fontFamily:"inherit", padding:"7px 9px" }} />
+        <div style={{ fontSize:10, color:"var(--pl-text-6)" }}>{t("askpass_note")}</div>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:10, color:"var(--pl-text-6)" }}>{queue.length > 1 ? t("askpass_more", queue.length - 1) : ""}</span>
+          <div style={{ display:"flex", gap:8 }}>
+            <Btn onClick={() => reply(null)}>{t("cancel")}</Btn>
+            <button type="submit" style={{ background:"var(--pl-bg-input)", border:"0.5px solid var(--pl-accent)", borderRadius:6,
+              color:"var(--pl-text-1)", fontFamily:"inherit", fontSize:11, padding:"6px 14px", cursor:"pointer" }}>
+              {t("askpass_send")}
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+export { RotationBanner, DiagPanel, SettingsModal, AboutModal, HelpGuideModal, AskpassPrompt };

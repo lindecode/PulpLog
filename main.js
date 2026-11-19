@@ -26,6 +26,8 @@ const { createConversationStore } = require("./conversationStore.cjs");
 const { createCredentialVault } = require("./credentialVault.cjs");
 const { createCaptureManager } = require("./captures.cjs");
 const { buildSshArgs, buildJumpConfig, parseJumpHosts, validateProxyJump } = require("./sshInvocation.cjs");
+const { createAskpassBroker, askpassEnv, HELPER_SOURCE, windowsWrapper, wslWrapper } = require("./askpass.cjs");
+const net = require("net");
 
 const IS_SMOKE_TEST = process.env.PULPLOG_SMOKE_TEST === "1";
 const IS_DEV = !IS_SMOKE_TEST && (process.env.NODE_ENV === "development" || !app.isPackaged);
@@ -442,6 +444,7 @@ const ERROR_EXPLANATIONS = {
     docker_permission:"No hay permisos para acceder a Docker.",
     remote_fingerprint:"No se pudo validar la huella (fingerprint) del servidor. Comprueba la huella mostrada antes de continuar.",
     remote_auth:"Autenticacion SSH rechazada. Revisa usuario, contrasena, llave o passphrase.",
+    remote_secret_rejected:"El servidor rechazó la contraseña o passphrase guardada. PulpLog no la reintentó para no bloquear la cuenta.",
     remote_timeout:"No se pudo conectar al host remoto. Revisa host, puerto, VPN/firewall o red.",
     remote_path:"No se pudo leer la ruta remota. Revisa que el archivo exista y que el usuario tenga permisos.",
     generic:"Ocurrio un error inesperado.",
@@ -452,6 +455,7 @@ const ERROR_EXPLANATIONS = {
     docker_permission:"No permission to access Docker.",
     remote_fingerprint:"Could not validate the server fingerprint. Check the fingerprint shown before continuing.",
     remote_auth:"SSH authentication was rejected. Check the user, password, key, or passphrase.",
+    remote_secret_rejected:"The server rejected the saved password or passphrase. PulpLog did not retry it to avoid locking the account.",
     remote_timeout:"Could not connect to the remote host. Check host, port, VPN/firewall, or network.",
     remote_path:"Could not read the remote path. Check that the file exists and the user has permission.",
     generic:"An unexpected error occurred.",
@@ -1577,7 +1581,7 @@ function windowsToWslPath(winPath, distro) {
 }
 
 /* Path of the jump config, as the ssh that will run sees it; null without -J. */
-function jumpConfigFile(config, { inWsl = false, distro = "" } = {}) {
+function jumpConfigFile(config, { inWsl = false, distro = "", interactive = false } = {}) {
   const proxyJump = validateProxyJump(config?.proxyJump);
   if (!proxyJump) return null;
   const includes = inWsl
@@ -1585,7 +1589,7 @@ function jumpConfigFile(config, { inWsl = false, distro = "" } = {}) {
     : [path.join(os.homedir(), ".ssh", "config"), path.join(process.env.ProgramData || "C:\\ProgramData", "ssh", "ssh_config")]
         .filter(file => process.platform !== "win32" || !file.startsWith("C:\\ProgramData") || fs.existsSync(file))
         .map(file => file.replace(/\\/g, "/"));
-  const text = buildJumpConfig(parseJumpHosts(proxyJump), { includes });
+  const text = buildJumpConfig(parseJumpHosts(proxyJump), { includes, interactive });
   const name = `jump-${crypto.createHash("sha256").update(text).digest("hex").slice(0, 16)}.conf`;
   const file = path.join(jumpConfigDir, name);
   if (!fs.existsSync(file)) {
@@ -1593,6 +1597,34 @@ function jumpConfigFile(config, { inWsl = false, distro = "" } = {}) {
     fs.writeFileSync(file, text, { mode:0o600 });
   }
   return inWsl ? windowsToWslPath(file, distro) : file;
+}
+
+/* ssh2: answer keyboard-interactive (PAM password prompts, 2FA). The saved password
+   is given once to a password prompt; anything else is asked to the user. */
+function enableKeyboardInteractive(client, { password = "", label = "", owner = null } = {}) {
+  let passwordUsed = false;
+  client.on("keyboard-interactive", (_name, instructions, _lang, prompts, finish) => {
+    Promise.all((prompts || []).map(async item => {
+      const text = String(item?.prompt || "");
+      if (/password/i.test(text) && password && !passwordUsed) { passwordUsed = true; return password; }
+      const answer = await askUserForSecret({ label, prompt:`${instructions ? `${instructions}\n` : ""}${text}`,
+        kind:/password/i.test(text) ? "password" : "other" }, { owner });
+      return answer ?? "";
+    })).then(answers => finish(answers), () => finish([]));
+  });
+}
+
+/* ssh2's readyTimeout covers authentication too: a user typing a 2FA code would hit it.
+   So the TCP connection gets its own 12 s timeout and authentication gets room. */
+function connectNative(client, connection) {
+  const options = { ...connection, readyTimeout:180000 }; // copied now: callers clear secrets after connect()
+  const sock = net.connect({ host:options.host, port:options.port });
+  const timer = setTimeout(() => sock.destroy(new Error(`Tiempo de conexión agotado con ${options.host}:${options.port}`)), 12000);
+  sock.once("connect", () => {
+    clearTimeout(timer);
+    try { client.connect({ ...options, sock }); } catch (error) { client.emit("error", error); }
+  });
+  sock.once("error", error => { clearTimeout(timer); client.emit("error", error); });
 }
 
 /* ssh / ssh-wsl invocation shared by stream, listing and connection test. */
@@ -1608,14 +1640,93 @@ function systemSshInvocation(config, remoteCommand, { keepalive = false } = {}) 
     if (process.platform !== "win32") throw new Error("SSH desde WSL2 solo está disponible en Windows");
     if (distro.startsWith("-")) throw new Error("Nombre de distro WSL inválido");
   }
+  // credentials to hand over (or the user asked to be prompted) → answered through SSH_ASKPASS
+  const interactive = Boolean(config?.password || config?.passphrase || config?.interactiveAuth);
   const args = buildSshArgs({ port, identityFile, proxyJump: config?.proxyJump },
-    { keepalive, jumpConfigFile: jumpConfigFile(config, { inWsl: viaWsl, distro }) });
+    { keepalive, interactive, jumpConfigFile: jumpConfigFile(config, { inWsl: viaWsl, distro, interactive }) });
   const sshTarget = user && !target.includes("@") ? `${user}@${target}` : target;
   args.push(sshTarget, remoteCommand);
   return viaWsl
-    ? { command:"wsl.exe", args:[...(distro ? ["-d", distro] : []), "--", "ssh", ...args], sshTarget, viaWsl, distro }
-    : { command:"ssh", args, sshTarget, viaWsl, distro };
+    ? { command:"wsl.exe", args:[...(distro ? ["-d", distro] : []), "--", "ssh", ...args], sshTarget, viaWsl, distro, interactive }
+    : { command:"ssh", args, sshTarget, viaWsl, distro, interactive };
 }
+
+/* ─── SSH_ASKPASS: passwords, passphrases and 2FA for the system ssh (askpass.cjs) ─── */
+const askpassDir = path.join(path.dirname(logsDir), "ssh-askpass");
+const askpassPipe = process.platform === "win32"
+  ? `\\\\.\\pipe\\pulplog-askpass-${crypto.randomBytes(8).toString("hex")}`
+  : path.join(os.tmpdir(), `pulplog-askpass-${process.pid}-${crypto.randomBytes(4).toString("hex")}.sock`);
+const pendingSecretPrompts = new Map(); // id → { owner, resolve }
+
+/* Shows the "the server asks for…" dialog in the window that started the connection. */
+function askUserForSecret(request, session) {
+  const owner = session?.owner && !session.owner.isDestroyed() ? session.owner
+    : (BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0])?.webContents;
+  if (!owner || owner.isDestroyed()) return Promise.resolve(null);
+  const id = crypto.randomUUID();
+  return new Promise(resolve => {
+    const done = value => { clearTimeout(timer); pendingSecretPrompts.delete(id); resolve(value); };
+    const timer = setTimeout(() => done(null), 180000);
+    pendingSecretPrompts.set(id, { owner, resolve: done });
+    owner.send("askpass:prompt", { id, label:String(request.label || ""), prompt:String(request.prompt || "").slice(0, 1000),
+                                   kind:request.kind, host:request.host || null });
+  });
+}
+
+handleTrusted("askpass:answer", (event, payload) => {
+  const pending = pendingSecretPrompts.get(String(payload?.id || ""));
+  if (!pending || pending.owner !== event.sender) return false;
+  const answer = payload?.answer;
+  pending.resolve(typeof answer === "string" && answer.length <= 4096 && !/[\r\n\0]/.test(answer) ? answer : null);
+  return true;
+});
+
+const askpassBroker = createAskpassBroker({ pipePath:askpassPipe, askUser:askUserForSecret, log:logEntry });
+
+function writeIfChanged(file, content, mode) {
+  try { if (fs.readFileSync(file, "utf8") === content) return; } catch { /* new file */ }
+  fs.writeFileSync(file, content, { mode });
+}
+
+/* The executable OpenSSH runs as SSH_ASKPASS: PulpLog itself in Node mode (no secrets in it). */
+function askpassProgram(viaWsl, distro) {
+  fs.mkdirSync(askpassDir, { recursive:true });
+  const helper = path.join(askpassDir, "askpass-helper.cjs");
+  writeIfChanged(helper, HELPER_SOURCE, 0o600);
+  if (viaWsl) {
+    const file = path.join(askpassDir, `askpass-wsl-${(distro || "default").replace(/[^\w.-]/g, "_")}.sh`);
+    writeIfChanged(file, wslWrapper(windowsToWslPath(process.execPath, distro), helper), 0o700);
+    return file;
+  }
+  if (process.platform === "win32") {
+    const file = path.join(askpassDir, "askpass.cmd");
+    writeIfChanged(file, windowsWrapper(process.execPath, helper), 0o700);
+    return file;
+  }
+  const file = path.join(askpassDir, "askpass.sh");
+  writeIfChanged(file, `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${helper.replace(/'/g, "'\\''")}' "$@"\n`, 0o700);
+  return file;
+}
+
+/* env for one ssh process + dispose() once it ends. No-op unless interactive. */
+async function sshAskpass(config, spec, owner) {
+  if (!spec?.interactive) return { env:undefined, session:null, dispose() {} };
+  await askpassBroker.start();
+  const { host, username } = validateSshTarget(config);
+  const registration = askpassBroker.register({
+    password:String(config?.password || ""), passphrase:String(config?.passphrase || ""),
+    user:username || "", host, hasJumps:Boolean(String(config?.proxyJump || "").trim()),
+    owner:owner?.realSender || owner || null, label:spec.sshTarget,
+  });
+  const env = askpassEnv({ askpassPath:askpassProgram(spec.viaWsl, spec.distro), pipePath:askpassPipe,
+                           token:registration.token, viaWsl:spec.viaWsl });
+  return { env, session:registration.session, dispose:registration.dispose };
+}
+
+/* The saved secret was refused: asked twice, or handed over and then "Permission denied". */
+const rejectedSecretMessage = (session, stderr = "") =>
+  session?.rejected || (session?.used && /permission denied|authentication failed|too many authentication failures/i.test(String(stderr)))
+    ? mt("remote_secret_rejected") : null;
 
 function buildRemoteCommand(config) {
   const mode = ["wsl", "ssh-wsl"].includes(config?.mode) ? config.mode : "ssh";
@@ -1638,7 +1749,7 @@ function buildRemoteCommand(config) {
   }
 
   const spec = systemSshInvocation({ ...config, mode }, tailScript, { keepalive:true });
-  return { command:spec.command, args:spec.args,
+  return { command:spec.command, args:spec.args, ssh:spec,
            label: spec.viaWsl ? `WSL SSH:${spec.distro || "default"}:${spec.sshTarget}:${filePath}` : `${spec.sshTarget}:${filePath}` };
 }
 
@@ -1662,30 +1773,36 @@ function buildRemoteListCommand(config, script = null) {
   }
 
   const spec = systemSshInvocation({ ...config, mode }, asRemoteShCommand(listScript));
-  return { command:spec.command, args:spec.args,
+  return { command:spec.command, args:spec.args, ssh:spec,
            label: spec.viaWsl ? `WSL SSH:${spec.distro || "default"}:${spec.sshTarget}:${dirPath || "~"}` : `${spec.sshTarget}:${dirPath || "~"}` };
 }
 
-function listSystemRemoteDirectory(config) {
+async function listSystemRemoteDirectory(config, owner = null) {
   const spec = buildRemoteListCommand(config);
+  const auth = await sshAskpass(config, spec.ssh, owner);
   return new Promise((resolve, reject) => {
-    execFile(spec.command, spec.args, { timeout:20000, windowsHide:true, maxBuffer:4 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) return reject(new Error(formatRemoteListError(error, stderr, spec.label)));
-      resolve({ ok:true, ...parseRemoteListOutput(stdout) });
-    });
+    // a prompt (2FA…) may wait for the user: allow for it
+    execFile(spec.command, spec.args, { timeout: auth.env ? 200000 : 20000, windowsHide:true, maxBuffer:4 * 1024 * 1024, env:auth.env },
+      (error, stdout, stderr) => {
+        const rejected = error ? rejectedSecretMessage(auth.session, stderr) : null;
+        auth.dispose();
+        if (error) return reject(new Error(rejected || formatRemoteListError(error, stderr, spec.label)));
+        resolve({ ok:true, ...parseRemoteListOutput(stdout) });
+      });
   });
 }
 
-function testSystemSsh(config) {
+async function testSystemSsh(config, owner = null) {
   const filePath = String(config?.filePath || "").trim();
   if (!filePath && config?.source !== "docker") return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
-  let spec;
-  try { spec = systemSshInvocation(config, buildRemoteReadCheck(filePath, config)); }
-  catch (error) { return Promise.reject(error); }
+  const spec = systemSshInvocation(config, buildRemoteReadCheck(filePath, config));
+  const auth = await sshAskpass(config, spec, owner);
   const { command, args:commandArgs } = spec;
   return new Promise((resolve, reject) => {
-    execFile(command, commandArgs, { timeout:15000, windowsHide:true }, (error, _stdout, stderr) => {
-      if (error) return reject(new Error(String(stderr || error.message).trim()));
+    execFile(command, commandArgs, { timeout: auth.env ? 200000 : 15000, windowsHide:true, env:auth.env }, (error, _stdout, stderr) => {
+      const rejected = error ? rejectedSecretMessage(auth.session, stderr) : null;
+      auth.dispose();
+      if (error) return reject(new Error(rejected || String(stderr || error.message).trim()));
       resolve({ ok:true, fingerprint:null });
     });
   });
@@ -1721,7 +1838,7 @@ function testNativeSsh(config, command = null) {
     const connection = {
       host, port, username, password:password || undefined,
       readyTimeout:12000, keepaliveInterval:15000, keepaliveCountMax:3,
-      tryKeyboard:false,
+      tryKeyboard:true,
       hostVerifier(key) {
         seenFingerprint = formatHostFingerprint(key);
         if (expectedFingerprint) return normalizeFingerprint(seenFingerprint) === expectedFingerprint;
@@ -1753,7 +1870,8 @@ function testNativeSsh(config, command = null) {
         connection.privateKey = fs.readFileSync(identityFile);
         if (passphrase) connection.passphrase = passphrase;
       }
-      client.connect(connection);
+      enableKeyboardInteractive(client, { password, label:`${username}@${host}` });
+      connectNative(client, connection);
     } catch (error) { finish(error); }
   });
 }
@@ -1787,7 +1905,7 @@ function listNativeRemoteDirectory(config) {
     const connection = {
       host, port, username, password:password || undefined,
       readyTimeout:12000, keepaliveInterval:15000, keepaliveCountMax:3,
-      tryKeyboard:false,
+      tryKeyboard:true,
       hostVerifier(key) {
         return normalizeFingerprint(formatHostFingerprint(key)) === expectedFingerprint;
       },
@@ -1831,7 +1949,8 @@ function listNativeRemoteDirectory(config) {
         connection.privateKey = fs.readFileSync(identityFile);
         if (passphrase) connection.passphrase = passphrase;
       }
-      client.connect(connection);
+      enableKeyboardInteractive(client, { password, label:`${username}@${host}` });
+      connectNative(client, connection);
     } catch (error) { finish(error); }
   });
 }
@@ -1859,7 +1978,7 @@ function startNativeSshStream(event, payload) {
     readyTimeout: 12000,
     keepaliveInterval: 15000,
     keepaliveCountMax: 3,
-    tryKeyboard: false,
+    tryKeyboard: true,
     hostVerifier(key) {
       seenFingerprint = formatHostFingerprint(key);
       if (expectedFingerprint) return normalizeFingerprint(seenFingerprint) === expectedFingerprint;
@@ -1989,7 +2108,8 @@ function startNativeSshStream(event, payload) {
 
   remoteStreams.set(streamId, stream);
   logEntry("INFO", "remote", `Iniciando SSH nativo: ${label}`);
-  client.connect(config);
+  enableKeyboardInteractive(client, { password, label, owner:event.sender.realSender || event.sender });
+  connectNative(client, config);
   // ssh2 copies password/passphrase into its own internal config synchronously
   // during connect(), so our local copies are no longer needed. privateKey is
   // kept by reference and parsed later during auth, so it must not be cleared here.
@@ -2032,7 +2152,14 @@ async function startRemoteLogs(event, payload) {
   }
 
   logEntry("INFO", "remote", `Iniciando stream remoto: ${spec.label}`);
-  const proc = spawn(spec.command, spec.args, { windowsHide: true });
+  let auth;
+  try { auth = await sshAskpass(payload, spec.ssh, event.sender); }
+  catch (e) {
+    showRemoteStreamAlert(event, payload, mt("err_remote"), e.message);
+    event.sender.send("remote:error", streamId, e.message);
+    return;
+  }
+  const proc = spawn(spec.command, spec.args, { windowsHide: true, env:auth.env });
   const stream = { proc, stopped: false, label: spec.label, sender:event.sender };
   const lineDecoder = createLineDecoder();
   let stderrBuf = "";
@@ -2108,6 +2235,9 @@ async function startRemoteLogs(event, payload) {
 
   proc.on("close", (code) => {
     remoteStreams.delete(streamId);
+    const rejected = code ? rejectedSecretMessage(auth.session, stderrBuf) : null;
+    auth.dispose();
+    if (rejected) stderrBuf = rejected;
     if (flushRemainder() === false) return;
     if (stream.stopped) {
       logEntry("INFO", "remote", `Stream remoto detenido: ${spec.label}`);
@@ -2128,6 +2258,7 @@ async function startRemoteLogs(event, payload) {
 
   proc.on("error", (e) => {
     remoteStreams.delete(streamId);
+    auth.dispose();
     if (stream.stopped) return;
     logEntry("ERROR", "remote", `${spec.label}: ${e.message}`);
     showRemoteStreamAlert(event, payload, mt("err_remote"), e.message);
@@ -2163,7 +2294,7 @@ handleTrusted("remote:test", async (event, payload) => {
     payload = await resolveVaultSecrets(payload);
     const result = payload?.mode === "ssh-native"
       ? await testNativeSsh(payload)
-      : await testSystemSsh(payload);
+      : await testSystemSsh(payload, event.sender);
     await recordVaultAuthSuccess(payload);
     return result;
   } catch (error) {
@@ -2184,11 +2315,15 @@ handleTrusted("remote:docker-list", async (event, payload) => {
       stdout = (await testNativeSsh(payload, script)).stdout;
     } else {
       const spec = buildRemoteListCommand(payload, script);
+      const auth = await sshAskpass(payload, spec.ssh, event.sender);
       stdout = await new Promise((resolve, reject) => {
-        execFile(spec.command, spec.args, { timeout:20000, windowsHide:true, maxBuffer:4 * 1024 * 1024 }, (error, output, stderr) => {
-          if (error) return reject(new Error(String(stderr || mt("remote_docker_failed")).trim()));
-          resolve(output);
-        });
+        execFile(spec.command, spec.args, { timeout: auth.env ? 200000 : 20000, windowsHide:true, maxBuffer:4 * 1024 * 1024, env:auth.env },
+          (error, output, stderr) => {
+            const rejected = error ? rejectedSecretMessage(auth.session, stderr) : null;
+            auth.dispose();
+            if (error) return reject(new Error(rejected || String(stderr || mt("remote_docker_failed")).trim()));
+            resolve(output);
+          });
       });
     }
     await recordVaultAuthSuccess(payload);
@@ -2205,7 +2340,7 @@ handleTrusted("remote:list-dir", async (event, payload) => {
     payload = await resolveVaultSecrets(payload);
     const result = payload?.mode === "ssh-native"
       ? await listNativeRemoteDirectory(payload)
-      : await listSystemRemoteDirectory(payload);
+      : await listSystemRemoteDirectory(payload, event.sender);
     await recordVaultAuthSuccess(payload);
     logEntry("INFO", "remote", `Directorio remoto listado: ${result.cwd || payload?.dirPath || "~"}`);
     return result;
@@ -2270,6 +2405,7 @@ function normalizeRemoteProfiles(value) {
     historyMode: ["lines", "bytes", "full"].includes(profile.historyMode) ? profile.historyMode : "lines",
     maxInitialMb: normalizeRemoteHistory(profile).maxMb,
     vaultCredentialId: typeof profile.vaultCredentialId === "string" ? profile.vaultCredentialId.slice(0, 100) : "",
+    interactiveAuth: profile.interactiveAuth === true,
   }));
 }
 
@@ -2997,7 +3133,7 @@ app.whenReady().then(async () => {
   }
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
-app.on("will-quit", () => { globalShortcut.unregisterAll(); captures.stopAll(); });
+app.on("will-quit", () => { globalShortcut.unregisterAll(); captures.stopAll(); askpassBroker.close(); });
 app.on("window-all-closed", () => {
   activeReads.forEach((stream) => { try { stream.destroy(); } catch {} });
   activeReads.clear();

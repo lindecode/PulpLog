@@ -129,6 +129,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
     }
     return () => { cleanup(); ipcRenderer.invoke("remote:logs:stop", streamId); };
   },
+  /* SSH asks for something PulpLog can't answer on its own (a jump host's password, a 2FA code). */
+  onAskpassPrompt: (cb) => {
+    const h = (_e, request) => cb(request);
+    ipcRenderer.on("askpass:prompt", h);
+    return () => ipcRenderer.removeListener("askpass:prompt", h);
+  },
+  answerAskpass: (id, answer) => ipcRenderer.invoke("askpass:answer", { id, answer }),
   /* Tees a container/remote stream into a private temp file (merged view). → { filePath, error } */
   startCapture: (captureId, kind, payload) => ipcRenderer.invoke("capture:start", { captureId, kind, payload }),
   stopCapture: (captureId) => ipcRenderer.invoke("capture:stop", captureId),

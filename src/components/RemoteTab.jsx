@@ -194,6 +194,8 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const [passphrase, setPassphrase] = useState(initialConfig?.passphrase || "");
   const [vaultCredentialId, setVaultCredentialId] = useState(initialConfig?.vaultCredentialId || "");
   const [rememberPassword, setRememberPassword] = useState(false);
+  // system ssh: show a dialog when the server asks for something else (2FA, a jump host's password)
+  const [interactiveAuth, setInteractiveAuth] = useState(initialConfig?.interactiveAuth === true);
   const [vaultState, setVaultState] = useState({ configured:false, unlocked:false });
   const [vaultError, setVaultError] = useState("");
   const [fingerprint, setFingerprint] = useState(initialConfig?.fingerprint || "");
@@ -304,6 +306,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
   const connectionConfig = () => ({ mode, target:target.trim(), user:user.trim(), port:String(port).trim(),
     identityFile:identityFile.trim(), proxyJump:proxyJump.trim(), password, passphrase,
     vaultCredentialId, vaultCredentialKind:"ssh-password", fingerprint:fingerprint.trim(),
+    interactiveAuth: mode === "ssh" || mode === "ssh-wsl" ? interactiveAuth : false,
     trustHostForSession, distro:distro.trim(), filePath:source === "docker" ? "" : filePath.trim(), tailLines,
     source, containerId:source === "docker" ? containerId : "", containerName:source === "docker" ? containerName : "",
     historyMode:historyPreset.split(":")[0], maxInitialMb:Number(historyPreset.split(":")[1]) || 100 });
@@ -317,6 +320,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     setAdvanced(profile.mode === "ssh-native");
     setPort(profile.port || ""); setIdentityFile(profile.identityFile || "");
     setProxyJump(profile.proxyJump || "");
+    setInteractiveAuth(profile.interactiveAuth === true);
     setVaultCredentialId(profile.vaultCredentialId || ""); setRememberPassword(false);
     setFingerprint(profile.fingerprint || ""); setDistro(profile.distro || "");
     setFilePath(profile.filePath || ""); setTailLines(profile.tailLines || 500);
@@ -607,7 +611,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
           </div>
         )}
 
-        {advanced && mode === "ssh-native" && (
+        {mode !== "wsl" && (mode !== "ssh-native" || advanced) && (
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
             <input style={inputStyle} type="password" value={password} onChange={e => setPassword(e.target.value)}
               placeholder={`${t("remote_password")} (opcional)`} />
@@ -618,6 +622,13 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
                 onChange={event => setRememberPassword(event.target.checked)} />
               {t("remote_save_password")}
             </label>
+            {(mode === "ssh" || mode === "ssh-wsl") && (
+              <label title={t("remote_interactive_auth_title")}
+                style={{ gridColumn:"1 / -1", display:"flex", gap:7, alignItems:"center", color:"var(--pl-text-4)", fontSize:10 }}>
+                <input type="checkbox" checked={interactiveAuth} onChange={event => setInteractiveAuth(event.target.checked)} />
+                {t("remote_interactive_auth")}
+              </label>
+            )}
             {vaultCredentialId && !password && <div style={{ gridColumn:"1 / -1", color:"var(--pl-status-live)", fontSize:10 }}>
               {t("remote_saved_password_selected")}
             </div>}

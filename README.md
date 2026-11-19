@@ -675,7 +675,20 @@ ssh-add --apple-use-keychain ~/.ssh/id_ed25519
 
 #### Contraseñas, passphrases y huella del servidor
 
-**SSH del sistema** es una conexión no interactiva: si una llave cifrada requiere passphrase, debe estar previamente cargada en el agente. Para introducir usuario/contraseña o una llave con passphrase directamente en PulpLog, utiliza **SSH con credenciales**.
+Todos los modos SSH aceptan contraseña y passphrase, también guardadas en la bóveda:
+
+- **SSH del sistema y SSH desde WSL** usan el cliente OpenSSH con `SSH_ASKPASS`: cuando
+  OpenSSH pide la contraseña, la entrega PulpLog por un canal local de un solo uso. Siguen
+  funcionando los alias, `~/.ssh/config`, el agente y los servidores intermedios.
+- **La contraseña guardada solo se entrega al servidor de destino.** Si un servidor intermedio
+  pide la suya, PulpLog no le pasa la del destino: muestra un diálogo.
+- **Una contraseña rechazada no se reintenta**, para no bloquear la cuenta; PulpLog avisa de que
+  la credencial guardada fue rechazada.
+- Con **Preguntarme si el servidor pide algo más**, las peticiones adicionales (código 2FA,
+  contraseña de un servidor intermedio) aparecen en un diálogo. Lo escrito se envía solo a esa
+  conexión y no se guarda.
+- **SSH con credenciales** (motor propio) responde también a servidores que piden la contraseña
+  de forma interactiva (PAM, 2FA).
 
 La primera conexión manual detecta la huella SHA256 del servidor. Verifícala con el administrador o por otro medio confiable antes de marcarla como aceptada. La confianza se aplica sólo a esa sesión.
 
@@ -683,7 +696,7 @@ Las passphrases de llaves y las contraseñas que no se marquen para guardar:
 
 - No se guardan en perfiles, ajustes ni restauración de sesión.
 - No se escriben en la bitácora interna.
-- No se pasan como argumentos de procesos ni variables de entorno.
+- No se pasan como argumentos de procesos ni variables de entorno (el entorno solo lleva el nombre del canal y un token de un solo uso).
 - Permanecen en memoria únicamente mientras la conexión activa las necesita.
 
 Las contraseñas SSH pueden guardarse opcionalmente en **Configuración → Bóveda local de credenciales SSH**. La bóveda:

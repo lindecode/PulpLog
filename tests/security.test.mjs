@@ -96,6 +96,8 @@ test("SFTP operation deadline closes a server that never finishes readdir", asyn
     validateSshTarget:() => ({ host:"test", username:"user", port:22, identityFile:"" }),
     setTimeout:callback => { expire = callback; return 1; }, clearTimeout:() => { timerCleared = true; },
     mt:() => "SSH request timed out",
+    // keyboard-interactive and the separate TCP connect step are not under test here
+    enableKeyboardInteractive:() => {}, connectNative:(client, connection) => client.connect(connection),
   });
   const request = list({ password:"test", fingerprint:"test-hash", trustHostForSession:true });
   expire();

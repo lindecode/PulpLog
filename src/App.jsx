@@ -5,7 +5,7 @@ import { IS_ELECTRON, reportMetric, RENDERER_STARTED_AT } from "./utils.mjs";
 import { Pane, usePaneTabs, remoteTabLabel } from "./components/Pane.jsx";
 import { WorkspaceSelector, WorkspacesModal } from "./components/Workspaces.jsx";
 import { useWorkspaces, entryFromTab } from "./workspaces.mjs";
-import { DiagPanel, SettingsModal, AboutModal, HelpGuideModal } from "./components/Modals.jsx";
+import { DiagPanel, SettingsModal, AboutModal, HelpGuideModal, AskpassPrompt } from "./components/Modals.jsx";
 import { AiSettingsCtx } from "./components/AnalysisSidebar.jsx";
 
 export default function App() {
@@ -399,6 +399,7 @@ export default function App() {
             openTabEntries={openTabEntries} onClose={() => setWsModal(null)} />
         )}
         {about && <AboutModal onClose={() => setAbout(false)} />}
+        {IS_ELECTRON && <AskpassPrompt />}
         {helpGuideOpen && <HelpGuideModal lang={settings.language || "es"} onClose={() => setHelpGuideOpen(false)} />}
         {toast && (
           <div role="alert" style={{ position:"fixed", left:"50%", bottom:20, transform:"translateX(-50%)",
