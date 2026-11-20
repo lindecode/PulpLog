@@ -10,6 +10,8 @@ import { tabKey, entryKey } from "../workspaces.mjs";
 import { createMergedStream, isCombinableTab } from "../mergedSource.mjs";
 import { CombinePicker } from "./CombinePicker.jsx";
 import { parseWslUncPath, wslUncPath } from "../wslPaths.mjs";
+import { envColor, recordServerStatus } from "../remoteServers.mjs";
+import { chainSummary, initialJumps } from "../jumpChain.mjs";
 import { containerTabLabel, containerTooltip, tabDockerFromItem } from "../containers.mjs";
 
 /* Workspace merged view: several local files interleaved by timestamp */
@@ -31,6 +33,7 @@ let nextId = 1;
 const isContentTab = tab => !!(tab.filePath || tab.docker || tab.remote || tab.merged);
 
 export function remoteTabLabel(config) {
+  if (config.serverName && config.mode !== "wsl") return `${config.serverName} · ${config.logName || config.containerName || config.filePath?.split("/").pop() || ""}`;
   const name = config.mode === "wsl"
     ? (config.distro ? `WSL ${config.distro}` : "WSL")
     : config.mode === "ssh-wsl"
@@ -268,7 +271,7 @@ function usePaneTabs(setSettings, notifyFileMissing) {
    these are rendered by App() (side by side or
    stacked) when split, one when not.
 ═══════════════════════════════════════════ */
-function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemoteProfilesChange, onTogglePref, workspaces }) {
+function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemoteChange, onTogglePref, workspaces }) {
   const t = useLang();
   const workspacesRef = useRef(workspaces);
   workspacesRef.current = workspaces;
@@ -452,7 +455,10 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
                   ? `${t("ws_tab_in")}: ${tab.workspaceIds.map(id => wsById.get(id)?.name).filter(Boolean).join(", ")}\n` : "") + (
                 tab.merged   ? tab.merged.files.map(f => f.filePath || f.label).join("\n") :
                 tab.docker   ? containerTooltip(tab.docker) :
-                tab.remote   ? `${tab.remote.mode === "wsl" ? "WSL" : "SSH"}\n${tab.remote.filePath}` :
+                tab.remote   ? [tab.remote.mode === "wsl" ? "WSL" : "SSH",
+                                 tab.remote.serverName && `${tab.remote.serverName}${tab.remote.env ? ` (${tab.remote.env})` : ""}`,
+                                 tab.remote.mode !== "wsl" && chainSummary(initialJumps(tab.remote), `${tab.remote.user ? `${tab.remote.user}@` : ""}${tab.remote.target}`, t("jump_origin")),
+                                 tab.remote.source === "docker" ? tab.remote.containerName : tab.remote.filePath].filter(Boolean).join("\n") :
                 tab.filePath ? tab.filePath :
                                t("hint_electron"))
               }
@@ -460,7 +466,8 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
                        borderRight:"0.5px solid var(--pl-border-soft)", cursor:"pointer", flexShrink:0,
                        fontSize:12, maxWidth:200, overflow:"hidden",
                        WebkitUserDrag:"element", userSelect:"none",
-                       boxShadow: firstWs(tab) ? `inset 0 2px 0 ${firstWs(tab).color}` : "none",
+                       boxShadow: [firstWs(tab) && `inset 0 2px 0 ${firstWs(tab).color}`,
+                                   envColor(tab.remote?.env) && `inset 3px 0 0 ${envColor(tab.remote.env)}`].filter(Boolean).join(", ") || "none",
                        background: tab.id===active ? "var(--pl-bg-panel)":"transparent",
                        color:      tab.id===active ? "var(--pl-text-1)":"var(--pl-text-5)",
                        borderBottom: tab.id===active ? "1.5px solid var(--pl-accent)":"1.5px solid transparent" }}>
@@ -592,6 +599,8 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
                            tabKey={String(tab.id)} maxLiveLines={settings.maxLiveLines} config={tab.remote}
                            onConfigureConnection={() => setRemotePicker({ tabId:tab.id,
                              config:{ ...tab.remote, password:"", passphrase:"", trustHostForSession:false } })}
+                           onStatus={(ok, error) => tab.remote.serverId && onRemoteChange?.(state =>
+                             ({ ...state, servers:recordServerStatus(state.servers, tab.remote.serverId, ok, error) }))}
                            isActive={tab.id === activeTab.id && focused} />
               : tab.filePath
                 ? <LogTab key={`${tab.id}-${tab.filePath}-${tab.reloadNonce || 0}`}
@@ -616,7 +625,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
       {dockerPicker && <DockerPicker onSelect={openDockerTab} onClose={() => setDockerPicker(false)} />}
       {remotePicker && <RemotePicker onSelect={submitRemotePicker} onClose={() => setRemotePicker(false)}
         capabilities={capabilities} profiles={settings.remoteProfiles || []}
-        onProfilesChange={onRemoteProfilesChange}
+        servers={settings.remoteServers || []} onRemoteChange={onRemoteChange}
         onOpenWslFile={profile => {
           setRemotePicker(false);
           const distro = profile.distro || wslDistros[0];

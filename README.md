@@ -606,6 +606,24 @@ aparecen en recientes. Windows los lee con los permisos del usuario predetermina
 si un archivo solo lo puede leer root, PulpLog ofrece **Abrir como root**, que usa `wsl -u root`.
 Los perfiles guardados como «WSL2 local» abren su archivo de esta forma.
 
+#### Servidores y bitácoras
+
+La ventana **SSH** abre con la lista de **servidores**. Un servidor se define una vez (destino,
+cadena de saltos, autenticación, configuración SSH de Windows o WSL) y guarda debajo sus
+**bitácoras** (archivos o contenedores Docker remotos). Desde la lista:
+
+- Clic en una bitácora la abre directamente (con **SSH con credenciales** pasa antes por el
+  formulario para confirmar la huella del servidor).
+- **+ bitácora** añade otra al mismo servidor; **Editar** cambia la conexión de todas a la vez.
+- **Entornos** (Producción, Staging, Desarrollo) con color: agrupan la lista y marcan la pestaña con
+  una franja (producción en rojo). El tooltip de la pestaña muestra el servidor y la cadena de saltos.
+- Cada servidor muestra el resultado de la **última conexión** (✓/✗ con fecha; el error en el tooltip).
+- Búsqueda por nombre de servidor, host, bitácora o ruta.
+
+Las contraseñas nunca se guardan en el servidor ni en la bitácora; solo la referencia a la bóveda.
+Las conexiones guardadas de versiones anteriores se convierten solas: las que comparten modo, host,
+usuario, puerto, llave y saltos quedan como un mismo servidor.
+
 #### Servidores intermedios (cadena de saltos)
 
 Con **SSH** se puede definir una cadena: `Tu equipo → bastion → servidor interno → destino`.

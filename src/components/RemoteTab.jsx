@@ -11,6 +11,8 @@ import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep, F
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 import { JumpChainEditor } from "./JumpChainEditor.jsx";
 import { initialJumps, jumpsForConnection, chainProblem } from "../jumpChain.mjs";
+import { ServerList } from "./ServerList.jsx";
+import { ENVIRONMENTS, envColor, resolveLog, saveServerAndLog, deleteServer, deleteLog, recordServerStatus } from "../remoteServers.mjs";
 
 function remoteDirname(value) {
   const text = String(value || "").trim();
@@ -183,7 +185,7 @@ function RemoteFileBrowser({ config, initialDir, onPick, onClose }) {
   );
 }
 
-function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfilesChange, onOpenWslFile = null,
+function RemotePicker({ onSelect, onClose, capabilities, profiles = [], servers = [], onRemoteChange, onOpenWslFile = null,
   sshAgentPollingEnabled = false, onToggleSshAgentPolling, initialConfig = null }) {
   const t = useLang();
   const [mode, setMode] = useState(() => initialConfig?.mode || (capabilities?.ssh?.available ? "ssh" : "ssh-native"));
@@ -222,8 +224,14 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     : initialConfig?.historyMode === "bytes" ? `bytes:${initialConfig?.maxInitialMb || 50}`
     : `lines:${initialConfig?.tailLines || 500}`);
   const [advanced, setAdvanced] = useState(initialConfig?.mode === "ssh-native");
-  const [selectedProfile, setSelectedProfile] = useState("");
-  const [profileName, setProfileName] = useState("");
+  // server / log being edited (servers with several logs each)
+  const [view, setView] = useState(() => !initialConfig && servers.length ? "list" : "form");
+  const [serverId, setServerId] = useState(initialConfig?.serverId || "");
+  const [serverName, setServerName] = useState(initialConfig?.serverName || "");
+  const [env, setEnv] = useState(initialConfig?.env || "");
+  const [logId, setLogId] = useState("");
+  const [logName, setLogName] = useState(initialConfig?.logName || "");
+  const [savedNote, setSavedNote] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -304,7 +312,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     if (!vaultState.unlocked) throw new Error(t("vault_unlock_before_save"));
     const saved = await window.electronAPI.saveVaultCredential({
       id:vaultCredentialId || undefined,
-      label:profileName.trim() || `${user.trim()}@${target.trim()}`,
+      label:serverName.trim() || `${user.trim()}@${target.trim()}`,
       kind:"ssh-password", target:target.trim(), username:user.trim(), secret:password,
     });
     setVaultCredentialId(saved.id);
@@ -335,46 +343,64 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
     interactiveAuth: mode === "ssh" || mode === "ssh-wsl" ? interactiveAuth : false,
     trustHostForSession, distro:distro.trim(), filePath:source === "docker" ? "" : filePath.trim(), tailLines,
     source, containerId:source === "docker" ? containerId : "", containerName:source === "docker" ? containerName : "",
-    historyMode:historyPreset.split(":")[0], maxInitialMb:Number(historyPreset.split(":")[1]) || 100 });
+    historyMode:historyPreset.split(":")[0], maxInitialMb:Number(historyPreset.split(":")[1]) || 100,
+    serverId, serverName:serverName.trim(), env, logName:logName.trim() });
 
-  const loadProfile = (id) => {
-    setSelectedProfile(id);
-    setTestResult(null);
-    const profile = profiles.find(item => item.id === id);
-    if (!profile) return;
-    if (profile.mode === "wsl" && onOpenWslFile) { onOpenWslFile(profile); return; }
-    setMode(profile.mode || "ssh"); setTarget(profile.target || ""); setUser(profile.user || "");
-    setAdvanced(profile.mode === "ssh-native");
-    setPort(profile.port || ""); setIdentityFile(profile.identityFile || "");
-    setJumps(initialJumps(profile)); setChainResult(null);
-    setInteractiveAuth(profile.interactiveAuth === true);
-    setVaultCredentialId(profile.vaultCredentialId || ""); setRememberPassword(false);
-    setFingerprint(profile.fingerprint || ""); setDistro(profile.distro || "");
-    setFilePath(profile.filePath || ""); setTailLines(profile.tailLines || 500);
-    setSource(profile.source === "docker" ? "docker" : "file");
-    setHistoryPreset(profile.historyMode === "full" ? "full:100"
-      : profile.historyMode === "bytes" ? `bytes:${profile.maxInitialMb || 50}`
-      : `lines:${profile.tailLines || 500}`);
-    setProfileName(profile.name || ""); setTrustHostForSession(false);
+  /* Fills the form with a server's connection (and, optionally, one of its logs). */
+  const loadConnection = (config) => {
+    setTestResult(null); setSavedNote("");
+    setMode(config.mode || (sshCap?.available ? "ssh" : "ssh-native")); setTarget(config.target || ""); setUser(config.user || "");
+    setAdvanced(config.mode === "ssh-native");
+    setPort(config.port || ""); setIdentityFile(config.identityFile || "");
+    setJumps(initialJumps(config)); setChainResult(null);
+    setInteractiveAuth(config.interactiveAuth === true);
+    setVaultCredentialId(config.vaultCredentialId || ""); setRememberPassword(false);
+    setFingerprint(config.fingerprint || ""); setDistro(config.distro || "");
+    setPassword(""); setPassphrase(""); setTrustHostForSession(false);
+  };
+  const loadSource = (log) => {
+    setLogId(log?.id || ""); setLogName(log?.name || "");
+    setFilePath(log?.filePath || ""); setTailLines(log?.tailLines || 500);
+    setSource(log?.source === "docker" ? "docker" : "file");
+    setHistoryPreset(log?.historyMode === "full" ? "full:100"
+      : log?.historyMode === "bytes" ? `bytes:${log.maxInitialMb || 50}`
+      : `lines:${log?.tailLines || 500}`);
+  };
+  const editServer = (server, log = null) => {
+    setServerId(server?.id || ""); setServerName(server?.name || ""); setEnv(server?.env || "");
+    loadConnection(server || {});
+    loadSource(log);
+    setView("form");
+  };
+
+  /* From the list: system ssh opens straight away; the direct engine needs the host confirmed in the form. */
+  const openLog = (log, server) => {
+    const config = resolveLog(log, server);
+    if (config.mode === "ssh-native") { editServer(server, log); return; }
+    onSelect({ ...config, password:"", passphrase:"", trustHostForSession:false, vaultCredentialKind:"ssh-password" });
+  };
+
+  const recordStatus = (ok, error) => {
+    if (serverId) onRemoteChange?.(state => ({ ...state, servers:recordServerStatus(state.servers, serverId, ok, error) }));
   };
 
   const saveProfile = async () => {
-    const name = profileName.trim() || target.trim() || distro.trim() || "SSH";
-    const id = selectedProfile || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    setVaultError("");
-    let safe;
-    try { safe = { ...(await persistPassword(connectionConfig())), id, name }; }
+    setVaultError(""); setSavedNote("");
+    let config;
+    try { config = await persistPassword(connectionConfig()); }
     catch (error) { setVaultError(error.message); return; }
-    delete safe.password; delete safe.passphrase; delete safe.trustHostForSession;
-    if (Array.isArray(safe.jumps)) safe.jumps = safe.jumps.map(({ password, passphrase, rememberPassword, ...hop }) => hop);
-    const next = [...profiles.filter(item => item.id !== id), safe];
-    setSelectedProfile(id); setProfileName(name); onProfilesChange?.(next);
+    const result = saveServerAndLog({ servers, profiles }, config, { serverId, logId, serverName, env, logName });
+    onRemoteChange?.({ servers:result.servers, profiles:result.profiles });
+    setServerId(result.serverId); setLogId(result.logId);
+    const saved = result.servers.find(item => item.id === result.serverId);
+    setServerName(saved?.name || serverName);
+    setSavedNote(result.logId ? t("srv_saved_log") : t("srv_saved_server"));
   };
 
-  const deleteProfile = () => {
-    if (!selectedProfile) return;
-    onProfilesChange?.(profiles.filter(item => item.id !== selectedProfile));
-    setSelectedProfile(""); setProfileName("");
+  const deleteCurrentLog = () => {
+    if (!logId) return;
+    onRemoteChange?.(deleteLog({ servers, profiles }, logId));
+    setLogId(""); setLogName(""); setSavedNote("");
   };
 
   const testConnection = async () => {
@@ -384,6 +410,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
       if (result?.ok) {
         if (result.fingerprint) setFingerprint(result.fingerprint);
         setTestResult({ ok:true, message:t("remote_test_ok") });
+        recordStatus(true);
       } else {
         const message = result?.error || t("capability_unavailable");
         const detected = message.match(/SHA256:[A-Za-z0-9+/=_-]+/)?.[0];
@@ -392,6 +419,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
           setTestResult({ ok:true, message:t("remote_identity_found") });
         } else {
           setTestResult({ ok:false, message });
+          recordStatus(false, message);
         }
       }
     } catch (error) {
@@ -401,7 +429,11 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
 
   const testChain = async () => {
     setTestingChain(true); setChainResult(null);
-    try { setChainResult(await window.electronAPI.testRemoteChain(connectionConfig())); }
+    try {
+      const result = await window.electronAPI.testRemoteChain(connectionConfig());
+      setChainResult(result);
+      recordStatus(!!result?.ok, result?.steps?.find(step => !step.ok)?.error);
+    }
     catch (error) { setChainResult({ ok:false, steps:[{ label:"", ok:false, error:error?.message ?? String(error) }] }); }
     finally { setTestingChain(false); }
   };
@@ -439,7 +471,14 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
                  padding:"24px", width:"min(620px, calc(100vw - 32px))", maxHeight:"90vh", overflowY:"auto", fontFamily:"inherit",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
         <div style={{ display:"flex", alignItems:"center", marginBottom:16 }}>
-          <span style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700 }}>{t("remote_title")}</span>
+          {view === "form" && servers.length > 0 && (
+            <button type="button" onClick={() => { setView("list"); setSavedNote(""); }}
+              style={{ border:0, background:"none", color:"var(--pl-accent-hover)", cursor:"pointer", fontSize:12,
+                       fontFamily:"inherit", padding:"0 8px 0 0" }}>← {t("srv_list")}</button>
+          )}
+          <span style={{ fontSize:14, color:"var(--pl-text-1)", fontWeight:700 }}>
+            {view === "list" ? t("srv_list") : t("remote_title")}
+          </span>
           <button type="button" onClick={() => setShowHelp(value => !value)}
             aria-expanded={showHelp} title={t("remote_help")}
             style={{ marginLeft:"auto", background:showHelp ? "var(--pl-bg-hover)" : "none",
@@ -493,22 +532,26 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
           </details>
         </div>}
 
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr auto", gap:8, marginBottom:12 }}>
-          <select style={inputStyle} value={selectedProfile} onChange={e => loadProfile(e.target.value)}>
-            <option value="">{t("remote_profile_new")}</option>
-            {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-          </select>
-          <input style={inputStyle} value={profileName} onChange={e => setProfileName(e.target.value)}
-            placeholder={t("remote_profile_name")} />
-          <button type="button" onClick={saveProfile} disabled={!hasSource || (mode !== "wsl" && !target.trim())}
-            style={{ ...inputStyle, width:"auto", cursor:"pointer" }}>{t("remote_profile_save")}</button>
-        </div>
-        {selectedProfile && (
-          <div style={{ textAlign:"right", marginTop:-8, marginBottom:8 }}>
-            <button type="button" onClick={deleteProfile} style={{ border:0, background:"none",
-              color:"var(--pl-error-text)", cursor:"pointer", fontSize:10 }}>{t("remote_profile_delete")}</button>
+        {view === "list" ? (
+          <ServerList servers={servers} profiles={profiles} inputStyle={inputStyle}
+            onOpenLog={openLog} onAddLog={server => editServer(server)} onEditServer={server => editServer(server)}
+            onNewServer={() => editServer(null)}
+            onDeleteServer={server => onRemoteChange?.(deleteServer({ servers, profiles }, server.id))}
+            onDeleteLog={log => onRemoteChange?.(deleteLog({ servers, profiles }, log.id))}
+            legacyWsl={profiles.filter(profile => profile.mode === "wsl")}
+            onOpenLegacyWsl={profile => onOpenWslFile?.(profile)} />
+        ) : <>
+        <fieldset style={{ border:"0.5px solid var(--pl-border)", borderRadius:6, padding:"8px 10px 10px", margin:"0 0 12px",
+                           boxShadow: envColor(env) ? `inset 3px 0 0 ${envColor(env)}` : "none" }}>
+          <legend style={{ color:"var(--pl-text-3)", fontSize:11, fontWeight:700, padding:"0 4px" }}>{t("srv_server")}</legend>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:8 }}>
+            <input style={inputStyle} value={serverName} onChange={e => setServerName(e.target.value)}
+              placeholder={t("srv_name")} aria-label={t("srv_name")} />
+            <select style={{ ...inputStyle, width:"auto" }} value={env} onChange={e => setEnv(e.target.value)} aria-label={t("srv_env")}>
+              {ENVIRONMENTS.map(item => <option key={item || "none"} value={item}>{item ? t(`env_${item}`) : t("env_none")}</option>)}
+            </select>
           </div>
-        )}
+        </fieldset>
 
         <div style={{ color:"var(--pl-text-3)", fontSize:11, fontWeight:700, marginBottom:8 }}>
           {t("remote_connection_type")}
@@ -705,6 +748,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
           </div>
         )}
 
+        <div style={{ color:"var(--pl-text-3)", fontSize:11, fontWeight:700, margin:"4px 0 8px" }}>{t("srv_what_to_read")}</div>
         <label style={{ display:"flex", alignItems:"center", gap:10, color:"var(--pl-text-3)", fontSize:11, marginBottom:10 }}>
           {t("remote_source")}
           <select style={{ ...inputStyle, width:"auto" }} value={source} onChange={event => setSource(event.target.value)}>
@@ -810,6 +854,22 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
             </button>
           </>
         )}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:8, margin:"12px 0 10px", alignItems:"center" }}>
+          <input style={inputStyle} value={logName} onChange={e => setLogName(e.target.value)}
+            placeholder={t("srv_log_name")} aria-label={t("srv_log_name")} />
+          <button type="button" onClick={saveProfile} disabled={mode === "wsl" || !target.trim()}
+            title={hasSource ? t("srv_save_title") : t("srv_save_server_title")}
+            style={{ ...inputStyle, width:"auto", cursor:"pointer", whiteSpace:"nowrap" }}>
+            {hasSource ? t("srv_save") : t("srv_save_server")}
+          </button>
+          {(savedNote || logId) && (
+            <div style={{ gridColumn:"1 / -1", display:"flex", gap:10, fontSize:10 }}>
+              {savedNote && <span style={{ color:"var(--pl-status-live)" }}>✓ {savedNote}</span>}
+              {logId && <button type="button" onClick={deleteCurrentLog} style={{ border:0, background:"none", marginLeft:"auto",
+                color:"var(--pl-error-text)", cursor:"pointer", fontSize:10 }}>{t("srv_delete_log")}</button>}
+            </div>
+          )}
+        </div>
         <button type="submit" disabled={!canSubmit}
           style={{ background: canSubmit ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
                    border:`0.5px solid ${canSubmit ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
@@ -824,6 +884,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
                    fontSize:11, padding:"7px 20px", cursor:"pointer" }}>
           {t("cancel")}
         </button>
+        </>}
       </form>
     </div>
   );
@@ -832,7 +893,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], onProfil
 /* ═══════════════════════════════════════════
    RemoteTab
 ═══════════════════════════════════════════ */
-function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActive = false }) {
+function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, onStatus, isActive = false }) {
   const t = useLang();
   const searchInputRef = useRef(null);
   const filterInputRef = useRef(null);
@@ -851,6 +912,13 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, isActi
   const [reloadNonce,setReloadNonce]= useState(0);
   const [reconnectIn,setReconnectIn]= useState(0);
   const [ended, setEnded] = useState(false);
+  // last connection result for the server list (✓ / ✗)
+  const onStatusRef = useRef(onStatus);
+  onStatusRef.current = onStatus;
+  useEffect(() => {
+    if (connected) onStatusRef.current?.(true);
+    else if (error) onStatusRef.current?.(false, error);
+  }, [connected, error]);
   const [filter,       setFilter]       = useRememberedState(tabKey, "filter", "");
   const [filterUseRegex, setFilterUseRegex] = useRememberedState(tabKey, "useRegex", false);
   const [extraFilters, setExtraFilters] = useRememberedState(tabKey, "extraFilters", () => []);

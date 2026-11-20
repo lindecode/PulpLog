@@ -2460,7 +2460,7 @@ function normalizePaneTabs(tabsArr) {
 
 function normalizeRemoteProfiles(value) {
   if (!Array.isArray(value)) return [];
-  return value.slice(0, 30).filter(profile => profile && typeof profile === "object").map((profile, index) => ({
+  return value.slice(0, 200).filter(profile => profile && typeof profile === "object").map((profile, index) => ({
     id: typeof profile.id === "string" && profile.id ? profile.id.slice(0, 80) : `profile-${index}`,
     name: typeof profile.name === "string" ? profile.name.slice(0, 80) : "SSH",
     mode: ["ssh", "ssh-wsl", "ssh-native", "wsl"].includes(profile.mode) ? profile.mode : "ssh",
@@ -2481,7 +2481,28 @@ function normalizeRemoteProfiles(value) {
     maxInitialMb: normalizeRemoteHistory(profile).maxMb,
     vaultCredentialId: typeof profile.vaultCredentialId === "string" ? profile.vaultCredentialId.slice(0, 100) : "",
     interactiveAuth: profile.interactiveAuth === true,
+    serverId: typeof profile.serverId === "string" ? profile.serverId.slice(0, 80) : "",
   }));
+}
+
+function normalizeRemoteServers(value) {
+  if (!Array.isArray(value)) return [];
+  const raws = value.filter(server => server && typeof server === "object").slice(0, 100);
+  const connections = normalizeRemoteProfiles(raws);
+  return connections.map((connection, index) => {
+    const raw = raws[index];
+    const status = raw.lastStatus && typeof raw.lastStatus === "object" ? raw.lastStatus : null;
+    return {
+      id: connection.id, name: connection.name,
+      env: ["prod", "staging", "dev"].includes(raw.env) ? raw.env : "",
+      mode: connection.mode === "wsl" ? "ssh" : connection.mode,
+      target: connection.target, user: connection.user, port: connection.port, identityFile: connection.identityFile,
+      fingerprint: connection.fingerprint, proxyJump: connection.proxyJump, jumps: connection.jumps, distro: connection.distro,
+      vaultCredentialId: connection.vaultCredentialId, interactiveAuth: connection.interactiveAuth,
+      ...(status ? { lastStatus: { ok: status.ok === true, at: Number.isFinite(status.at) ? status.at : 0,
+        error: typeof status.error === "string" ? status.error.slice(0, 300) : "" } } : {}),
+    };
+  });
 }
 
 function normalizeSettings(value) {
@@ -2520,6 +2541,7 @@ function normalizeSettings(value) {
   return {
     recentFiles: Array.isArray(s.recentFiles) ? s.recentFiles.filter(f => typeof f === "string") : [],
     remoteProfiles: normalizeRemoteProfiles(s.remoteProfiles),
+    remoteServers: normalizeRemoteServers(s.remoteServers),
     panes,
     splitDirection,
     splitRatio,

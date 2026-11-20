@@ -51,6 +51,11 @@ function normalizeRemote(value) {
     tailLines: tail,
     historyMode: ["lines", "bytes", "full"].includes(value.historyMode) ? value.historyMode : "lines",
     maxInitialMb: Number.isFinite(mbNum) ? Math.min(Math.max(mbNum, 1), 200) : 100,
+    // saved server it came from: tab colour, name and last-connection status
+    serverId: str(value.serverId, 80),
+    serverName: str(value.serverName, 80),
+    env: ["prod", "staging", "dev"].includes(value.env) ? value.env : "",
+    logName: str(value.logName, 80),
   };
 }
 

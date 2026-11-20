@@ -6,6 +6,7 @@ import { Pane, usePaneTabs, remoteTabLabel } from "./components/Pane.jsx";
 import { WorkspaceSelector, WorkspacesModal } from "./components/Workspaces.jsx";
 import { useWorkspaces, entryFromTab } from "./workspaces.mjs";
 import { DiagPanel, SettingsModal, AboutModal, HelpGuideModal, AskpassPrompt } from "./components/Modals.jsx";
+import { migrateRemote } from "./remoteServers.mjs";
 import { AiSettingsCtx } from "./components/AnalysisSidebar.jsx";
 
 export default function App() {
@@ -15,7 +16,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen]= useState(false);
   const [capabilities, setCapabilities]= useState(null);
   const [settings,     setSettings]    = useState({
-    recentFiles:[], remoteProfiles:[], autoScrollDefault:false, showNumsDefault:true,
+    recentFiles:[], remoteProfiles:[], remoteServers:[], autoScrollDefault:false, showNumsDefault:true,
     sshAgentPollingEnabled:false, maxLiveLines:500000, language:"es", theme:"lindecode"
   });
   const [splitDirection, setSplitDirection] = useState(null); // null | "row" | "column"
@@ -154,9 +155,15 @@ export default function App() {
     setSettings(prev => ({ ...prev, recentFiles: [] }));
   }, []);
 
-  const saveRemoteProfiles = useCallback((remoteProfiles) => {
-    setSettings(prev => ({ ...prev, remoteProfiles }));
-    if (IS_ELECTRON) window.electronAPI.setSettings({ remoteProfiles });
+  /* Servers and saved logs change together: update(fn) receives { servers, profiles } and returns the new pair. */
+  const updateRemote = useCallback((update) => {
+    setSettings(prev => {
+      const current = { servers:prev.remoteServers || [], profiles:prev.remoteProfiles || [] };
+      const next = typeof update === "function" ? update(current) : update;
+      if (!next || (next.servers === current.servers && next.profiles === current.profiles)) return prev;
+      if (IS_ELECTRON) window.electronAPI.setSettings({ remoteServers:next.servers, remoteProfiles:next.profiles });
+      return { ...prev, remoteServers:next.servers, remoteProfiles:next.profiles };
+    });
   }, []);
 
   const closeSplit = () => {
@@ -202,6 +209,9 @@ export default function App() {
         const s = await window.electronAPI.getSettings();
         if (!alive) return;
         setSettings(prev => ({ ...prev, ...s, recentFiles: s.recentFiles || [] }));
+        // flat SSH profiles from older versions → servers with their logs
+        const migrated = migrateRemote({ servers:s.remoteServers || [], profiles:s.remoteProfiles || [] });
+        if (migrated.changed) updateRemote({ servers:migrated.servers, profiles:migrated.profiles });
 
         const initialArg = await window.electronAPI.getInitialFileArg();
         if (!alive) return;
@@ -359,7 +369,7 @@ export default function App() {
                         minWidth:0, minHeight:0, display:"flex", overflow:"hidden" }}>
             <Pane paneId="A" focused={focusedPane==="A"} onFocus={() => setFocusedPane("A")}
                   pane={paneA} capabilities={capabilities} settings={settings}
-                  onRemoteProfilesChange={saveRemoteProfiles}
+                  onRemoteChange={updateRemote}
                   onTogglePref={savePref}
                   workspaces={IS_ELECTRON ? workspacesForPanes : null} />
           </div>
@@ -374,7 +384,7 @@ export default function App() {
                             minWidth:0, minHeight:0, display:"flex", overflow:"hidden" }}>
                 <Pane paneId="B" focused={focusedPane==="B"} onFocus={() => setFocusedPane("B")}
                       pane={paneB} capabilities={capabilities} settings={settings}
-                      onRemoteProfilesChange={saveRemoteProfiles}
+                      onRemoteChange={updateRemote}
                       onTogglePref={savePref}
                   workspaces={IS_ELECTRON ? workspacesForPanes : null} />
               </div>
