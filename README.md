@@ -796,7 +796,7 @@ El límite de líneas vivas configurado en PulpLog continúa protegiendo la memo
 | Función | Detalle |
 |---------|---------|
 | Idioma | Interfaz en español o inglés |
-| Tema | LindeCode (por defecto; color hueso con cabecera oscura, como lindecode.cloud), Clásica, Blanca, Oscura, Brasa (fuego/carmesí), Azul (oscuro, tonalidad azul), Bosque (verde grisáceo) u OldmanJava (gris hueso de sistema de los 90, botones con relieve y las fuentes Lucida de Java Swing) |
+| Tema | LindeCode (por defecto; color hueso con cabecera oscura, como lindecode.cloud), Clásica, Blanca, Oscura, Brasa (fuego/carmesí), Pinky (rosa claro con acentos fucsia), Azul (oscuro, tonalidad azul), Bosque (verde grisáceo) u OldmanJava (gris hueso de sistema de los 90, botones con relieve y las fuentes Lucida de Java Swing) |
 | Preferencias | Auto-scroll por defecto y números de línea por defecto |
 | Bóveda SSH | Crear, desbloquear, bloquear, listar o eliminar contraseñas SSH cifradas localmente |
 | Bitácora interna | Panel de diagnóstico con eventos de archivos, Docker y atajos |

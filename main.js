@@ -2547,7 +2547,7 @@ function normalizeRemoteServers(value) {
 function normalizeSettings(value) {
   const s = value && typeof value === "object" ? value : {};
   const language = ["es", "en"].includes(s.language) ? s.language : "es";
-  const theme = ["lindecode", "classic", "light", "vscode", "ember", "blue", "forest", "oldmanjava"].includes(s.theme) ? s.theme : "lindecode";
+  const theme = ["lindecode", "classic", "light", "vscode", "ember", "pinky", "blue", "forest", "oldmanjava"].includes(s.theme) ? s.theme : "lindecode";
   const skippedUpdateVersion = parseReleaseVersion(s.skippedUpdateVersion) ? String(s.skippedUpdateVersion).trim() : "";
 
   let panes;
