@@ -18,7 +18,9 @@ const MAX_PATTERN_MATCHES = 20;
 const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
 
 /* A file entry is a pattern when its file name (not its folder) has * or ? */
-const isPattern = filePath => /[*?]/.test(path.basename(String(filePath || "")));
+// file name with either separator: a workspace exported on Windows keeps its labels on macOS/Linux
+const fileName = filePath => String(filePath || "").split(/[\\/]/).pop();
+const isPattern = filePath => /[*?]/.test(fileName(filePath));
 
 const str = (value, max, fallback = "") => typeof value === "string" ? value.slice(0, max) : fallback;
 const hasControl = value => /[\x00-\x1f]/.test(value);
@@ -72,9 +74,9 @@ function normalizeEntry(value) {
     if (!filePath || hasControl(filePath)) return null;
     if (/[*?]/.test(path.dirname(filePath))) return null; // wildcards only in the file name
     if (isPattern(filePath)) {
-      return { type:"file", filePath, label: label || path.basename(filePath), latestOnly: value.latestOnly !== false };
+      return { type:"file", filePath, label: label || fileName(filePath), latestOnly: value.latestOnly !== false };
     }
-    return { type:"file", filePath, label: label || path.basename(filePath) };
+    return { type:"file", filePath, label: label || fileName(filePath) };
   }
   if (value.type === "docker") {
     // "docker" entries cover every container runtime; no runtime = Docker (older files)
