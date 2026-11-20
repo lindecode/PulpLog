@@ -1021,6 +1021,15 @@ const GUIDE = {
       "Los logs de WSL2 de este equipo se abren como archivos (botón 🐧 o «Abrir archivo» → Linux); si solo root puede leerlos, usa «Abrir como root».",
       "Las contraseñas pueden guardarse en la bóveda local cifrada; servidores y bitácoras solo conservan su referencia. Se administra en Configuración; si olvidas la contraseña maestra debes borrar la bóveda completa.",
     ]},
+    { title:"Bóveda de contraseñas", items:[
+      "Guarda cifradas en este equipo las contraseñas SSH: la del servidor de destino y la de cada salto. Se crea y administra en Configuración → Bóveda local de credenciales SSH.",
+      "Al crearla eliges una contraseña maestra (mínimo 12 caracteres). Las contraseñas se cifran con AES-256-GCM usando una clave derivada de ella (scrypt). PulpLog no guarda la contraseña maestra.",
+      "Desbloquéala para guardar o usar contraseñas; la clave solo vive en memoria mientras PulpLog está abierto. «Bloquear» la retira de inmediato y se bloquea sola al cerrar la app.",
+      "Para guardar una contraseña, escríbela en el diálogo SSH (destino o salto) y marca «Guardar contraseña en la bóveda local». Servidores, bitácoras y workspaces solo conservan su identificador, nunca la contraseña.",
+      "Si el servidor rechaza una contraseña guardada 3 veces, queda bloqueada para no provocar bloqueos de cuenta: escribe la nueva y vuelve a guardarla.",
+      "En Configuración puedes ver las credenciales guardadas, eliminar una o borrar la bóveda completa. Las conexiones guardadas no se borran; pedirán la contraseña de nuevo.",
+      "Si olvidas la contraseña maestra no hay recuperación: «Olvidé mi contraseña» borra la bóveda completa y tendrás que volver a guardar cada contraseña.",
+    ]},
     { title:"Configuración y diagnóstico", items:[
       "Idioma, tema (incluye «Brasa» y «Azul»), archivos recientes y preferencias por defecto.",
       "El botón 📋 abre la bitácora interna, útil para diagnosticar problemas de Docker, SSH o atajos globales.",
@@ -1066,6 +1075,15 @@ const GUIDE = {
       "\"SSH configuration from\" picks Windows or a WSL2 distro. A password or passphrase is only given to the server it belongs to; tick \"Ask me…\" for 2FA codes.",
       "WSL2 logs on this computer open as files (🐧 button or \"Open file\" → Linux); if only root can read them, use \"Open as root\".",
       "Passwords can be stored in the encrypted local vault; servers and logs only keep a reference. Manage it in Settings; forgetting the master password requires deleting the entire vault.",
+    ]},
+    { title:"Password vault", items:[
+      "Stores SSH passwords encrypted on this computer: the destination server's and each hop's. Create and manage it in Settings → Local SSH credential vault.",
+      "When creating it you choose a master password (12 characters minimum). Passwords are encrypted with AES-256-GCM using a key derived from it (scrypt). PulpLog never stores the master password.",
+      "Unlock it to save or use passwords; the key only lives in memory while PulpLog is open. \"Lock\" drops it immediately, and it locks itself when the app closes.",
+      "To save a password, type it in the SSH dialog (destination or hop) and tick \"Save password in the local vault\". Servers, logs and workspaces only keep its identifier, never the password.",
+      "If the server rejects a saved password 3 times, it is blocked to avoid account lockouts: type the new one and save it again.",
+      "In Settings you can see the saved credentials, delete one, or delete the whole vault. Saved connections are kept; they will ask for the password again.",
+      "There is no recovery if you forget the master password: \"I forgot my password\" deletes the whole vault and every password must be saved again.",
     ]},
     { title:"Settings and diagnostics", items:[
       "Language, theme (including “Ember” and “Blue”), recent files, and default preferences.",
