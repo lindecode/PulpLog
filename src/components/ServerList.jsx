@@ -72,10 +72,10 @@ export function ServerList({ servers, profiles, inputStyle, onOpenLog, onAddLog,
                     <span key={log.id} style={{ display:"inline-flex", alignItems:"center", border:"0.5px solid var(--pl-border)",
                                                 borderRadius:5, background:"var(--pl-bg-panel)" }}>
                       <button type="button" onClick={() => onOpenLog(log, server)}
-                        title={log.source === "docker" ? `Docker · ${log.containerName || log.containerId}` : log.filePath}
+                        title={log.source === "docker" ? `Docker · ${log.containerName || log.containerId}` : log.source === "journal" ? logDisplayName(log) : log.filePath}
                         style={{ border:0, background:"none", color:"var(--pl-text-2)", cursor:"pointer", fontSize:11,
                                  fontFamily:"inherit", padding:"4px 8px" }}>
-                        {log.source === "docker" ? "🐳 " : ""}{log.name || logDisplayName(log)}
+                        {log.source === "docker" ? "🐳 " : log.source === "journal" ? "⚙ " : ""}{log.sudo ? "# " : ""}{log.name || logDisplayName(log)}
                       </button>
                       <button type="button" onClick={() => onDeleteLog(log)} title={t("srv_delete_log")} aria-label={t("srv_delete_log")}
                         style={{ border:0, background:"none", color:"var(--pl-text-6)", cursor:"pointer", fontSize:10, padding:"4px 6px 4px 0" }}>✕</button>

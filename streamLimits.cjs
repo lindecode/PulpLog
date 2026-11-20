@@ -10,8 +10,13 @@ function splitLines(carry, text, limit = MAX_LINE_CHARS) {
   return { lines:parts.slice(0, -1), carry:parts.at(-1) || "" };
 }
 
-function createLineDecoder() {
-  const decoder = new StringDecoder("utf8");
+/* encoding: "utf-8" (default) or any WHATWG label such as "windows-1252" for Latin-1 logs. */
+function createLineDecoder(encoding = "utf-8") {
+  const utf8 = !encoding || /^utf-?8$/i.test(encoding);
+  const decoder = utf8 ? new StringDecoder("utf8") : (() => {
+    const text = new TextDecoder(encoding);
+    return { write: chunk => text.decode(chunk, { stream:true }), end: () => text.decode() };
+  })();
   let carry = "";
   return {
     write(chunk) { const result = splitLines(carry, decoder.write(chunk)); carry = result.carry; return result.lines; },

@@ -34,6 +34,7 @@ const isContentTab = tab => !!(tab.filePath || tab.docker || tab.remote || tab.m
 
 export function remoteTabLabel(config) {
   if (config.serverName && config.mode !== "wsl") return `${config.serverName} · ${config.logName || config.containerName || config.filePath?.split("/").pop() || ""}`;
+  if (config.source === "journal") return `journalctl${config.journalUnit ? ` ${config.journalUnit}` : ""} · ${config.user && !config.target.includes("@") ? `${config.user}@${config.target}` : config.target}`;
   const name = config.mode === "wsl"
     ? (config.distro ? `WSL ${config.distro}` : "WSL")
     : config.mode === "ssh-wsl"
@@ -458,7 +459,8 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
                 tab.remote   ? [tab.remote.mode === "wsl" ? "WSL" : "SSH",
                                  tab.remote.serverName && `${tab.remote.serverName}${tab.remote.env ? ` (${tab.remote.env})` : ""}`,
                                  tab.remote.mode !== "wsl" && chainSummary(initialJumps(tab.remote), `${tab.remote.user ? `${tab.remote.user}@` : ""}${tab.remote.target}`, t("jump_origin")),
-                                 tab.remote.source === "docker" ? tab.remote.containerName : tab.remote.filePath].filter(Boolean).join("\n") :
+                                 tab.remote.source === "docker" ? tab.remote.containerName : tab.remote.source === "journal" ? `journalctl ${tab.remote.journalUnit || ""}` : tab.remote.filePath,
+                                 [tab.remote.sudo && "sudo", tab.remote.encoding && tab.remote.encoding !== "utf-8" && tab.remote.encoding, tab.remote.timeZone].filter(Boolean).join(" · ")].filter(Boolean).join("\n") :
                 tab.filePath ? tab.filePath :
                                t("hint_electron"))
               }
@@ -598,7 +600,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
               ? <RemoteTab key={`remote-${tab.id}-${tab.reloadNonce || 0}`}
                            tabKey={String(tab.id)} maxLiveLines={settings.maxLiveLines} config={tab.remote}
                            onConfigureConnection={() => setRemotePicker({ tabId:tab.id,
-                             config:{ ...tab.remote, password:"", passphrase:"", trustHostForSession:false } })}
+                             config:{ ...tab.remote, password:"", passphrase:"", sudoPassword:"", trustHostForSession:false } })}
                            onStatus={(ok, error) => tab.remote.serverId && onRemoteChange?.(state =>
                              ({ ...state, servers:recordServerStatus(state.servers, tab.remote.serverId, ok, error) }))}
                            isActive={tab.id === activeTab.id && focused} />

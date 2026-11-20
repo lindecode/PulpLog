@@ -1,6 +1,6 @@
 {
   "name": "pulplog",
-  "version": "4.2.0",
+  "version": "5.0.0",
   "description": "PulpLog — visor de logs avanzado",
   "author": "LindeCode S.A.S.",
   "license": "MIT",
@@ -50,6 +50,7 @@
       "remoteDocker.cjs",
       "captures.cjs",
       "sshInvocation.cjs",
+      "remoteSource.cjs",
       "askpass.cjs",
       "vllm.cjs",
       "workspaces.cjs",

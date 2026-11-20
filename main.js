@@ -22,6 +22,7 @@ const containerRuntimes = require("./containerRuntimes.cjs");
 const { createCredentialStore, authHeaders, assertCredentialTransport, redactError } = require("./aiCredentials.cjs");
 const { isTrustedSender, assertStreamOwner } = require("./ipcSecurity.cjs");
 const { createLineDecoder, MAX_FILE_BYTES, MAX_AI_BYTES } = require("./streamLimits.cjs");
+const remoteSource = require("./remoteSource.cjs");
 const { createConversationStore } = require("./conversationStore.cjs");
 const { createCredentialVault } = require("./credentialVault.cjs");
 const { createCaptureManager } = require("./captures.cjs");
@@ -1422,7 +1423,17 @@ function normalizeRemoteHistory(config) {
   return { mode, maxMb, maxBytes:maxMb * 1024 * 1024, tailLines:normalizeTailLines(config?.tailLines) };
 }
 
+/* What runs on the server: the source script, as root when the log asks for sudo. */
 function buildRemoteTailScript(config, filePath) {
+  return remoteSource.withSudo(buildRemoteSourceScript(config, filePath), config);
+}
+
+function hasRemoteSource(config) {
+  return config?.source === "docker" || config?.source === "journal" || Boolean(String(config?.filePath || "").trim());
+}
+
+function buildRemoteSourceScript(config, filePath) {
+  if (config?.source === "journal") return remoteSource.journalScript(config, REMOTE_READY_MARKER);
   if (config?.source === "docker") return dockerLogsScript(config, REMOTE_READY_MARKER, mt("remote_docker_unavailable"));
   const history = normalizeRemoteHistory(config);
   const quotedPath = quotePosixArg(filePath);
@@ -1451,6 +1462,14 @@ function buildRemoteTailScript(config, filePath) {
 }
 
 function buildRemoteReadCheck(filePath, config) {
+  const check = buildRemoteSourceCheck(filePath, config);
+  // the test cannot type a sudo password; with passwordless sudo it checks as root
+  return remoteSource.normalizeSudo(config?.sudo) === "nopasswd" ? remoteSource.withSudo(check, config)
+    : remoteSource.normalizeSudo(config?.sudo) === "password" ? "command -v sudo >/dev/null" : check;
+}
+
+function buildRemoteSourceCheck(filePath, config) {
+  if (config?.source === "journal") { remoteSource.normalizeJournalUnit(config?.journalUnit); return "command -v journalctl >/dev/null"; }
   if (config?.source === "docker") return dockerReadCheck(config, mt("remote_docker_unavailable"));
   const quotedPath = quotePosixArg(filePath);
   const tailDetect = `TAIL=tail; if [ -x /opt/freeware/bin/tail ]; then TAIL=/opt/freeware/bin/tail; `
@@ -1747,7 +1766,7 @@ function buildRemoteCommand(config) {
   const mode = ["wsl", "ssh-wsl"].includes(config?.mode) ? config.mode : "ssh";
   const filePath = String(config?.filePath || "").trim();
   const tailScript = buildRemoteTailScript(config, filePath);
-  if (!filePath && config?.source !== "docker") throw new Error("La ruta de la bitácora es obligatoria");
+  if (!hasRemoteSource(config)) throw new Error("La ruta de la bitácora es obligatoria");
 
   if (mode === "wsl") {
     if (process.platform !== "win32") throw new Error("WSL2 solo esta disponible en Windows");
@@ -1811,7 +1830,7 @@ async function listSystemRemoteDirectory(config, owner = null) {
 
 async function testSystemSsh(config, owner = null) {
   const filePath = String(config?.filePath || "").trim();
-  if (!filePath && config?.source !== "docker") return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
+  if (!hasRemoteSource(config)) return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
   const spec = systemSshInvocation(config, buildRemoteReadCheck(filePath, config));
   const auth = await sshAskpass(config, spec, owner);
   const { command, args:commandArgs } = spec;
@@ -1831,7 +1850,7 @@ function testNativeSsh(config, command = null) {
   const expectedFingerprint = normalizeFingerprint(config?.fingerprint);
   const trustHostForSession = Boolean(config?.trustHostForSession);
   const discoveringHost = !expectedFingerprint && !trustHostForSession;
-  if (!discoveringHost && !filePath && config?.source !== "docker" && !command) return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
+  if (!discoveringHost && !hasRemoteSource(config) && !command) return Promise.reject(new Error("La ruta de la bitácora es obligatoria"));
   const username = requestedUsername || (discoveringHost ? (process.env.USERNAME || "pulplog") : "");
   if (!username) return Promise.reject(new Error("El usuario SSH es obligatorio para validar el acceso"));
   const password = String(config?.password || "");
@@ -1976,7 +1995,7 @@ function startNativeSshStream(event, payload) {
   const streamId = payload?.streamId;
   const filePath = String(payload?.filePath || "").trim();
   const tailScript = buildRemoteTailScript(payload, filePath);
-  if (!filePath && payload?.source !== "docker") throw new Error("La ruta de la bitácora es obligatoria");
+  if (!hasRemoteSource(payload)) throw new Error("La ruta de la bitácora es obligatoria");
 
   const { host, username, port, identityFile, target } = validateSshTarget(payload);
   if (!username) throw new Error("El usuario SSH es obligatorio para credenciales");
@@ -2012,7 +2031,7 @@ function startNativeSshStream(event, payload) {
   const label = `${username}@${target}:${filePath}`;
   const client = new SshClient();
   const stream = { client, channel: null, stopped: false, label, sender:event.sender };
-  const lineDecoder = createLineDecoder();
+  const lineDecoder = createLineDecoder(remoteSource.normalizeEncoding(payload?.encoding));
   let stderrBuf = "";
   let hadLines = false;
   let dropFirstHistoryLine = false;
@@ -2080,6 +2099,9 @@ function startNativeSshStream(event, payload) {
         return;
       }
       stream.channel = channel;
+      const sudoPassword = remoteSource.sudoSecret(payload);
+      if (sudoPassword) channel.end(`${sudoPassword}
+`);
       send("remote:spawned", streamId);
       channel.on("data", flushLines);
       channel.stderr.on("data", data => {
@@ -2096,7 +2118,7 @@ function startNativeSshStream(event, payload) {
         }
         const stderrText = stderrBuf.trim();
         if (code || hasRemoteGzipError(filePath, stderrText)) {
-          const msg = stderrText || `tail terminó con código ${code}`;
+          const msg = remoteSource.sudoError(stderrText) || stderrText || `tail terminó con código ${code}`;
           logEntry("ERROR", "remote", `${label}: ${msg}`);
           showRemoteStreamAlert(event, payload, mt("err_remote"), msg);
           send("remote:error", streamId, msg);
@@ -2178,7 +2200,11 @@ async function startRemoteLogs(event, payload) {
   }
   const proc = spawn(spec.command, spec.args, { windowsHide: true, env:auth.env });
   const stream = { proc, stopped: false, label: spec.label, sender:event.sender };
-  const lineDecoder = createLineDecoder();
+  const lineDecoder = createLineDecoder(remoteSource.normalizeEncoding(payload?.encoding));
+  // sudo -S reads the password once; stdin is then closed so a wrong one ends the command
+  const sudoPassword = remoteSource.sudoSecret(payload);
+  if (sudoPassword) { proc.stdin.on("error", () => {}); proc.stdin.end(`${sudoPassword}
+`); }
   let stderrBuf = "";
   let hadLines = false;
   let remoteReady = false;
@@ -2263,7 +2289,7 @@ async function startRemoteLogs(event, payload) {
     const stderrText = stderrBuf.trim();
     const isError = (code !== null && code !== 0) || hasRemoteGzipError(payload?.filePath, stderrText);
     if (isError) {
-      const msg = stderrText || `${spec.command} terminó con código ${code}`;
+      const msg = remoteSource.sudoError(stderrText) || stderrText || `${spec.command} terminó con código ${code}`;
       logEntry("ERROR", "remote", `${spec.label}: ${msg}`);
       showRemoteStreamAlert(event, payload, mt("err_remote"), msg);
       send("remote:error", streamId, msg);
@@ -2458,6 +2484,12 @@ function normalizePaneTabs(tabsArr) {
     : [];
 }
 
+function normalizeTimeZone(value) {
+  const zone = typeof value === "string" ? value.trim().slice(0, 64) : "";
+  if (!zone) return "";
+  try { new Intl.DateTimeFormat("en", { timeZone:zone }); return zone; } catch { return ""; }
+}
+
 function normalizeRemoteProfiles(value) {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 200).filter(profile => profile && typeof profile === "object").map((profile, index) => ({
@@ -2473,7 +2505,11 @@ function normalizeRemoteProfiles(value) {
     jumps: publicJumps(profile.jumps),
     distro: typeof profile.distro === "string" ? profile.distro.slice(0, 160) : "",
     filePath: typeof profile.filePath === "string" ? profile.filePath.slice(0, 4096) : "",
-    source: profile.source === "docker" ? "docker" : "file",
+    source: ["docker", "journal"].includes(profile.source) ? profile.source : "file",
+    journalUnit: (() => { try { return remoteSource.normalizeJournalUnit(profile.journalUnit); } catch { return ""; } })(),
+    sudo: remoteSource.normalizeSudo(profile.sudo),
+    encoding: remoteSource.normalizeEncoding(profile.encoding),
+    timeZone: normalizeTimeZone(profile.timeZone),
     containerId: typeof profile.containerId === "string" ? profile.containerId.slice(0, 128) : "",
     containerName: typeof profile.containerName === "string" ? profile.containerName.slice(0, 128) : "",
     tailLines: normalizeTailLines(profile.tailLines),

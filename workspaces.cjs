@@ -7,6 +7,7 @@ const fs = require("fs");
 const { publicJumps } = require("./sshInvocation.cjs");
 const path = require("path");
 const containerRuntimes = require("./containerRuntimes.cjs");
+const remoteSource = require("./remoteSource.cjs");
 
 const MAX_WORKSPACES = 50;
 const MAX_ENTRIES = 60;
@@ -45,7 +46,11 @@ function normalizeRemote(value) {
     jumps: publicJumps(value.jumps),
     distro: str(value.distro, 160),
     filePath: str(value.filePath, 4096),
-    source: value.source === "docker" ? "docker" : "file",
+    source: ["docker", "journal"].includes(value.source) ? value.source : "file",
+    journalUnit: (() => { try { return remoteSource.normalizeJournalUnit(value.journalUnit); } catch { return ""; } })(),
+    sudo: remoteSource.normalizeSudo(value.sudo),
+    encoding: remoteSource.normalizeEncoding(value.encoding),
+    timeZone: str(value.timeZone, 64),
     containerId: str(value.containerId, 128),
     containerName: str(value.containerName, 128),
     tailLines: tail,
@@ -109,7 +114,7 @@ function entryKey(entry) {
     return `container:${runtime}|${entry.namespace || ""}|${entry.name || entry.containerId}`;
   }
   const r = entry.remote;
-  return `remote:${[r.mode, r.user, r.target, r.port, r.distro, r.source, r.filePath, r.containerName || r.containerId].join("|")}`;
+  return `remote:${[r.mode, r.user, r.target, r.port, r.distro, r.source, r.filePath, r.containerName || r.containerId, ...(r.journalUnit ? [r.journalUnit] : [])].join("|")}`;
 }
 
 function normalizeWorkspaces(value) {

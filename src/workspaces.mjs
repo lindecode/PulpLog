@@ -53,7 +53,7 @@ export function entryKey(entry, isWin = IS_WIN) {
     return `container:${runtime}|${entry.namespace || ""}|${entry.name || entry.containerId}`;
   }
   const r = entry.remote || {};
-  return `remote:${[r.mode, r.user, r.target, r.port, r.distro, r.source, r.filePath, r.containerName || r.containerId].join("|")}`;
+  return `remote:${[r.mode, r.user, r.target, r.port, r.distro, r.source, r.filePath, r.containerName || r.containerId, ...(r.journalUnit ? [r.journalUnit] : [])].join("|")}`;
 }
 
 export const tabKey = tab => entryKey(entryFromTab(tab));

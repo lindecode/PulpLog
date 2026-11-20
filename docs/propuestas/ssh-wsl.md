@@ -1,6 +1,6 @@
 # Propuesta: rediseño de SSH y WSL
 
-Estado: planteamiento · Fases 0 a 4 implementadas · Fecha: 2026-11-18
+Estado: planteamiento · Fases 0 a 5 implementadas · Fecha: 2026-11-18
 
 ## 1. Situación actual
 
@@ -212,7 +212,7 @@ Perfiles que comparten host, usuario y saltos se agrupan en un mismo servidor.
 | 2 | Cadena de saltos visual con campos por salto, tipos de salto y prueba salto a salto | **Hecho**: túnel y comando (primer salto), credenciales y bóveda por salto, prueba salto a salto. Pendiente: tipo «entrar desde el salto» y saltos en el motor directo |
 | 3 | Modelo servidor/bitácoras, lista de servidores, entornos con color, migración de perfiles | **Hecho** (`src/remoteServers.mjs`, `ServerList.jsx`): lista agrupada por entorno con búsqueda y última conexión, franja de color y tooltip con la cadena en la pestaña. Pendiente: asistente en 3 pasos, «reconectando en N s» en la pestaña, colores personalizados |
 | 4 | WSL local como archivos `\\wsl.localhost`; "SSH desde WSL" como opción | **Hecho** (`src/wslPaths.mjs`) |
-| 5 | `sudo`, `journalctl`, zona horaria y codificación | |
+| 5 | `sudo`, `journalctl`, zona horaria y codificación | **Hecho** (`remoteSource.cjs`, `src/logTime.mjs`): sudo NOPASSWD o con contraseña por stdin; journalctl por unidad (historial con cursor y seguimiento con `--after-cursor`, porque `-u -n -f` no imprime nada en systemd 255); UTF-8 / Windows-1252 / ISO-8859-15; zona horaria aplicada al combinar bitácoras. Pendiente: zona horaria en los filtros por hora y en el chat |
 | 6 | Importar `~/.ssh/config`, exportar sin secretos, `Ctrl+K`, bloqueo de la bóveda | |
 
 ## 13. Pendiente de verificar

@@ -4,19 +4,20 @@
 // (live lines are appended in arrival order). Lines without a timestamp
 // (stack traces, continuations) inherit the previous line's timestamp so they
 // stay glued to their parent entry.
-import { parseTimestampFromText } from "./logProcessing.mjs";
+import { lineInstant } from "./logTime.mjs";
 
 const EMIT_CHUNK = 20_000;
 
-/* Pure: [{ label, lines:[string] }] → merged string[] ordered by time.
+/* Pure: [{ label, lines:[string], timeZone? }] → merged string[] ordered by time.
+   timeZone (IANA) says in which zone the log writes its times; without it, local time.
    Within one file the original order is preserved (stable sort). */
 export function mergeByTimestamp(sources, maxLines = Infinity) {
   const rows = [];
   sources.forEach((source, sourceIndex) => {
     let lastTs = null;
-    const firstTs = source.lines.map(line => parseTimestampFromText(line)).find(ts => ts != null) ?? null;
+    const firstTs = source.lines.map(line => lineInstant(line, source.timeZone)).find(ts => ts != null) ?? null;
     source.lines.forEach((line, lineIndex) => {
-      const ts = parseTimestampFromText(line);
+      const ts = lineInstant(line, source.timeZone);
       if (ts != null) lastTs = ts;
       rows.push({ ts: lastTs ?? firstTs ?? -Infinity, sourceIndex, lineIndex, text: `[${source.label}] ${line}` });
     });
@@ -73,7 +74,7 @@ export function createMergedStream(entries, { onSpawned, onLines, onEnd, onError
     try {
       const { filePath, error } = await window.electronAPI.startCapture(captureId, entry.stream.kind, entry.stream.payload);
       if (error) failures.push(`${entry.label}: ${error}`);
-      return { filePath, label: entry.label };
+      return { filePath, label: entry.label, timeZone: entry.stream.payload?.timeZone || "" };
     } catch (err) {
       failures.push(`${entry.label}: ${err?.message || err}`);
       return null;
@@ -95,7 +96,7 @@ export function createMergedStream(entries, { onSpawned, onLines, onEnd, onError
     if (disposed) return;
     const results = await Promise.all(files.map(readOne));
     if (disposed) return;
-    const sources = files.map((file, index) => ({ label: file.label, lines: results[index]?.lines || [] }));
+    const sources = files.map((file, index) => ({ label: file.label, lines: results[index]?.lines || [], timeZone: file.timeZone || "" }));
     emit(mergeByTimestamp(sources, maxLines));
     if (failures.length) onError?.(failures.join("\n"));
     files.forEach((file, index) => { if (results[index]) startTail(file, results[index].bytes); });

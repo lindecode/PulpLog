@@ -42,6 +42,7 @@ export function defaultServerName(config = {}) {
 
 export function logDisplayName(profile = {}) {
   if (profile.source === "docker") return profile.containerName || profile.containerId || "Docker";
+  if (profile.source === "journal") return `journalctl${profile.journalUnit ? ` -u ${profile.journalUnit}` : ""}`;
   const path = profile.filePath || "";
   return path.split("/").filter(Boolean).pop() || path || "log";
 }
@@ -114,12 +115,13 @@ export function saveServerAndLog({ servers = [], profiles = [] }, config, { serv
   server = { ...(server || { id:newId("srv") }), ...fields, name, env:ENVIRONMENTS.includes(env) ? env : "" };
   const nextServers = [...servers.filter(item => item.id !== server.id), server];
 
-  const hasSource = config.source === "docker" ? !!config.containerId || !!config.containerName : !!(config.filePath || "").trim();
+  const hasSource = config.source === "docker" ? !!config.containerId || !!config.containerName
+    : config.source === "journal" ? true : !!(config.filePath || "").trim();
   // other logs of this server get the updated connection too (profiles stay openable on their own)
   const synced = profiles.map(item => item.serverId === server.id ? { ...item, ...fields } : item);
   if (!hasSource) return { servers:nextServers, profiles:synced, serverId:server.id, logId:"" };
   const id = logId || newId("log");
-  const { password, passphrase, trustHostForSession, serverName:_s, env:_e, logName:_l, ...rest } = config;
+  const { password, passphrase, sudoPassword, trustHostForSession, serverName:_s, env:_e, logName:_l, ...rest } = config;
   const log = { ...rest, ...fields, id, serverId:server.id, name:logName.trim() || logDisplayName(config) };
   if (Array.isArray(log.jumps)) log.jumps = fields.jumps;
   const nextProfiles = [...synced.filter(item => item.id !== id), log];

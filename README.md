@@ -624,6 +624,26 @@ Las contraseñas nunca se guardan en el servidor ni en la bitácora; solo la ref
 Las conexiones guardadas de versiones anteriores se convierten solas: las que comparten modo, host,
 usuario, puerto, llave y saltos quedan como un mismo servidor.
 
+#### Qué leer y opciones de lectura
+
+Cada bitácora de un servidor puede ser un **archivo remoto**, un **contenedor Docker remoto** o el
+**journal de systemd** (`journalctl`, por unidad como `nginx.service` o el journal completo). En
+**Opciones de lectura**:
+
+- **Leer como root**: `sudo` sin contraseña (NOPASSWD) o con contraseña. La contraseña de sudo (o, si
+  se deja vacía, la de SSH) se envía una sola vez por la entrada estándar del comando (`sudo -S`),
+  nunca en la línea de comandos, y no se guarda. Si sudo la rechaza, el comando termina con un
+  mensaje claro en lugar de quedarse esperando. **Probar conexión** solo comprueba como root con
+  NOPASSWD; con contraseña, la prueba real ocurre al abrir la bitácora.
+- **Codificación**: UTF-8, Latin-1 / Windows-1252 o ISO-8859-15 (Latin-9, con `€`).
+- **Zona horaria del log**: la zona en que el log escribe sus horas (por ejemplo `UTC`). Se usa al
+  **combinar bitácoras** para intercalarlas en el orden real; si una línea trae su desplazamiento
+  (`Z`, `+02:00`), se usa ese. Los filtros por hora de cada pestaña siguen usando la hora tal como
+  aparece en el log.
+
+journalctl se lee con `-o short-iso` (fecha completa con zona). Si el usuario no está en el grupo
+`systemd-journal` o `adm`, activa sudo.
+
 #### Servidores intermedios (cadena de saltos)
 
 Con **SSH** se puede definir una cadena: `Tu equipo → bastion → servidor interno → destino`.

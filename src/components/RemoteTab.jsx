@@ -12,6 +12,7 @@ import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 import { JumpChainEditor } from "./JumpChainEditor.jsx";
 import { initialJumps, jumpsForConnection, chainProblem } from "../jumpChain.mjs";
 import { ServerList } from "./ServerList.jsx";
+import { timeZoneList } from "../logTime.mjs";
 import { ENVIRONMENTS, envColor, resolveLog, saveServerAndLog, deleteServer, deleteLog, recordServerStatus } from "../remoteServers.mjs";
 
 function remoteDirname(value) {
@@ -209,7 +210,14 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], servers 
   const [trustHostForSession, setTrustHostForSession] = useState(false);
   const [distro, setDistro] = useState(initialConfig?.distro || "");
   const [filePath, setFilePath] = useState(initialConfig?.filePath || "");
-  const [source, setSource] = useState(initialConfig?.source === "docker" ? "docker" : "file");
+  const [source, setSource] = useState(["docker", "journal"].includes(initialConfig?.source) ? initialConfig.source : "file");
+  // reading options of the log: journalctl unit, root via sudo, encoding and the zone its times are written in
+  const [journalUnit, setJournalUnit] = useState(initialConfig?.journalUnit || "");
+  const [sudo, setSudo] = useState(initialConfig?.sudo || "");
+  const [sudoPassword, setSudoPassword] = useState("");
+  const [encoding, setEncoding] = useState(initialConfig?.encoding || "utf-8");
+  const [timeZone, setTimeZone] = useState(initialConfig?.timeZone || "");
+  const [readingOpen, setReadingOpen] = useState(() => !!(initialConfig?.sudo || (initialConfig?.encoding && initialConfig.encoding !== "utf-8") || initialConfig?.timeZone));
   const [containerId, setContainerId] = useState(initialConfig?.containerId || "");
   const [containerName, setContainerName] = useState(initialConfig?.containerName || "");
   const [containers, setContainers] = useState([]);
@@ -250,7 +258,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], servers 
   const hasNativeAuth = mode !== "ssh-native" || (user.trim() && (password || vaultCredentialId || identityFile.trim()));
   const hostAccepted = mode !== "ssh-native" || Boolean(fingerprint.trim() && trustHostForSession);
   const discoveringHost = mode === "ssh-native" && !fingerprint.trim();
-  const hasSource = source === "docker" ? Boolean(containerId) : Boolean(filePath.trim());
+  const hasSource = source === "docker" ? Boolean(containerId) : source === "journal" ? true : Boolean(filePath.trim());
   const canTest = modeAvailable && mode !== "wsl" && target.trim() && (discoveringHost || hasSource)
     && (mode !== "ssh-native" || discoveringHost || hasNativeAuth);
   const canSubmit = modeAvailable && hasSource && (mode === "wsl" || target.trim()) && hasNativeAuth && hostAccepted && !chainProblem(jumps)
@@ -326,7 +334,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], servers 
     try {
       const config = await persistPassword(connectionConfig());
       onSelect(config);
-      setPassword(""); setPassphrase("");
+      setPassword(""); setPassphrase(""); setSudoPassword("");
     } catch (error) { setVaultError(error.message); }
   };
 
@@ -341,7 +349,9 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], servers 
     jumps:(mode === "ssh" || mode === "ssh-wsl") ? jumpsForConnection(jumps) : [],
     vaultCredentialId, vaultCredentialKind:"ssh-password", fingerprint:fingerprint.trim(),
     interactiveAuth: mode === "ssh" || mode === "ssh-wsl" ? interactiveAuth : false,
-    trustHostForSession, distro:distro.trim(), filePath:source === "docker" ? "" : filePath.trim(), tailLines,
+    trustHostForSession, distro:distro.trim(), filePath:source === "file" ? filePath.trim() : "", tailLines,
+    journalUnit:source === "journal" ? journalUnit.trim() : "", sudo, sudoPassword:sudo === "password" ? sudoPassword : "",
+    encoding, timeZone:timeZone.trim(),
     source, containerId:source === "docker" ? containerId : "", containerName:source === "docker" ? containerName : "",
     historyMode:historyPreset.split(":")[0], maxInitialMb:Number(historyPreset.split(":")[1]) || 100,
     serverId, serverName:serverName.trim(), env, logName:logName.trim() });
@@ -361,7 +371,10 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], servers 
   const loadSource = (log) => {
     setLogId(log?.id || ""); setLogName(log?.name || "");
     setFilePath(log?.filePath || ""); setTailLines(log?.tailLines || 500);
-    setSource(log?.source === "docker" ? "docker" : "file");
+    setSource(["docker", "journal"].includes(log?.source) ? log.source : "file");
+    setJournalUnit(log?.journalUnit || ""); setSudo(log?.sudo || ""); setSudoPassword("");
+    setEncoding(log?.encoding || "utf-8"); setTimeZone(log?.timeZone || "");
+    setReadingOpen(!!(log?.sudo || (log?.encoding && log.encoding !== "utf-8") || log?.timeZone));
     setHistoryPreset(log?.historyMode === "full" ? "full:100"
       : log?.historyMode === "bytes" ? `bytes:${log.maxInitialMb || 50}`
       : `lines:${log?.tailLines || 500}`);
@@ -754,8 +767,21 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], servers 
           <select style={{ ...inputStyle, width:"auto" }} value={source} onChange={event => setSource(event.target.value)}>
             <option value="file">{t("remote_source_file")}</option>
             <option value="docker" disabled={mode === "wsl"}>{t("remote_source_docker")}</option>
+            <option value="journal" disabled={mode === "wsl"}>{t("remote_source_journal")}</option>
           </select>
         </label>
+
+        {source === "journal" && <div style={{ display:"grid", gridTemplateColumns:"1fr minmax(190px, 240px)", gap:10, marginBottom:12 }}>
+          <input style={inputStyle} value={journalUnit} aria-label={t("remote_journal_unit")}
+            onChange={e => setJournalUnit(e.target.value.replace(/[^A-Za-z0-9@._:\\-]/g, ""))}
+            placeholder={t("remote_journal_unit")} />
+          <select style={inputStyle} value={tailLines} aria-label={t("remote_docker_history")}
+            onChange={e => { setTailLines(Number(e.target.value)); setHistoryPreset(`lines:${e.target.value}`); }}>
+            <option value={500}>{t("remote_history_500")}</option>
+            <option value={5000}>{t("remote_history_5000")}</option>
+          </select>
+          <div style={{ gridColumn:"1 / -1", color:"var(--pl-text-5)", fontSize:10 }}>{t("remote_journal_hint")}</div>
+        </div>}
 
         {source === "docker" && <div style={{ marginBottom:12 }}>
           <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
@@ -805,6 +831,44 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], servers 
             <option value="bytes:50">{t("remote_history_50mb")}</option>
             <option value="full:100">{t("remote_history_full")}</option>
           </select>
+        </div>}
+
+        <button type="button" onClick={() => setReadingOpen(value => !value)}
+          style={{ border:0, background:"none", color:"var(--pl-accent-hover)", cursor:"pointer", fontSize:11, padding:"2px 0", marginBottom:8 }}>
+          {readingOpen ? "▾" : "▸"} {t("remote_reading_options")}
+          {!readingOpen && (sudo || encoding !== "utf-8" || timeZone) ? ` · ${[sudo && "sudo", encoding !== "utf-8" && encoding, timeZone].filter(Boolean).join(" · ")}` : ""}
+        </button>
+        {readingOpen && <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
+          <label style={{ display:"grid", gap:4, color:"var(--pl-text-4)", fontSize:10 }}>
+            {t("remote_sudo")}
+            <select style={inputStyle} value={sudo} onChange={e => setSudo(e.target.value)} disabled={mode === "wsl"}>
+              <option value="">{t("remote_sudo_none")}</option>
+              <option value="nopasswd">{t("remote_sudo_nopasswd")}</option>
+              <option value="password">{t("remote_sudo_password")}</option>
+            </select>
+          </label>
+          {sudo === "password" ? (
+            <label style={{ display:"grid", gap:4, color:"var(--pl-text-4)", fontSize:10 }}>
+              {t("remote_sudo_password_label")}
+              <input style={inputStyle} type="password" autoComplete="off" value={sudoPassword}
+                onChange={e => setSudoPassword(e.target.value)} placeholder={t("remote_sudo_password_placeholder")} />
+            </label>
+          ) : <span />}
+          <label style={{ display:"grid", gap:4, color:"var(--pl-text-4)", fontSize:10 }}>
+            {t("remote_encoding")}
+            <select style={inputStyle} value={encoding} onChange={e => setEncoding(e.target.value)}>
+              <option value="utf-8">UTF-8</option>
+              <option value="windows-1252">Latin-1 / Windows-1252</option>
+              <option value="iso-8859-15">ISO-8859-15 (Latin-9, €)</option>
+            </select>
+          </label>
+          <label style={{ display:"grid", gap:4, color:"var(--pl-text-4)", fontSize:10 }} title={t("remote_timezone_title")}>
+            {t("remote_timezone")}
+            <input style={inputStyle} value={timeZone} list="pl-time-zones" onChange={e => setTimeZone(e.target.value)}
+              placeholder={t("remote_timezone_local")} />
+            <datalist id="pl-time-zones">{timeZoneList().map(zone => <option key={zone} value={zone} />)}</datalist>
+          </label>
+          {sudo && <div style={{ gridColumn:"1 / -1", color:"var(--pl-text-5)", fontSize:10, lineHeight:1.5 }}>{t("remote_sudo_hint")}</div>}
         </div>}
 
         <div style={{ color:"var(--pl-text-5)", fontSize:10, lineHeight:1.5, marginBottom:18 }}>
