@@ -63,15 +63,22 @@ Los paquetes de macOS (`dmg`) y Linux (`AppImage`, `deb`) se generan con
 
 ## 4. Capturas
 
-Se adjuntan cinco capturas, con nombre `pulplog-<versión>-<n>.png`:
+Se adjuntan doce capturas, con nombre `pulplog-<versión>-<n>.png`:
 
 | n | Contenido | Sección de las notas |
 |---|---|---|
 | 1 | Log abierto con el tema LindeCode | Introducción |
-| 2 | Diálogo **Bitácora remota** | Docker, SSH y WSL2 |
-| 3 | Origen **Docker por SSH** | Docker, SSH y WSL2 |
+| 2 | Diálogo **Bitácora remota** | Contenedores, SSH y WSL2 |
+| 3 | Origen **Docker por SSH** | Contenedores, SSH y WSL2 |
 | 4 | Panel **Análisis asistido** | Análisis con IA |
-| 5 | **Configuración** | Personalización y Diagnóstico |
+| 5 | **Configuración** (idioma y temas) | Personalización y Diagnóstico |
+| 6 | **Workspaces** | Archivos y Seguimiento en Vivo |
+| 7 | **Bóveda local de credenciales SSH** | Seguridad |
+| 8 | Lista de **Servidores** por entorno | Novedades |
+| 9 | Selector de **contenedores en ejecución** | Contenedores, SSH y WSL2 |
+| 10 | **Cadena de saltos** | Novedades |
+| 11 | **Conexión rápida** (Ctrl+K) | Novedades |
+| 12 | Tema **OldmanJava** con **Limpiar filtros** | Novedades |
 
 Si no cambió la interfaz, reutiliza las del release anterior y solo cámbiales
 el número de versión en el nombre.
@@ -82,7 +89,7 @@ ejemplo, revisa:
 - Rutas locales: barra de origen del log y lista de archivos recientes en
   Configuración (usuario de Windows, OneDrive, nombre del equipo, proyectos).
 - Hosts, URLs, tenants, IPs y usuarios dentro de las líneas del log.
-- Alias SSH, rutas remotas y nombres de contenedores.
+- Alias SSH, nombres de servidores y de workspaces, rutas remotas y nombres de contenedores.
 
 Para difuminar basta con un desenfoque fuerte por zonas, por ejemplo con
 Pillow (`pip install pillow`):
@@ -212,7 +219,7 @@ La IA es opcional. PulpLog no instala motores ni descarga modelos; el servidor e
 
 ## Personalización y Diagnóstico
 - Interfaz en español e inglés.
-- Temas LindeCode, Clásica, Blanca, Oscura, Brasa, Azul y Bosque.
+- Temas LindeCode, Clásica, Blanca, Oscura, Brasa, Pinky, Azul, Bosque y OldmanJava.
 - Tamaño de interfaz ajustable y preferencias de visualización.
 - Bitácora interna para diagnosticar errores de conexión y funcionamiento.
 - Manual integrado y consulta de nuevas versiones en GitHub Releases.
