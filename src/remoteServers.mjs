@@ -142,3 +142,47 @@ export function recordServerStatus(servers = [], serverId, ok, error = "", now =
   return servers.map(item => item.id === serverId
     ? { ...item, lastStatus:{ ok:!!ok, at:now, error:ok ? "" : String(error || "").slice(0, 300) } } : item);
 }
+
+/**
+ * ~/.ssh/config aliases → candidate servers. The server keeps the alias as its destination, so
+ * OpenSSH keeps applying HostName, User, Port, IdentityFile and ProxyJump from the user's config.
+ * [{ entry, server, exists }]
+ */
+export function serversFromSshConfig(entries = [], { mode = "ssh", distro = "" } = {}, servers = []) {
+  const keys = new Set(servers.map(serverKey));
+  return entries.map(entry => {
+    const server = { id:newId("srv"), name:entry.alias, env:"", mode, target:entry.alias, user:"", port:"",
+      identityFile:"", jumps:[], proxyJump:"", distro:mode === "ssh-wsl" ? distro : "", interactiveAuth:false };
+    return { entry, server, exists:keys.has(serverKey(server)) };
+  });
+}
+
+const logKey = log => JSON.stringify([log.source || "file", log.filePath || "", log.containerName || log.containerId || "", log.journalUnit || ""]);
+
+/**
+ * Adds imported servers and logs (from an export file) with fresh ids. A server with the same
+ * connection as an existing one is reused; logs already under that server are skipped.
+ * Returns { servers, profiles, addedServers, addedLogs }.
+ */
+export function mergeImportedServers({ servers = [], profiles = [] }, imported = {}) {
+  const nextServers = [...servers];
+  const nextProfiles = [...profiles];
+  const idMap = new Map();
+  let addedServers = 0, addedLogs = 0;
+  for (const raw of imported.servers || []) {
+    const existing = nextServers.find(item => serverKey(item) === serverKey(raw));
+    if (existing) { idMap.set(raw.id, existing.id); continue; }
+    const server = { ...raw, id:newId("srv") };
+    delete server.lastStatus; delete server.vaultCredentialId;
+    nextServers.push(server); idMap.set(raw.id, server.id); addedServers++;
+  }
+  for (const raw of imported.logs || []) {
+    const serverId = idMap.get(raw.serverId);
+    if (!serverId) continue;
+    if (nextProfiles.some(item => item.serverId === serverId && logKey(item) === logKey(raw))) continue;
+    const server = nextServers.find(item => item.id === serverId);
+    nextProfiles.push({ ...raw, ...pickServerFields(server), id:newId("log"), serverId });
+    addedLogs++;
+  }
+  return { servers:nextServers, profiles:nextProfiles, addedServers, addedLogs };
+}

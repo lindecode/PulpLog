@@ -1,9 +1,9 @@
 // Copyright (c) 2026 LindeCode S.A.S. SPDX-License-Identifier: MIT
 // First screen of the SSH dialog: servers grouped by environment, each with its saved logs.
 // Click a log to open it; "+ log" / "edit" go to the form with the server loaded.
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useLang } from "../i18n.jsx";
-import { groupServers, envColor, logDisplayName } from "../remoteServers.mjs";
+import { groupServers, envColor, logDisplayName, serversFromSshConfig, ENVIRONMENTS } from "../remoteServers.mjs";
 import { chainSummary, initialJumps } from "../jumpChain.mjs";
 
 const linkBtn = {
@@ -19,10 +19,74 @@ function statusText(t, status) {
     : { text:`✗ ${when}`, color:"var(--pl-error-text)", title:status.error };
 }
 
+/* Import from ~/.ssh/config (Windows or a WSL distro): pick aliases, they become servers. */
+function SshConfigImport({ sources, servers, inputStyle, onImport, onClose }) {
+  const t = useLang();
+  const [from, setFrom] = useState(sources[0]?.value || "windows");
+  const [candidates, setCandidates] = useState(null);
+  const [selected, setSelected] = useState(() => new Set());
+  const [env, setEnv] = useState("");
+  useEffect(() => {
+    let alive = true;
+    setCandidates(null);
+    window.electronAPI.readSshConfig(from).then(entries => {
+      if (!alive) return;
+      const mode = from.startsWith("wsl:") ? "ssh-wsl" : "ssh";
+      const list = serversFromSshConfig(entries || [], { mode, distro:from.startsWith("wsl:") ? from.slice(4) : "" }, servers);
+      setCandidates(list);
+      setSelected(new Set(list.filter(item => !item.exists).map(item => item.entry.alias)));
+    }).catch(() => alive && setCandidates([]));
+    return () => { alive = false; };
+  }, [from]);
+  const chosen = (candidates || []).filter(item => !item.exists && selected.has(item.entry.alias));
+  const toggle = alias => setSelected(prev => { const next = new Set(prev); next.has(alias) ? next.delete(alias) : next.add(alias); return next; });
+
+  return (
+    <div style={{ border:"0.5px solid var(--pl-border-focus)", borderRadius:6, padding:10, marginBottom:12, background:"var(--pl-bg-input)" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:8 }}>
+        <span style={{ color:"var(--pl-text-2)", fontSize:11, fontWeight:700 }}>{t("srv_import_config")}</span>
+        <select style={{ ...inputStyle, width:"auto", padding:"4px 6px", fontSize:11 }} value={from} onChange={e => setFrom(e.target.value)}
+          aria-label={t("remote_ssh_config_from")}>
+          {sources.map(source => <option key={source.value} value={source.value}>{source.label}</option>)}
+        </select>
+        <button type="button" onClick={onClose} style={{ ...linkBtn, marginLeft:"auto" }}>✕</button>
+      </div>
+      {candidates === null ? <div style={{ color:"var(--pl-text-5)", fontSize:10 }}>{t("remote_testing")}</div>
+        : !candidates.length ? <div style={{ color:"var(--pl-text-5)", fontSize:10 }}>{t("srv_import_none")}</div>
+        : <div style={{ maxHeight:220, overflowY:"auto", display:"grid", gap:2 }}>
+          {candidates.map(({ entry, exists }) => (
+            <label key={entry.alias} style={{ display:"flex", gap:7, alignItems:"baseline", fontSize:11,
+              color:exists ? "var(--pl-text-6)" : "var(--pl-text-2)" }}>
+              <input type="checkbox" disabled={exists} checked={!exists && selected.has(entry.alias)} onChange={() => toggle(entry.alias)} />
+              <b>{entry.alias}</b>
+              <span style={{ color:"var(--pl-text-5)", fontSize:10 }}>
+                {[entry.user && `${entry.user}@`, entry.hostName, entry.port && `:${entry.port}`].filter(Boolean).join("")}
+                {entry.proxyJump ? ` · ${t("srv_via")} ${entry.proxyJump}` : ""}
+                {exists ? ` · ${t("srv_import_exists")}` : ""}
+              </span>
+            </label>
+          ))}
+        </div>}
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:8, flexWrap:"wrap" }}>
+        <select style={{ ...inputStyle, width:"auto", padding:"4px 6px", fontSize:11 }} value={env} onChange={e => setEnv(e.target.value)} aria-label={t("srv_env")}>
+          {ENVIRONMENTS.map(item => <option key={item || "none"} value={item}>{item ? t(`env_${item}`) : t("env_none")}</option>)}
+        </select>
+        <span style={{ color:"var(--pl-text-6)", fontSize:10, flex:1 }}>{t("srv_import_hint")}</span>
+        <button type="button" disabled={!chosen.length} onClick={() => onImport(chosen.map(item => ({ ...item.server, env })))}
+          style={{ ...inputStyle, width:"auto", cursor:chosen.length ? "pointer" : "not-allowed", color:"var(--pl-accent-hover)" }}>
+          {t("srv_import_add", chosen.length)}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function ServerList({ servers, profiles, inputStyle, onOpenLog, onAddLog, onEditServer, onNewServer,
-                             onDeleteServer, onDeleteLog, legacyWsl = [], onOpenLegacyWsl }) {
+                             onDeleteServer, onDeleteLog, legacyWsl = [], onOpenLegacyWsl,
+                             configSources = [], onImportConfig, onExport, onImportFile, notice = "" }) {
   const t = useLang();
   const [query, setQuery] = useState("");
+  const [importing, setImporting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState("");
   const groups = groupServers(servers, profiles, query);
 
@@ -36,6 +100,14 @@ export function ServerList({ servers, profiles, inputStyle, onOpenLog, onAddLog,
           + {t("srv_new")}
         </button>
       </div>
+      <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:-6, marginBottom:10 }}>
+        {configSources.length > 0 && <button type="button" style={linkBtn} onClick={() => setImporting(value => !value)}>⇣ {t("srv_import_config")}</button>}
+        <button type="button" style={linkBtn} onClick={onImportFile}>⇣ {t("srv_import_file")}</button>
+        {servers.length > 0 && <button type="button" style={linkBtn} onClick={onExport} title={t("srv_export_title")}>⇡ {t("srv_export")}</button>}
+        {notice && <span style={{ color:"var(--pl-status-live)", fontSize:10, alignSelf:"center", marginLeft:"auto" }}>{notice}</span>}
+      </div>
+      {importing && <SshConfigImport sources={configSources} servers={servers} inputStyle={inputStyle}
+        onClose={() => setImporting(false)} onImport={list => { onImportConfig(list); setImporting(false); }} />}
 
       {!groups.length && (
         <div style={{ color:"var(--pl-text-5)", fontSize:11, padding:"14px 4px" }}>

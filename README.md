@@ -620,6 +620,15 @@ cadena de saltos, autenticación, configuración SSH de Windows o WSL) y guarda 
 - Cada servidor muestra el resultado de la **última conexión** (✓/✗ con fecha; el error en el tooltip).
 - Búsqueda por nombre de servidor, host, bitácora o ruta.
 
+- **Importar de ~/.ssh/config** (de Windows o de una distro WSL2): lista los alias, marca los que ya
+  existen y crea un servidor por alias elegido. Se guarda el alias, así OpenSSH sigue aplicando su
+  HostName, User, Port, IdentityFile y ProxyJump.
+- **Exportar / Importar archivo**: JSON con servidores y bitácoras **sin contraseñas, sin referencias
+  a la bóveda y sin el estado de conexión**. Al importar, los servidores que ya existen se reutilizan
+  y las bitácoras repetidas se omiten.
+- **Conexión rápida (Ctrl+K)**: escribe parte del nombre del servidor o de la bitácora (las palabras
+  en cualquier orden), ↑↓ y Enter la abre en el panel activo.
+
 Las contraseñas nunca se guardan en el servidor ni en la bitácora; solo la referencia a la bóveda.
 Las conexiones guardadas de versiones anteriores se convierten solas: las que comparten modo, host,
 usuario, puerto, llave y saltos quedan como un mismo servidor.
@@ -765,7 +774,8 @@ Las contraseñas SSH pueden guardarse opcionalmente en **Configuración → Bóv
 
 - Se cifra localmente con AES-256-GCM y una clave derivada de la contraseña maestra mediante `scrypt`.
 - Nunca guarda la contraseña maestra; los perfiles sólo conservan el identificador de la credencial cifrada.
-- Debe estar desbloqueada para usar o guardar contraseñas y puede bloquearse manualmente.
+- Debe estar desbloqueada para usar o guardar contraseñas y puede bloquearse manualmente. Se bloquea sola al cerrar PulpLog o suspender el equipo.
+- **Bloquear automáticamente**: tras 5, 15, 30 o 60 minutos sin uso (cualquier lectura o guardado de una contraseña cuenta como uso) y, con esta opción activa, también al bloquear la sesión del equipo.
 - Permite listar y eliminar credenciales sin revelar su contenido.
 - Permite borrar una credencial o eliminar la bóveda completa, siempre con confirmación; los perfiles y logs originales permanecen intactos.
 
@@ -786,7 +796,7 @@ El límite de líneas vivas configurado en PulpLog continúa protegiendo la memo
 | Función | Detalle |
 |---------|---------|
 | Idioma | Interfaz en español o inglés |
-| Tema | LindeCode (por defecto; color hueso con cabecera oscura, como lindecode.cloud), Clásica, Blanca, Oscura, Brasa (fuego/carmesí), Azul (oscuro, tonalidad azul) o Bosque (verde grisáceo) |
+| Tema | LindeCode (por defecto; color hueso con cabecera oscura, como lindecode.cloud), Clásica, Blanca, Oscura, Brasa (fuego/carmesí), Azul (oscuro, tonalidad azul), Bosque (verde grisáceo) u OldmanJava (gris hueso de sistema de los 90, botones con relieve y las fuentes Lucida de Java Swing) |
 | Preferencias | Auto-scroll por defecto y números de línea por defecto |
 | Bóveda SSH | Crear, desbloquear, bloquear, listar o eliminar contraseñas SSH cifradas localmente |
 | Bitácora interna | Panel de diagnóstico con eventos de archivos, Docker y atajos |

@@ -7,13 +7,13 @@ import { classifyLines, countLevels, appendRecentItems } from "../logProcessing.
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtBytes, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, ClearFiltersButton, filtersActive, ALL_LEVELS, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 import { JumpChainEditor } from "./JumpChainEditor.jsx";
 import { initialJumps, jumpsForConnection, chainProblem } from "../jumpChain.mjs";
 import { ServerList } from "./ServerList.jsx";
 import { timeZoneList } from "../logTime.mjs";
-import { ENVIRONMENTS, envColor, resolveLog, saveServerAndLog, deleteServer, deleteLog, recordServerStatus } from "../remoteServers.mjs";
+import { ENVIRONMENTS, envColor, resolveLog, saveServerAndLog, deleteServer, deleteLog, recordServerStatus, mergeImportedServers } from "../remoteServers.mjs";
 
 function remoteDirname(value) {
   const text = String(value || "").trim();
@@ -233,13 +233,14 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], servers 
     : `lines:${initialConfig?.tailLines || 500}`);
   const [advanced, setAdvanced] = useState(initialConfig?.mode === "ssh-native");
   // server / log being edited (servers with several logs each)
-  const [view, setView] = useState(() => !initialConfig && servers.length ? "list" : "form");
+  const [view, setView] = useState(() => initialConfig ? "form" : "list");
   const [serverId, setServerId] = useState(initialConfig?.serverId || "");
   const [serverName, setServerName] = useState(initialConfig?.serverName || "");
   const [env, setEnv] = useState(initialConfig?.env || "");
   const [logId, setLogId] = useState("");
   const [logName, setLogName] = useState(initialConfig?.logName || "");
   const [savedNote, setSavedNote] = useState("");
+  const [listNotice, setListNotice] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -484,7 +485,7 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], servers 
                  padding:"24px", width:"min(620px, calc(100vw - 32px))", maxHeight:"90vh", overflowY:"auto", fontFamily:"inherit",
                  boxShadow:"0 8px 40px rgba(0,0,0,.8)" }}>
         <div style={{ display:"flex", alignItems:"center", marginBottom:16 }}>
-          {view === "form" && servers.length > 0 && (
+          {view === "form" && (
             <button type="button" onClick={() => { setView("list"); setSavedNote(""); }}
               style={{ border:0, background:"none", color:"var(--pl-accent-hover)", cursor:"pointer", fontSize:12,
                        fontFamily:"inherit", padding:"0 8px 0 0" }}>← {t("srv_list")}</button>
@@ -552,6 +553,28 @@ function RemotePicker({ onSelect, onClose, capabilities, profiles = [], servers 
             onDeleteServer={server => onRemoteChange?.(deleteServer({ servers, profiles }, server.id))}
             onDeleteLog={log => onRemoteChange?.(deleteLog({ servers, profiles }, log.id))}
             legacyWsl={profiles.filter(profile => profile.mode === "wsl")}
+            notice={listNotice}
+            configSources={[
+              ...(sshCap?.available ? [{ value:"windows", label:"Windows · ~/.ssh/config" }] : []),
+              ...(isWindows && wslCap?.available ? wslDistros.map(name => ({ value:`wsl:${name}`, label:`WSL · ${name}` })) : []),
+            ]}
+            onImportConfig={list => {
+              onRemoteChange?.(state => ({ ...state, servers:[...state.servers, ...list] }));
+              setListNotice(t("srv_imported", list.length, 0));
+            }}
+            onExport={async () => {
+              try { const file = await window.electronAPI.exportServers(); if (file) setListNotice(t("srv_exported")); }
+              catch (error) { setListNotice(error.message); }
+            }}
+            onImportFile={async () => {
+              try {
+                const data = await window.electronAPI.importServers();
+                if (!data) return;
+                const out = mergeImportedServers({ servers, profiles }, data);
+                onRemoteChange?.({ servers:out.servers, profiles:out.profiles });
+                setListNotice(t("srv_imported", out.addedServers, out.addedLogs));
+              } catch (error) { setListNotice(error.message); }
+            }}
             onOpenLegacyWsl={profile => onOpenWslFile?.(profile)} />
         ) : <>
         <fieldset style={{ border:"0.5px solid var(--pl-border)", borderRadius:6, padding:"8px 10px 10px", margin:"0 0 12px",
@@ -1369,6 +1392,11 @@ function RemoteTab({ tabKey, maxLiveLines, config, onConfigureConnection, onStat
 
           <ContextInput value={context} onChange={setContext} />
           <TimeRangeFilter value={timeRange} onChange={setTimeRange} invalid={!timeRangeValid} availableDates={availableDates} />
+          <ClearFiltersButton active={filtersActive({ filter, extraFilters, context, timeRange, lvl })}
+            onClear={() => {
+              setFilter(""); setFilterUseRegex(false); setExtraFilters([]); setContext(0);
+              setTimeRange(range => ({ ...range, enabled:false, from:"", to:"" })); setLvl({ ...ALL_LEVELS });
+            }} />
 
         </div>
 

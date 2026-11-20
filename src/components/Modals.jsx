@@ -182,7 +182,7 @@ function SettingsModal({ settings, onClose, onOpenFile, onRemoveRecent, onClearR
           {t("theme_h")}
         </div>
         <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:24 }}>
-          {["lindecode","classic","light","vscode","ember","blue","forest"].map(th => (
+          {["lindecode","classic","light","vscode","ember","blue","forest","oldmanjava"].map(th => (
             <button key={th} onClick={() => onTogglePref("theme", th)}
               style={{ background: theme === th ? "var(--pl-bg-hover)" : "var(--pl-bg-input)",
                        border:`0.5px solid ${theme === th ? "var(--pl-border-focus)" : "var(--pl-border)"}`,

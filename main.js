@@ -23,6 +23,7 @@ const { createCredentialStore, authHeaders, assertCredentialTransport, redactErr
 const { isTrustedSender, assertStreamOwner } = require("./ipcSecurity.cjs");
 const { createLineDecoder, MAX_FILE_BYTES, MAX_AI_BYTES } = require("./streamLimits.cjs");
 const remoteSource = require("./remoteSource.cjs");
+const sshConfig = require("./sshConfig.cjs");
 const { createConversationStore } = require("./conversationStore.cjs");
 const { createCredentialVault } = require("./credentialVault.cjs");
 const { createCaptureManager } = require("./captures.cjs");
@@ -146,6 +147,7 @@ const MENU_STRINGS = {
     duplicate_tab:"Duplicar bitácora", reload_tab:"Recargar bitácora", rename_tab:"Renombrar pestaña",
     combine_tabs:"Combinar con otras bitácoras…", group_start_off:"Quitar separador de grupo", group_start_on:"Iniciar grupo aquí",
     close_others:"Cerrar otras pestañas", close_right:"Cerrar pestañas a la derecha",
+    srv_export_dialog:"Exportar servidores (sin contraseñas)", srv_import_dialog:"Importar servidores",
     ws_export_dialog:"Exportar workspaces", ws_import_dialog:"Importar workspaces", ws_filter:"Workspaces de PulpLog",
     ws_add_to:"Agregar a workspace", ws_remove_from:"Quitar de workspace", ws_new_with_tab:"Nuevo workspace con esta bitácora…",
     open_log_dialog:"Abrir archivo de log", pick_ssh_key:"Seleccionar llave privada SSH",
@@ -195,6 +197,7 @@ const MENU_STRINGS = {
     duplicate_tab:"Duplicate tab", reload_tab:"Reload tab", rename_tab:"Rename tab",
     combine_tabs:"Combine with other logs…", group_start_off:"Remove group separator", group_start_on:"Start group here",
     close_others:"Close other tabs", close_right:"Close tabs to the right",
+    srv_export_dialog:"Export servers (no passwords)", srv_import_dialog:"Import servers",
     ws_export_dialog:"Export workspaces", ws_import_dialog:"Import workspaces", ws_filter:"PulpLog workspaces",
     ws_add_to:"Add to workspace", ws_remove_from:"Remove from workspace", ws_new_with_tab:"New workspace with this log…",
     open_log_dialog:"Open log file", pick_ssh_key:"Select SSH private key",
@@ -2544,7 +2547,7 @@ function normalizeRemoteServers(value) {
 function normalizeSettings(value) {
   const s = value && typeof value === "object" ? value : {};
   const language = ["es", "en"].includes(s.language) ? s.language : "es";
-  const theme = ["lindecode", "classic", "light", "vscode", "ember", "blue", "forest"].includes(s.theme) ? s.theme : "lindecode";
+  const theme = ["lindecode", "classic", "light", "vscode", "ember", "blue", "forest", "oldmanjava"].includes(s.theme) ? s.theme : "lindecode";
   const skippedUpdateVersion = parseReleaseVersion(s.skippedUpdateVersion) ? String(s.skippedUpdateVersion).trim() : "";
 
   let panes;
@@ -2584,6 +2587,7 @@ function normalizeSettings(value) {
     autoScrollDefault: Boolean(s.autoScrollDefault),
     showNumsDefault: s.showNumsDefault !== false,
     sshAgentPollingEnabled,
+    vaultAutoLockMinutes: [0, 5, 15, 30, 60].includes(s.vaultAutoLockMinutes) ? s.vaultAutoLockMinutes : 0,
     maxLiveLines,
     language,
     theme,
@@ -2665,8 +2669,51 @@ handleTrusted("settings:get", async () => {
 });
 handleTrusted("settings:set", (_event, data) =>
   updateSettings(current => ({ ...current, ...(data && typeof data === "object" ? data : {}) }))
-    .then(settings => { refreshApplicationMenu(settings); return settings; })
+    .then(settings => { refreshApplicationMenu(settings); setVaultAutoLock(settings.vaultAutoLockMinutes); return settings; })
 );
+
+/* ─── Servers: import from ~/.ssh/config, export/import without secrets ─── */
+handleTrusted("remote:ssh-config", async (_event, from) => {
+  const distro = typeof from === "string" && from.startsWith("wsl:") ? from.slice(4) : "";
+  if (distro) {
+    if (process.platform !== "win32" || distro.startsWith("-") || !/^[\w.-]{1,160}$/.test(distro)) return [];
+    const result = await checkCommand("wsl.exe", ["-d", distro, "--", "sh", "-lc", "test -r ~/.ssh/config && cat ~/.ssh/config"], { timeout:8000 });
+    return result.available ? sshConfig.parseSshConfig(result.detail) : [];
+  }
+  try { return sshConfig.parseSshConfig(await fs.promises.readFile(path.join(app.getPath("home"), ".ssh", "config"), "utf8")); }
+  catch { return []; }
+});
+handleTrusted("remote:export-servers", async () => {
+  const settings = await loadSettings();
+  if (!settings.remoteServers?.length) return null;
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: mt("srv_export_dialog"),
+    defaultPath: "pulplog-servidores.json",
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  });
+  if (canceled || !filePath) return null;
+  await fs.promises.writeFile(filePath, sshConfig.serializeServersExport(settings.remoteServers, settings.remoteProfiles), "utf8");
+  logEntry("INFO", "remote", `Servidores exportados (sin secretos): ${path.basename(filePath)}`);
+  return filePath;
+});
+handleTrusted("remote:import-servers", async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: mt("srv_import_dialog"),
+    filters: [{ name: "JSON", extensions: ["json"] }, { name: mt("filter_all"), extensions: ["*"] }],
+    properties: ["openFile"],
+  });
+  if (canceled || !filePaths?.[0]) return null;
+  const stat = await fs.promises.stat(filePaths[0]);
+  if (stat.size > 5 * 1024 * 1024) throw new Error("Archivo de servidores demasiado grande");
+  const data = sshConfig.parseServersExport(await fs.promises.readFile(filePaths[0], "utf8"));
+  // same validation as stored settings; secrets and vault ids never come in
+  const servers = normalizeRemoteServers(data.servers).map(({ vaultCredentialId, lastStatus, ...server }) => server);
+  const logs = normalizeRemoteProfiles(data.logs).map(({ vaultCredentialId, ...log }) => ({
+    ...log, jumps: (log.jumps || []).map(({ vaultCredentialId: _v, ...hop }) => hop) }));
+  servers.forEach(server => { server.jumps = (server.jumps || []).map(({ vaultCredentialId: _v, ...hop }) => hop); });
+  logEntry("INFO", "remote", `Servidores importados: ${servers.length} desde ${path.basename(filePaths[0])}`);
+  return { servers, logs };
+});
 handleTrusted("recentfiles:add", (_event, fp) => updateSettings(current => {
   if (typeof fp !== "string" || !fp) return current;
   const recent = (current.recentFiles || []).filter(file => file !== fp);
@@ -2700,6 +2747,35 @@ handleTrusted("conversations:clear", () => conversationStore.clear());
 const credentialVault = createCredentialVault({
   filename:path.join(app.getPath("userData"), "credential-vault.json"),
 });
+
+/* Auto-lock: the vault locks after N minutes without use (setting vaultAutoLockMinutes, 0 = never).
+   Any unlock, save, list or secret read counts as use. */
+let vaultAutoLockTimer = null;
+let vaultAutoLockMinutes = 0;
+function touchVault() {
+  clearTimeout(vaultAutoLockTimer);
+  vaultAutoLockTimer = null;
+  if (!vaultAutoLockMinutes) return;
+  vaultAutoLockTimer = setTimeout(() => {
+    vaultAutoLockTimer = null;
+    credentialVault.lock().then(() => {
+      logEntry("INFO", "vault", `Bóveda bloqueada tras ${vaultAutoLockMinutes} min sin uso`);
+      for (const win of BrowserWindow.getAllWindows()) if (!win.isDestroyed()) win.webContents.send("vault:locked");
+    }).catch(() => {});
+  }, vaultAutoLockMinutes * 60_000);
+  vaultAutoLockTimer.unref?.();
+}
+function setVaultAutoLock(minutes) {
+  const next = [0, 5, 15, 30, 60].includes(minutes) ? minutes : 0;
+  // every settings save comes through here: only a changed value restarts the countdown
+  if (next === vaultAutoLockMinutes) return;
+  vaultAutoLockMinutes = next;
+  credentialVault.state().then(state => { if (state?.unlocked) touchVault(); }).catch(() => {});
+}
+for (const method of ["unlock", "create", "save", "list", "getSecret"]) {
+  const original = credentialVault[method];
+  credentialVault[method] = async (...args) => { const result = await original(...args); touchVault(); return result; };
+}
 const vaultId = value => normalizeIdentifier(value, "vault credential id");
 
 async function resolveVaultSecrets(payload) {
@@ -3166,6 +3242,9 @@ function registerShortcuts(win) {
 /* ─── lifecycle ─── */
 app.whenReady().then(async () => {
   powerMonitor.on("suspend", () => credentialVault.lock().catch(() => {}));
+  // with auto-lock on, locking the computer also locks the vault
+  powerMonitor.on("lock-screen", () => { if (vaultAutoLockMinutes) credentialVault.lock().catch(() => {}); });
+  loadSettings().then(settings => setVaultAutoLock(settings.vaultAutoLockMinutes)).catch(() => {});
   const { session } = require("electron");
   if (session?.defaultSession) {
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {

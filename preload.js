@@ -141,6 +141,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   stopCapture: (captureId) => ipcRenderer.invoke("capture:stop", captureId),
   testRemoteConnection: (config) => ipcRenderer.invoke("remote:test", config),
   testRemoteChain: (config) => ipcRenderer.invoke("remote:test-chain", config),
+  readSshConfig: (from) => ipcRenderer.invoke("remote:ssh-config", from),
+  exportServers: () => ipcRenderer.invoke("remote:export-servers"),
+  importServers: () => ipcRenderer.invoke("remote:import-servers"),
+  onVaultLocked: (callback) => { const handler = () => callback(); ipcRenderer.on("vault:locked", handler); return () => ipcRenderer.removeListener("vault:locked", handler); },
   listRemoteDirectory: (config) => ipcRenderer.invoke("remote:list-dir", config),
   listRemoteDocker: (config) => ipcRenderer.invoke("remote:docker-list", config),
 

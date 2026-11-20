@@ -50,6 +50,7 @@
       "remoteDocker.cjs",
       "captures.cjs",
       "sshInvocation.cjs",
+      "sshConfig.cjs",
       "remoteSource.cjs",
       "askpass.cjs",
       "vllm.cjs",

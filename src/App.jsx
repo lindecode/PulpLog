@@ -7,6 +7,7 @@ import { WorkspaceSelector, WorkspacesModal } from "./components/Workspaces.jsx"
 import { useWorkspaces, entryFromTab } from "./workspaces.mjs";
 import { DiagPanel, SettingsModal, AboutModal, HelpGuideModal, AskpassPrompt } from "./components/Modals.jsx";
 import { migrateRemote } from "./remoteServers.mjs";
+import { QuickConnect } from "./components/QuickConnect.jsx";
 import { AiSettingsCtx } from "./components/AnalysisSidebar.jsx";
 
 export default function App() {
@@ -71,6 +72,19 @@ export default function App() {
     if (entries.length) workspaces.activate(created.id);
     setWsModal({ initialId: created.id });
   };
+  // Ctrl+K (Cmd+K): quick connect to a saved server log
+  const [quickConnect, setQuickConnect] = useState(false);
+  useEffect(() => {
+    const onKey = e => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setQuickConnect(open => !open);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   useEffect(() => {
     if (sessionReady && workspaces.loaded) workspaces.restoreActive();
   }, [sessionReady, workspaces.loaded]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -410,6 +424,17 @@ export default function App() {
         )}
         {about && <AboutModal onClose={() => setAbout(false)} />}
         {IS_ELECTRON && <AskpassPrompt />}
+        {quickConnect && (
+          <QuickConnect servers={settings.remoteServers || []} profiles={settings.remoteProfiles || []}
+            onClose={() => setQuickConnect(false)}
+            onManage={() => (focusedPane === "B" && splitDirection ? paneB : paneA).setRemotePicker(true)}
+            onOpen={config => {
+              const pane = focusedPane === "B" && splitDirection ? paneB : paneA;
+              // the direct engine needs the server's key confirmed in the form first
+              if (config.mode === "ssh-native") pane.setRemotePicker({ config:{ ...config, password:"", passphrase:"", trustHostForSession:false } });
+              else pane.openRemoteTab({ ...config, password:"", passphrase:"", sudoPassword:"", trustHostForSession:false, vaultCredentialKind:"ssh-password" });
+            }} />
+        )}
         {helpGuideOpen && <HelpGuideModal lang={settings.language || "es"} onClose={() => setHelpGuideOpen(false)} />}
         {toast && (
           <div role="alert" style={{ position:"fixed", left:"50%", bottom:20, transform:"translateX(-50%)",

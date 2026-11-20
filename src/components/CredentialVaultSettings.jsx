@@ -22,6 +22,13 @@ export function CredentialVaultSettings() {
     setEntries(next.unlocked ? await window.electronAPI.listVaultCredentials() : []);
   }, []);
   useEffect(() => { refresh().catch(error => setError(error.message)); }, [refresh]);
+  // auto-lock after N minutes without use; the main process tells us when it happens
+  const [autoLock, setAutoLock] = useState(0);
+  useEffect(() => {
+    window.electronAPI?.getSettings?.().then(s => setAutoLock(s?.vaultAutoLockMinutes || 0)).catch(() => {});
+    return window.electronAPI?.onVaultLocked?.(() => { refresh().catch(() => {}); });
+  }, [refresh]);
+  const changeAutoLock = minutes => { setAutoLock(minutes); window.electronAPI?.setSettings?.({ vaultAutoLockMinutes:minutes }); };
 
   const run = async action => {
     setBusy(true); setError("");
@@ -93,6 +100,14 @@ export function CredentialVaultSettings() {
         {t("vault_delete_all")}
       </button>
     </>}
+    {state.configured && <label style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginTop:10, fontSize:10, color:"var(--pl-text-4)" }}>
+      {t("vault_autolock")}
+      <select value={autoLock} onChange={event => changeAutoLock(Number(event.target.value))} style={{ ...field, width:"auto" }}>
+        <option value={0}>{t("vault_autolock_never")}</option>
+        {[5, 15, 30, 60].map(minutes => <option key={minutes} value={minutes}>{t("vault_autolock_minutes", minutes)}</option>)}
+      </select>
+      {autoLock > 0 && <span style={{ width:"100%", color:"var(--pl-text-6)", fontSize:9 }}>{t("vault_autolock_hint")}</span>}
+    </label>}
     {error && <div role="alert" style={{ color:"var(--pl-error-text)", fontSize:10, marginTop:8 }}>{error}</div>}
   </div>;
 }

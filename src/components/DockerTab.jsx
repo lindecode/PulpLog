@@ -6,7 +6,7 @@ import { useRememberedState, useBatchedLines, useFilteredLogs, useAvailableLogDa
 import { classifyLines, countLevels, appendRecentItems } from "../logProcessing.mjs";
 import { reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtNum } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, ClearFiltersButton, filtersActive, ALL_LEVELS, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 import { RUNTIME_META, originLabel, containerSource, containerTooltip } from "../containers.mjs";
 
@@ -467,6 +467,11 @@ function DockerTab({ tabKey, maxLiveLines, container = null, containerId, contai
 
           <ContextInput value={context} onChange={setContext} />
           <TimeRangeFilter value={timeRange} onChange={setTimeRange} invalid={!timeRangeValid} availableDates={availableDates} />
+          <ClearFiltersButton active={filtersActive({ filter, extraFilters, context, timeRange, lvl })}
+            onClear={() => {
+              setFilter(""); setFilterUseRegex(false); setExtraFilters([]); setContext(0);
+              setTimeRange(range => ({ ...range, enabled:false, from:"", to:"" })); setLvl({ ...ALL_LEVELS });
+            }} />
 
         </div>
 

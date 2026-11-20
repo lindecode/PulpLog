@@ -203,3 +203,22 @@ function FilterLimitNotice({ visible }) {
 
 
 export { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice };
+
+/* "Clear filters": resets text/regex filter, extra filters, context, time range and levels.
+   Search highlights and bookmarks are left alone. Disabled when nothing is filtering. */
+export const ALL_LEVELS = { error:true, warn:true, info:true, debug:true, trace:true, stack:true, plain:true };
+export function filtersActive({ filter, extraFilters, context, timeRange, lvl }) {
+  return Boolean(String(filter || "").trim()) || (extraFilters || []).some(item => String(item?.value ?? item?.text ?? item ?? "").trim())
+    || Number(context) > 0 || Boolean(timeRange?.enabled) || Object.values(lvl || {}).some(on => on === false);
+}
+export function ClearFiltersButton({ active, onClear }) {
+  const t = useLang();
+  return (
+    <button type="button" onClick={onClear} disabled={!active} title={t("clear_filters_title")}
+      style={{ background:"var(--pl-bg-input)", border:`0.5px solid ${active ? "var(--pl-border-focus)" : "var(--pl-border)"}`,
+               borderRadius:6, color:active ? "var(--pl-accent-hover)" : "var(--pl-text-7)", fontFamily:"inherit", fontSize:11,
+               padding:"4px 10px", cursor:active ? "pointer" : "default", whiteSpace:"nowrap" }}>
+      ✕ {t("clear_filters")}
+    </button>
+  );
+}

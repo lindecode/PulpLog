@@ -87,3 +87,27 @@ test("delete server removes its logs; status is recorded", () => {
   assert.equal(envColor(""), "");
   assert.equal(logDisplayName({ source:"docker", containerName:"web-1" }), "web-1");
 });
+
+test("ssh config aliases become servers; existing ones are flagged", async () => {
+  const { serversFromSshConfig } = await import("../src/remoteServers.mjs");
+  const out = serversFromSshConfig([{ alias:"prod-api" }, { alias:"bastion" }], { mode:"ssh-wsl", distro:"Ubuntu" },
+    [{ id:"x", mode:"ssh-wsl", distro:"Ubuntu", target:"bastion", jumps:[] }]);
+  assert.deepEqual(out.map(o => [o.server.target, o.server.distro, o.exists]), [["prod-api", "Ubuntu", false], ["bastion", "Ubuntu", true]]);
+});
+
+test("importing reuses equal servers, skips duplicate logs and gives fresh ids", async () => {
+  const { mergeImportedServers } = await import("../src/remoteServers.mjs");
+  const state = { servers:[{ id:"a", mode:"ssh", target:"prod", jumps:[] }],
+    profiles:[{ id:"la", serverId:"a", source:"file", filePath:"/var/log/app.log" }] };
+  const out = mergeImportedServers(state, {
+    servers:[{ id:"s1", mode:"ssh", target:"prod", jumps:[] }, { id:"s2", mode:"ssh", target:"new", jumps:[], lastStatus:{ ok:true } }],
+    logs:[{ id:"l1", serverId:"s1", source:"file", filePath:"/var/log/app.log" },
+          { id:"l2", serverId:"s1", source:"journal", journalUnit:"nginx" },
+          { id:"l3", serverId:"s2", source:"file", filePath:"/x" }, { id:"l4", serverId:"zz", filePath:"/y" }] });
+  assert.equal(out.addedServers, 1);
+  assert.equal(out.addedLogs, 2);
+  assert.equal(out.profiles.filter(p => p.serverId === "a").length, 2);
+  const added = out.servers.find(s => s.target === "new");
+  assert.notEqual(added.id, "s2");
+  assert.equal(added.lastStatus, undefined);
+});

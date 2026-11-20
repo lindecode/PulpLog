@@ -8,7 +8,7 @@ import { classifyLines, countLevels, splitTextChunk } from "../logProcessing.mjs
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, getCachedFile, cacheFile, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtSize, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
-import { ContextInput, TimeRangeFilter, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice } from "./SharedUI.jsx";
+import { ContextInput, TimeRangeFilter, ClearFiltersButton, filtersActive, ALL_LEVELS, ExtraSearches, ExtraFilters, Btn, Sep, FilterLimitNotice } from "./SharedUI.jsx";
 import { AnalysisSidebar } from "./AnalysisSidebar.jsx";
 import { RotationBanner } from "./Modals.jsx";
 
@@ -532,6 +532,11 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
 
           <ContextInput value={context} onChange={setContext} />
           <TimeRangeFilter value={timeRange} onChange={setTimeRange} invalid={!timeRangeValid} availableDates={availableDates} />
+          <ClearFiltersButton active={filtersActive({ filter, extraFilters, context, timeRange, lvl })}
+            onClear={() => {
+              setFilter(""); setFilterUseRegex(false); setExtraFilters([]); setContext(0);
+              setTimeRange(range => ({ ...range, enabled:false, from:"", to:"" })); setLvl({ ...ALL_LEVELS });
+            }} />
 
         </div>
 
