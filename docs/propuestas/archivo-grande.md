@@ -135,7 +135,7 @@ Sin cambios de comportamiento:
 
 | Fase | Contenido | Dificultad |
 |---|---|---|
-| 0 | Recorte en vivo para archivo local, aviso, lotes agrupados (hecho en 5.1.1) | Baja |
+| 0 | Recorte en vivo para archivo local, aviso, lotes agrupados (hecho en 5.0.1) | Baja |
 | 1 | Índice + lectura por ventana + saltos + totales por nivel | Media |
 | 2 | Búsqueda y filtro por texto, regex y nivel en worker | Media |
 | 3 | Seguimiento en vivo en modo grande, rotación | Media |
