@@ -334,37 +334,70 @@ function formatReleaseDate(value) {
   }
 }
 
-function fetchJson(url) {
+/* GitHub API through Chromium's network stack (electron.net): it honours the system proxy and
+   the Windows/macOS certificate store, so corporate proxies and antivirus HTTPS inspection work
+   like in the browser. Node's https used its own CA list ("unable to get local issuer certificate")
+   and no proxy (timeouts). */
+async function fetchJson(url, { timeoutMs = 15000, attempts = 2 } = {}) {
+  const { net } = require("electron");
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await net.fetch(url, {
+        signal: controller.signal,
+        headers: { Accept: "application/vnd.github+json", "User-Agent": `PulpLog/${app.getVersion()}` },
+      });
+      const body = await res.text();
+      if (body.length > 1024 * 1024) throw new Error("Response too large");
+      if (!res.ok) throw new Error(`GitHub HTTP ${res.status}: ${body.slice(0, 240)}`);
+      return JSON.parse(body);
+    } catch (err) {
+      lastError = controller.signal.aborted ? new Error("GitHub request timed out") : err;
+      if (/GitHub HTTP 4\d\d/.test(lastError.message)) break; // not transient
+      logEntry("WARN", "updater", `Consulta a GitHub (intento ${attempt}/${attempts}): ${lastError.message}`);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError;
+}
+
+/* Fallback when the API fails or is rate-limited (60 requests/h per IP): github.com/…/releases/latest
+   redirects to …/releases/tag/vX.Y.Z, which is enough to compare versions. */
+function fetchLatestReleaseFromRedirect(timeoutMs = 15000) {
+  const { net } = require("electron");
   return new Promise((resolve, reject) => {
-    const req = https.get(url, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": `PulpLog/${app.getVersion()}`,
-      },
-    }, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", chunk => {
-        body += chunk;
-        if (body.length > 1024 * 1024) {
-          req.destroy(new Error("Response too large"));
-        }
-      });
-      res.on("end", () => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          reject(new Error(`GitHub HTTP ${res.statusCode}: ${body.slice(0, 240)}`));
-          return;
-        }
-        try {
-          resolve(JSON.parse(body));
-        } catch (err) {
-          reject(err);
-        }
-      });
+    const request = net.request({ method: "HEAD", url: `${GITHUB_RELEASES_URL}/latest`, redirect: "manual" });
+    request.setHeader("User-Agent", `PulpLog/${app.getVersion()}`);
+    const timer = setTimeout(() => { request.abort(); reject(new Error("GitHub request timed out")); }, timeoutMs);
+    const done = fn => value => { clearTimeout(timer); fn(value); };
+    request.on("redirect", (_status, _method, redirectUrl) => {
+      request.abort();
+      const tag = String(redirectUrl).match(/\/releases\/tag\/([^/?#]+)/)?.[1];
+      if (tag) done(resolve)({ tag_name: decodeURIComponent(tag), html_url: redirectUrl, name: "", published_at: null });
+      else done(reject)(new Error(`GitHub redirigió a ${redirectUrl}`));
     });
-    req.setTimeout(8000, () => req.destroy(new Error("GitHub request timed out")));
-    req.on("error", reject);
+    request.on("response", response => done(reject)(new Error(`GitHub HTTP ${response.statusCode}: sin redirección a una versión`)));
+    request.on("error", err => done(reject)(err));
+    request.end();
   });
+}
+
+async function fetchLatestRelease() {
+  try {
+    return await fetchJson(GITHUB_LATEST_RELEASE_API);
+  } catch (apiError) {
+    try {
+      const release = await fetchLatestReleaseFromRedirect();
+      logEntry("INFO", "updater", `API de GitHub no disponible (${apiError.message}); versión obtenida de github.com: ${release.tag_name}`);
+      return release;
+    } catch (pageError) {
+      logEntry("WARN", "updater", `Tampoco respondió github.com: ${pageError.message}`);
+      throw apiError;
+    }
+  }
 }
 
 function isInstalledEnvironment() {
@@ -416,7 +449,7 @@ async function checkForUpdates(win) {
   const currentVersion = app.getVersion();
   const canAutoUpdate = Boolean(autoUpdater && app.isPackaged && isInstalledEnvironment());
   try {
-    const release = await fetchJson(GITHUB_LATEST_RELEASE_API);
+    const release = await fetchLatestRelease();
     const latestTag = String(release?.tag_name || "").trim();
     const latestUrl = release?.html_url || GITHUB_RELEASES_URL;
     if (!parseReleaseVersion(latestTag)) throw new Error(`Invalid release tag: ${latestTag || "(empty)"}`);
