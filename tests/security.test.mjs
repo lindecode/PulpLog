@@ -56,10 +56,19 @@ test("bounds unterminated and complete log lines while preserving UTF-8 chunks",
   for (const byte of bytes) lines.push(...reader.write(Buffer.from([byte])));
   assert.deepEqual(lines, ["INFO ñ"]);
   assert.equal(reader.end(), "second");
-  const malicious = createLineDecoder();
-  malicious.write(Buffer.alloc(MAX_LINE_CHARS, 97));
-  assert.throws(() => malicious.write(Buffer.from("x")), /256K/);
-  assert.throws(() => createLineDecoder().write(Buffer.alloc(MAX_LINE_CHARS + 1, 97)), /256K/);
+  const long = createLineDecoder();
+  assert.deepEqual(long.write(Buffer.alloc(MAX_LINE_CHARS, 97)), []);
+  const rows = long.write(Buffer.from("x\nnext"));
+  assert.deepEqual(rows.map(row => row.length), [MAX_LINE_CHARS, 1]);
+  assert.equal(long.end(), "next");
+  const splits = [];
+  const tracked = createLineDecoder("utf-8", { onSplit: info => splits.push(info) });
+  tracked.write(Buffer.from("a\nb\n"));
+  tracked.write(Buffer.alloc(MAX_LINE_CHARS + 3, 97));
+  tracked.write(Buffer.from("\nc\n"));
+  assert.deepEqual(splits, [{ line:3, row:3, chars:MAX_LINE_CHARS + 3, rows:2 }]);
+  const huge = createLineDecoder().write(Buffer.alloc(MAX_LINE_CHARS * 2 + 5, 97));
+  assert.deepEqual(huge.map(row => row.length), [MAX_LINE_CHARS, MAX_LINE_CHARS]); // the open 5-char rest stays as carry
 });
 
 test("requires HTTPS for API keys except on loopback", () => {

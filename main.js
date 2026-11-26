@@ -118,6 +118,11 @@ function logEntry(level, category, msg) {
   } catch {}
 }
 
+/* A line over 256K is shown as several rows; leave a trace so the user can find where. */
+function logLongLine(label, { line, row, chars, rows }) {
+  logEntry("WARN", "file", `${label}: la línea ${line} tiene ${chars.toLocaleString("es")} caracteres; se muestra partida en ${rows} filas desde la fila ${row}`);
+}
+
 process.on("uncaughtException", err => {
   logEntry("ERROR", "main", `Uncaught exception: ${err.stack || err.message}`);
 });
@@ -958,7 +963,7 @@ handleTrusted("file:read", async (event, payload) => {
     let decodedBytes = 0;
     let settled = false;
     const decoder = new StringDecoder("utf8");
-    const lineDecoder = createLineDecoder();
+    const lineDecoder = createLineDecoder("utf-8", { onSplit: info => logLongLine(path.basename(filePath), info) });
     const source = fs.createReadStream(filePath, { highWaterMark: 1024*1024 });
     const stream = isGzipPath(filePath) ? source.pipe(zlib.createGunzip()) : source;
     activeReads.set(readId, {

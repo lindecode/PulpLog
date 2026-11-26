@@ -158,9 +158,19 @@ export function findLineRange(items, anchorLine, targetLine) {
 }
 
 export function splitTextChunk(carry, chunk) {
+  // lines over 256K become several rows instead of stopping the read
+  const limit = 256 * 1024;
+  const cut = line => {
+    if (line.length <= limit) return [line];
+    const out = [];
+    for (let i = 0; i < line.length; i += limit) out.push(line.slice(i, i + limit));
+    return out;
+  };
   const parts = (carry + chunk).split("\n");
-  if (parts.some(line => line.length > 256 * 1024)) throw new Error("Log line exceeds the 256K character limit");
-  return { lines:parts.slice(0, -1), carry:parts[parts.length - 1] ?? "" };
+  const tail = cut(parts.pop() ?? "");
+  const lines = parts.flatMap(cut);
+  lines.push(...tail.slice(0, -1));
+  return { lines, carry:tail[tail.length - 1] ?? "" };
 }
 
 // grep -C semantics: merge overlapping windows and mark gaps between them.

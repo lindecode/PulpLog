@@ -491,8 +491,9 @@ sin clave siguen disponibles; no cifran el contenido de las bitácoras.
   dos segundos por operación. Si lo supera, se cancela la búsqueda y se muestra
   un aviso; modifica la expresión para reintentarlo. No se evalúan regex en el
   hilo de la interfaz cuando no hay workers disponibles.
-- Cada línea admite hasta 256K caracteres. Un origen que exceda ese límite se
-  detiene con un error para evitar acumulación de datos sin saltos de línea.
+- Cada fila admite hasta 256K caracteres. Una línea más larga (por ejemplo, un
+  JSON minificado) se muestra partida en varias filas consecutivas, sin detener
+  la lectura ni acumular datos sin saltos de línea.
 - La lectura estática se limita a 256 MB decodificados en el proceso principal;
   la vista aplica además un presupuesto de 128M caracteres y un millón de filas.
   Los archivos mayores deben dividirse antes de abrirlos.
