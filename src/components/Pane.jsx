@@ -612,6 +612,7 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
                           onOpenAsRoot={parseWslUncPath(tab.filePath) ? () => openWslAsRoot(tab.filePath) : null}
                           autoScrollDefault={settings.autoScrollDefault}
                           showNumsDefault={settings.showNumsDefault}
+                          maxLiveLines={settings.maxLiveLines}
                           isActive={tab.id === activeTab.id && focused} />
                 : <Welcome onOpen={openFile} isElectron={IS_ELECTRON}
                            wslDistros={wslDistros} onOpenWsl={openWslFile}

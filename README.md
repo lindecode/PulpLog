@@ -497,6 +497,10 @@ sin clave siguen disponibles; no cifran el contenido de las bitácoras.
 - La lectura estática se limita a 256 MB decodificados en el proceso principal;
   la vista aplica además un presupuesto de 128M caracteres y un millón de filas.
   Los archivos mayores deben dividirse antes de abrirlos.
+- Al seguir en vivo un archivo, Docker o una bitácora remota se conservan las
+  filas más recientes (Opciones → líneas en vivo; en archivos, al menos lo que
+  tenía al abrirlo). Las más antiguas se descartan con un aviso, así una pestaña
+  abierta por días no agota la memoria; recarga para verlas de nuevo.
 - Las colas de logs, los historiales en vivo y la caché tienen presupuestos de
   memoria adicionales. La caché considera el texto descomprimido, no sólo el
   tamaño del archivo `.gz`.

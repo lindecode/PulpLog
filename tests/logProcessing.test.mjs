@@ -139,3 +139,12 @@ test("builds shift-selection ranges in visible order and ignores separators", ()
   assert.deepEqual(findLineRange(items, 999, 20), [20]);
   assert.deepEqual(findLineRange(items, 10, 999), []);
 });
+
+test("appendRecentItems keeps the newest rows within a custom byte budget", async () => {
+  const { appendRecentItems, itemBytes } = await import("../src/logProcessing.mjs");
+  const row = n => ({ origLine:n, raw:"x".repeat(100) });
+  const rows = Array.from({ length:10 }, (_, i) => row(i + 1));
+  const kept = appendRecentItems(rows.slice(0, 8), rows.slice(8), 1000, itemBytes(row(0)) * 4);
+  assert.deepEqual(kept.map(item => item.origLine), [7, 8, 9, 10]);
+  assert.equal(appendRecentItems(rows.slice(0, 8), rows.slice(8), 5).length, 5);
+});

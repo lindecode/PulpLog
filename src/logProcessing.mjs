@@ -120,14 +120,19 @@ export function countLevels(items) {
   return counts;
 }
 
-export function appendRecentItems(previous, incoming, limit = MAX_LIVE_LINES) {
+export const MAX_LIVE_BYTES = 64 * 1024 * 1024;
+
+/* Keeps the newest rows within `limit` rows and roughly `maxBytes` of memory. */
+export const itemBytes = item => (item.raw?.length || 0) * 2 + 128;
+
+export function appendRecentItems(previous, incoming, limit = MAX_LIVE_LINES, maxBytes = MAX_LIVE_BYTES) {
   if (!incoming.length) return previous;
   const combined = previous.concat(incoming);
   let start = combined.length;
   let bytes = 0;
   while (start > 0 && combined.length - start < limit) {
-    const size = (combined[start - 1].raw?.length || 0) * 2 + 128;
-    if (bytes + size > 64 * 1024 * 1024) break;
+    const size = itemBytes(combined[start - 1]);
+    if (bytes + size > maxBytes) break;
     bytes += size; start--;
   }
   return start ? combined.slice(start) : combined;

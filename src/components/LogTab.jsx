@@ -4,7 +4,7 @@ import { useLang } from "../i18n.jsx";
 import { isPermissionError } from "../wslPaths.mjs";
 import { useDebouncedValue, useRowSelection, useSearchShortcuts } from "../hooks.mjs";
 import { useRememberedState, useFilteredLogs, useAvailableLogDates, setRememberedScroll } from "../logHooks.mjs";
-import { classifyLines, countLevels, splitTextChunk } from "../logProcessing.mjs";
+import { classifyLines, countLevels, splitTextChunk, appendRecentItems, itemBytes, MAX_LIVE_LINES, MAX_LIVE_BYTES } from "../logProcessing.mjs";
 import { createLogWorkerClient } from "../logWorkerClient.mjs";
 import { IS_ELECTRON, getCachedFile, cacheFile, reportMetric, safeFileName, buildResultText, copyResultText, exportResultText, fmtSize, fmtNum, isGzipFilePath } from "../utils.mjs";
 import { VirtualList, SelectedLineStatus } from "./VirtualList.jsx";
@@ -15,8 +15,10 @@ import { RotationBanner } from "./Modals.jsx";
 /* ═══════════════════════════════════════════
    LogTab
 ═══════════════════════════════════════════ */
+const TAIL_FLUSH_MS = 150;
+
 function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadingChange, onOpenAsRoot = null,
-                  autoScrollDefault = false, showNumsDefault = true, isActive = false }) {
+                  autoScrollDefault = false, showNumsDefault = true, isActive = false, maxLiveLines = MAX_LIVE_LINES }) {
   const t = useLang();
   const selectionSource = fileName || filePath || "pulplog";
   const sourceLabel = filePath || fileName || selectionSource;
@@ -60,6 +62,11 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   const listRef       = useRef(null);
   const itemsRef      = useRef([]);
   const carryRef      = useRef("");
+  // live follow: new text is grouped every TAIL_FLUSH_MS and old rows are dropped past the budget
+  const tailPendingRef = useRef("");
+  const tailTimerRef   = useRef(null);
+  const liveBudgetRef  = useRef(null);
+  const [droppedRows, setDroppedRows] = useState(0);
   const decodedCharsRef = useRef(0);
   const statsRef      = useRef({ error:0, warn:0, info:0, debug:0, trace:0 });
   const progressRef   = useRef(0);
@@ -133,6 +140,8 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
     progressRef.current = 0;
     processingRef.current = Promise.resolve();
     nextParsedRef.current = 1;
+    liveBudgetRef.current = null;
+    setDroppedRows(0);
     setClassified([]);
     setStats({ ...statsRef.current });
     setSelection({ lines:new Set(), active:null, anchor:null });
@@ -306,24 +315,67 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
   /* ── Tail toggle (simple flip; the effect below manages the actual watcher) ── */
   const toggleTail = useCallback(() => setTailing(p => !p), []);
 
+  /* ── Live follow: one batch per TAIL_FLUSH_MS; past the budget the oldest rows are dropped
+     instead of stopping, so a tab left open for days keeps a bounded memory. The budget is the
+     live-lines setting, or what the file already had when opened if that was more. ── */
+  const flushTail = () => {
+    clearTimeout(tailTimerRef.current);
+    tailTimerRef.current = null;
+    const text = tailPendingRef.current;
+    tailPendingRef.current = "";
+    if (!text) return;
+    let split;
+    try { split = splitTextChunk(carryRef.current, text); }
+    catch (error) { setTailing(false); setLoadError(error.message); return; }
+    carryRef.current = split.carry;
+    if (!split.lines.length) return;
+    const lines = split.lines;
+    const startLine = nextParsedRef.current;
+    nextParsedRef.current += lines.length;
+    processingRef.current = processingRef.current.then(async () => {
+      const result = workerRef.current
+        ? await workerRef.current.process(lines, startLine)
+        : (() => { const items = classifyLines(lines, startLine); return { items, stats:countLevels(items) }; })();
+      const previous = itemsRef.current;
+      if (!liveBudgetRef.current) {
+        const bytes = previous.reduce((sum, item) => sum + itemBytes(item), 0);
+        liveBudgetRef.current = { rows:Math.max(maxLiveLines, previous.length), bytes:Math.max(MAX_LIVE_BYTES, bytes) };
+      }
+      const next = appendRecentItems(previous, result.items, liveBudgetRef.current.rows, liveBudgetRef.current.bytes);
+      const dropped = previous.length + result.items.length - next.length;
+      for (const key of ["error", "warn", "info", "debug", "trace"]) statsRef.current[key] += result.stats[key] || 0;
+      if (dropped > 0) {
+        const gone = dropped <= previous.length ? previous.slice(0, dropped)
+          : previous.concat(result.items.slice(0, dropped - previous.length));
+        const goneStats = countLevels(gone);
+        for (const key of ["error", "warn", "info", "debug", "trace"]) statsRef.current[key] -= goneStats[key] || 0;
+        setDroppedRows(count => {
+          if (!count) window.electronAPI?.addAppLog?.("WARN", "file",
+            `${sourceLabel}: seguimiento en vivo sobre el límite (${liveBudgetRef.current.rows.toLocaleString("es")} filas); se descartan las más antiguas`);
+          return count + dropped;
+        });
+      }
+      itemsRef.current = next;
+      setClassified(next);
+      setStats({ ...statsRef.current });
+      if (autoScrollRef.current && selectionRef.current.lines.size === 0) listRef.current?.scrollToBottom();
+    }).catch(error => { setTailing(false); setLoadError(error.message); });
+  };
+
   /* ── Reactive watcher: auto-starts when tailing=true and file is fully loaded ── */
   useEffect(() => {
     if (!tailing || loading || !IS_ELECTRON || !filePath || compressed) return;
     const unwatch = window.electronAPI.watchFile(filePath, {
       startOffset: watchOffsetRef.current,
-      async onNewLines(text) {
-        try { appendChunk(text); }
-        catch (error) { setTailing(false); setLoadError(error.message); return; }
-        await processingRef.current;
-        setClassified([...itemsRef.current]);
-        setStats({ ...statsRef.current });
-        if (autoScrollRef.current && selectionRef.current.lines.size === 0) listRef.current?.scrollToBottom();
+      onNewLines(text) {
+        tailPendingRef.current += text;
+        if (!tailTimerRef.current) tailTimerRef.current = setTimeout(flushTail, TAIL_FLUSH_MS);
       },
       onRotated()   { setRotation({ event:"rotated",   countdown: 3 }); setTailing(false); },
       onTruncated() { setRotation({ event:"truncated", countdown: 2 }); setTailing(false); },
       onRecreated() { setRotation({ event:"recreated", countdown: 0 }); setReloadKey(k => k + 1); },
     });
-    return () => unwatch?.();
+    return () => { unwatch?.(); flushTail(); };
   }, [tailing, loading, filePath, watchNonce, compressed]); // eslint-disable-line
 
   const { filtered, filterRegexValid, extraFilterRegexValid, searchRegexValid, extraSearchRegexValid, extraMatchOrigLines, timeRangeValid, matchOrigLines, filterTimedOut } =
@@ -627,6 +679,14 @@ function LogTab({ tabKey, filePath, webFile = null, fileName, fileSize, onLoadin
         <div style={{ height:3, background:"var(--pl-bg-input)", flexShrink:0 }}>
           <div style={{ height:"100%", background:"var(--pl-accent)", transition:"width .08s",
                         width:`${progress*100}%` }} />
+        </div>
+      )}
+
+      {droppedRows > 0 && (
+        <div style={{ padding:"4px 14px", background:"var(--pl-banner-truncated-bg)", borderBottom:"1px solid var(--pl-border)",
+                      color:"var(--pl-text-3)", fontSize:12, flexShrink:0 }}
+             title={t("live_trimmed_hint")}>
+          ⤒ {t("live_trimmed", droppedRows.toLocaleString())}
         </div>
       )}
 
