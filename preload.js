@@ -217,6 +217,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   /* ── Open from OS (file association / drag-drop on icon) ── */
   getInitialFileArg: () => ipcRenderer.invoke("file:getInitialArg"),
+  getSafeStart:      () => ipcRenderer.invoke("session:safe-start"),
+  markSessionStable: () => ipcRenderer.invoke("session:stable"),
   onOpenFileArg: (cb) => {
     const h = (_e, fp) => cb(fp);
     ipcRenderer.on("open-file-arg", h);

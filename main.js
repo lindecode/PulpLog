@@ -123,6 +123,65 @@ function logLongLine(label, { line, row, chars, rows }) {
   logEntry("WARN", "file", `${label}: la línea ${line} tiene ${chars.toLocaleString("es")} caracteres; se muestra partida en ${rows} filas desde la fila ${row}`);
 }
 
+/* ── Session guard: if the window dies or hangs while restoring/loading, the next start
+   (or the reload) skips restoring tabs so a bad session can't lock the user out. ── */
+const sessionGuardPath = path.join(app.getPath("userData"), "session-guard.json");
+const guardLoading = new Set(); // local files being read right now
+let guardArmed = false;
+let safeStart = null;           // { reason:"flag"|"unclean"|"crash"|"hang", files:[...] }
+const readGuard = () => { try { return JSON.parse(fs.readFileSync(sessionGuardPath, "utf8")); } catch { return null; } };
+function writeGuard(extra = {}) {
+  try { fs.writeFileSync(sessionGuardPath, JSON.stringify({ pending:true, ts:Date.now(), loading:[...guardLoading], ...extra })); } catch {}
+}
+function armSessionGuard() { guardArmed = true; writeGuard(); }
+function disarmSessionGuard() { guardArmed = false; try { fs.unlinkSync(sessionGuardPath); } catch {} }
+function trackLoading(filePath, loading) {
+  if (loading) guardLoading.add(filePath); else guardLoading.delete(filePath);
+  if (guardArmed) writeGuard();
+}
+function initSessionGuard() {
+  const previous = readGuard();
+  if (process.argv.includes("--safe")) safeStart = { reason:"flag", files:[] };
+  else if (previous?.pending) {
+    safeStart = { reason:previous.reason || "unclean", files:Array.isArray(previous.loading) ? previous.loading.slice(0, 20) : [] };
+    logEntry("WARN", "session", `La sesión anterior no terminó bien (${safeStart.reason}); se abre sin restaurar pestañas${safeStart.files.length ? `. Cargando: ${safeStart.files.join(", ")}` : ""}`);
+  }
+  armSessionGuard();
+}
+function watchWindowHealth(win) {
+  win.webContents.on("render-process-gone", (_event, details) => {
+    if (details.reason === "clean-exit") return;
+    const files = [...guardLoading];
+    guardLoading.clear();
+    safeStart = { reason:"crash", files };
+    guardArmed = true;
+    writeGuard({ reason:"crash", loading:files });
+    logEntry("ERROR", "session", `La ventana se cerró (${details.reason}, código ${details.exitCode})${files.length ? ` cargando ${files.join(", ")}` : ""}; se recarga sin restaurar pestañas`);
+    if (!win.isDestroyed()) setTimeout(() => { if (!win.isDestroyed()) win.reload(); }, 300);
+  });
+  let asking = false;
+  win.on("unresponsive", async () => {
+    logEntry("WARN", "session", `La ventana no responde${guardLoading.size ? ` (cargando ${[...guardLoading].join(", ")})` : ""}`);
+    if (asking || win.isDestroyed()) return;
+    asking = true;
+    const es = currentLanguage !== "en";
+    const { response } = await dialog.showMessageBox(win, {
+      type:"warning",
+      buttons: es ? ["Esperar", "Recargar sin restaurar pestañas"] : ["Wait", "Reload without restoring tabs"],
+      defaultId:0, cancelId:0,
+      message: es ? "PulpLog no responde" : "PulpLog is not responding",
+      detail: es ? "Puede estar procesando un archivo grande. Si recargas, las pestañas no se restauran y podrás abrirlas una por una."
+                 : "It may be processing a large file. If you reload, tabs are not restored and you can open them one by one.",
+    }).catch(() => ({ response:0 }));
+    asking = false;
+    if (response === 1 && !win.isDestroyed()) {
+      safeStart = { reason:"hang", files:[...guardLoading] };
+      writeGuard({ reason:"hang" });
+      win.webContents.forcefullyCrashRenderer();
+    }
+  });
+}
+
 process.on("uncaughtException", err => {
   logEntry("ERROR", "main", `Uncaught exception: ${err.stack || err.message}`);
 });
@@ -957,6 +1016,7 @@ handleTrusted("file:read", async (event, payload) => {
   if (!filePath || !readId) throw new Error("Invalid file read request");
   assertStreamOwner(activeReads.get(readId), event.sender);
   if (activeReads.has(readId)) throw new Error("File read already active");
+  trackLoading(filePath, true);
 
   return new Promise((resolve, reject) => {
     let bytesRead = 0;
@@ -1013,8 +1073,12 @@ handleTrusted("file:read", async (event, payload) => {
         resolve();
       }
     });
-  });
+  }).finally(() => trackLoading(filePath, false));
 });
+
+handleTrusted("session:safe-start", () => safeStart);
+// the renderer calls this once the restored session has been stable for a while
+handleTrusted("session:stable", () => { safeStart = null; disarmSessionGuard(); return true; });
 
 handleTrusted("file:read:cancel", async (_event, readId) => {
   const stream = activeReads.get(readId);
@@ -3258,8 +3322,10 @@ app.whenReady().then(async () => {
     session.defaultSession.setPermissionCheckHandler(() => false);
   }
   currentLanguage = (await loadSettings().catch(() => null))?.language || "es";
+  if (!IS_SMOKE_TEST) initSessionGuard();
   const splash = IS_SMOKE_TEST ? null : createSplashWindow();
   const win = createWindow(splash);
+  if (!IS_SMOKE_TEST) watchWindowHealth(win);
   if (!IS_SMOKE_TEST) registerShortcuts(win);
   if (IS_SMOKE_TEST) {
     win.webContents.once("did-finish-load", () => {

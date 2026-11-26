@@ -501,6 +501,12 @@ sin clave siguen disponibles; no cifran el contenido de las bitácoras.
   filas más recientes (Opciones → líneas en vivo; en archivos, al menos lo que
   tenía al abrirlo). Las más antiguas se descartan con un aviso, así una pestaña
   abierta por días no agota la memoria; recarga para verlas de nuevo.
+- Arranque seguro: si la ventana se cierra por un fallo, deja de responder o la
+  sesión anterior no terminó bien, PulpLog abre sin restaurar pestañas ni
+  workspaces y ofrece «Restaurar de todos modos» o «Descartar sesión». El
+  archivo que se estaba cargando se restaura sin leerlo hasta pulsar «Cargar».
+  También puede forzarse arrancando con `--safe`. Queda registrado en la
+  bitácora interna.
 - Las colas de logs, los historiales en vivo y la caché tienen presupuestos de
   memoria adicionales. La caché considera el texto descomprimido, no sólo el
   tamaño del archivo `.gz`.

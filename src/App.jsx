@@ -24,6 +24,9 @@ export default function App() {
   const [splitRatio,     setSplitRatio]     = useState(0.5);
   const [focusedPane,    setFocusedPane]    = useState("A");   // "A" | "B" — transient, not persisted
   const [sessionReady,   setSessionReady]   = useState(!IS_ELECTRON);
+  // safe start: the last session crashed or hung, so tabs wait for the user's choice
+  const [safeStart,      setSafeStart]      = useState(null);
+  const savedSessionRef = useRef(null);
   const [toast,          setToast]          = useState(null);
   const containerRef = useRef(null);
   const toastTimerRef = useRef(null);
@@ -86,8 +89,43 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (sessionReady && workspaces.loaded) workspaces.restoreActive();
+    if (sessionReady && workspaces.loaded && !safeStart) workspaces.restoreActive();
   }, [sessionReady, workspaces.loaded]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // once the session has run 20 s without dying, the next start restores normally
+  useEffect(() => {
+    if (!IS_ELECTRON || !sessionReady || safeStart) return;
+    const timer = setTimeout(() => window.electronAPI.markSessionStable?.().catch(() => {}), 20000);
+    return () => clearTimeout(timer);
+  }, [sessionReady, safeStart]);
+
+  /* Restores the saved panes; files that were loading when it died open as "load on demand". */
+  const restoreSession = (s, deferFiles = []) => {
+    if (!s?.panes?.length) return;
+    const defer = new Set(deferFiles);
+    const restorePane = (entries, setTabs) => {
+      const tabEntries = (entries || []).map((st, idx) => ({
+        id:Date.now() + idx, label:st.label, filePath:st.filePath, fileSize:st.fileSize, groupStart:!!st.groupStart,
+        ...(defer.has(st.filePath) ? { deferLoad:true } : {}),
+      }));
+      if (!tabEntries.length) return false;
+      setTabs(previous => previous.length === 1 && previous[0].label === "$welcome" ? tabEntries : previous);
+      return true;
+    };
+    restorePane(s.panes[0]?.tabs, paneA.setTabs);
+    if (s.splitDirection && s.panes[1]?.tabs?.length && restorePane(s.panes[1].tabs, paneB.setTabs)) {
+      setSplitDirection(s.splitDirection);
+      setSplitRatio(s.splitRatio ?? 0.5);
+    }
+  };
+  const resolveSafeStart = restore => {
+    const info = safeStart;
+    setSafeStart(null);
+    if (restore) {
+      restoreSession(savedSessionRef.current, info?.files);
+      if (workspaces.loaded) workspaces.restoreActive();
+    }
+  };
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -227,6 +265,9 @@ export default function App() {
         const migrated = migrateRemote({ servers:s.remoteServers || [], profiles:s.remoteProfiles || [] });
         if (migrated.changed) updateRemote({ servers:migrated.servers, profiles:migrated.profiles });
 
+        const safe = await window.electronAPI.getSafeStart?.().catch(() => null);
+        if (!alive) return;
+        if (safe) { savedSessionRef.current = s; setSafeStart(safe); }
         const initialArg = await window.electronAPI.getInitialFileArg();
         if (!alive) return;
 
@@ -245,29 +286,8 @@ export default function App() {
             const recent = await window.electronAPI.addRecentFile(initialArg);
             if (alive) setSettings(prev => ({ ...prev, recentFiles:recent }));
           }
-        } else if (s.panes?.length) {
-          const restorePane = (entries, setTabs) => {
-            if (!alive) return false;
-            const tabEntries = (entries || []).map((st, idx) => ({
-              id:Date.now() + idx, label:st.label, filePath:st.filePath, fileSize:st.fileSize, groupStart:!!st.groupStart,
-            }));
-            if (!tabEntries.length) return false;
-            setTabs(previous => {
-              if (previous.length === 1 && previous[0].label === "$welcome") {
-                return tabEntries;
-              }
-              return previous;
-            });
-            return true;
-          };
-          restorePane(s.panes[0]?.tabs, paneA.setTabs);
-          if (s.splitDirection && s.panes[1]?.tabs?.length) {
-            const restoredSecondPane = restorePane(s.panes[1].tabs, paneB.setTabs);
-            if (restoredSecondPane) {
-              setSplitDirection(s.splitDirection);
-              setSplitRatio(s.splitRatio ?? 0.5);
-            }
-          }
+        } else if (s.panes?.length && !safe) {
+          restoreSession(s);
         }
       } catch (error) {
         console.error("No se pudo restaurar la sesión", error);
@@ -281,7 +301,7 @@ export default function App() {
 
   /* ── Persist both panes' tabs + split state on every change ── */
   useEffect(() => {
-    if (!IS_ELECTRON || !sessionReady) return;
+    if (!IS_ELECTRON || !sessionReady || safeStart) return;
     const timer = setTimeout(() => {
       const serialize = tabs => tabs
         .filter(tb => tb.filePath && tb.filePath !== "__web__" && !tb.wsOwned) // workspace tabs persist in workspaces.json
@@ -291,7 +311,7 @@ export default function App() {
       window.electronAPI.setSettings({ panes, splitDirection, splitRatio });
     }, 600);
     return () => clearTimeout(timer);
-  }, [sessionReady, paneA.tabs, paneB.tabs, splitDirection, splitRatio]);
+  }, [sessionReady, safeStart, paneA.tabs, paneB.tabs, splitDirection, splitRatio]);
 
   useEffect(() => {
     if (!IS_ELECTRON) return;
@@ -315,6 +335,16 @@ export default function App() {
       <div style={{ display:"flex", flexDirection:"column", height:"100vh",
                     background:"var(--pl-bg-app)", color:"var(--pl-text-1)", overflow:"hidden",
                     fontFamily:"'JetBrains Mono','Fira Code','Cascadia Code',monospace" }}>
+
+        {safeStart && (
+          <div role="alert" style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", padding:"6px 14px",
+                        background:"var(--pl-diag-warn-bg)", borderBottom:"1px solid var(--pl-status-warn)",
+                        color:"var(--pl-text-2)", fontSize:12, flexShrink:0 }}>
+            <span>⚠ {t(safeStart.reason === "flag" ? "safe_start_flag" : "safe_start", safeStart.files?.length ? safeStart.files.map(f => f.split(/[\\/]/).pop()).join(", ") : "")}</span>
+            <button onClick={() => resolveSafeStart(true)} style={{ fontSize:12 }}>{t("safe_start_restore")}</button>
+            <button onClick={() => resolveSafeStart(false)} style={{ fontSize:12 }}>{t("safe_start_discard")}</button>
+          </div>
+        )}
 
         {/* chrome bar */}
         <div data-chrome style={{ display:"flex", alignItems:"stretch", background:"var(--pl-bg-tabbar)",

@@ -604,6 +604,13 @@ function Pane({ paneId, focused, onFocus, pane, capabilities, settings, onRemote
                            onStatus={(ok, error) => tab.remote.serverId && onRemoteChange?.(state =>
                              ({ ...state, servers:recordServerStatus(state.servers, tab.remote.serverId, ok, error) }))}
                            isActive={tab.id === activeTab.id && focused} />
+              : tab.filePath && tab.deferLoad
+                ? <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+                                gap:10, color:"var(--pl-text-5)", fontSize:13, padding:16, textAlign:"center" }}>
+                    <span>{t("deferred_tab", tab.label)}</span>
+                    <button onClick={() => pane.setTabs(previous => previous.map(item =>
+                      item.id === tab.id ? { ...item, deferLoad:false } : item))}>{t("deferred_tab_load")}</button>
+                  </div>
               : tab.filePath
                 ? <LogTab key={`${tab.id}-${tab.filePath}-${tab.reloadNonce || 0}`}
                           tabKey={String(tab.id)} filePath={tab.filePath} webFile={tab.webFile || null}
